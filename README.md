@@ -65,7 +65,7 @@ Your games will now appear in your Steam library!
 
 - The plugin creates custom tabs that replace the standard Great on Deck, All Games and Installed tabs so standard filtering and sorting will not work (for now).
 - Some GOG games come as multiple download files - these are handled automatically but may take longer to install
-- A few Epic multiplayer games need extra setup for online features (currently not supported)
+- A few Epic multiplayer games need extra setup for online features (work in progress)
 - Not all games have artwork available - some may show default images. Suggest using SteamGrid DB.
 
 ## Troubleshooting
