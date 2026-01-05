@@ -2241,7 +2241,7 @@ class GOGAPIClient:
             return {'success': False, 'error': str(e)}
 
     async def get_library(self) -> List[Game]:
-        """Get GOG library via API"""
+        """Get GOG library via API with pagination support"""
         if not self.access_token:
             logger.warning("GOG not authenticated")
             return []
@@ -2257,29 +2257,46 @@ class GOGAPIClient:
 
             connector = aiohttp.TCPConnector(ssl=ssl_context)
             async with aiohttp.ClientSession(connector=connector) as session:
-                # Get owned games
-                async with session.get(
-                    'https://embed.gog.com/account/getFilteredProducts?mediaType=1',
-                    headers={'Authorization': f'Bearer {self.access_token}'}
-                ) as response:
-                    if response.status != 200:
-                        logger.error(f"Failed to get GOG library: {response.status}")
-                        return []
+                games = []
+                current_page = 1
+                total_pages = 1  # Will be updated from first response
 
-                    data = await response.json()
-                    games = []
+                while current_page <= total_pages:
+                    # Get owned games with pagination
+                    url = f'https://embed.gog.com/account/getFilteredProducts?mediaType=1&page={current_page}'
+                    logger.info(f"[GOG] Fetching library page {current_page}...")
+                    
+                    async with session.get(
+                        url,
+                        headers={'Authorization': f'Bearer {self.access_token}'}
+                    ) as response:
+                        if response.status != 200:
+                            logger.error(f"Failed to get GOG library page {current_page}: {response.status}")
+                            break
 
-                    for product in data.get('products', []):
-                        game = Game(
-                            id=str(product.get('id', '')),
-                            title=product.get('title', ''),
-                            store='gog',
-                            is_installed=False
-                        )
-                        games.append(game)
+                        data = await response.json()
+                        
+                        # Update total pages from response
+                        total_pages = data.get('totalPages', 1)
+                        total_results = data.get('totalGamesFound', 0)
+                        
+                        if current_page == 1:
+                            logger.info(f"[GOG] Total games in library: {total_results}, total pages: {total_pages}")
 
-                    logger.info(f"Found {len(games)} GOG games")
-                    return games
+                        for product in data.get('products', []):
+                            game = Game(
+                                id=str(product.get('id', '')),
+                                title=product.get('title', ''),
+                                store='gog',
+                                is_installed=False
+                            )
+                            games.append(game)
+                        
+                        logger.info(f"[GOG] Fetched page {current_page}/{total_pages}: {len(data.get('products', []))} games (total so far: {len(games)})")
+                        current_page += 1
+
+                logger.info(f"Found {len(games)} GOG games (complete library)")
+                return games
 
         except Exception as e:
             logger.error(f"Error fetching GOG library: {e}")

@@ -192,6 +192,8 @@ class TabManager {
     private tabs: UnifideckTabContainer[] = [];
     private initialized = false;
     private cacheLoaded = false;
+    private epicGameCount = 0;
+    private gogGameCount = 0;
 
     async initialize() {
         if (this.initialized) return;
@@ -221,7 +223,11 @@ class TabManager {
                     isInstalled: g.isInstalled
                 }));
                 updateUnifideckCache(cacheData);
-                console.log(`[Unifideck] Loaded ${games.length} games into cache`);
+
+                // Count games by store for tab visibility
+                this.epicGameCount = games.filter((g: any) => g.store === 'epic').length;
+                this.gogGameCount = games.filter((g: any) => g.store === 'gog').length;
+                console.log(`[Unifideck] Loaded ${games.length} games into cache (Epic: ${this.epicGameCount}, GOG: ${this.gogGameCount})`);
 
                 // Prefetch compatibility info (ProtonDB + Deck Verified) for Epic/GOG games
                 const titles = games
@@ -247,7 +253,20 @@ class TabManager {
     }
 
     getTabs(): UnifideckTabContainer[] {
-        return this.tabs;
+        return this.tabs.filter(tab => this.shouldShowTab(tab.id));
+    }
+
+    /**
+     * Determines if a tab should be visible based on game availability
+     */
+    private shouldShowTab(tabId: string): boolean {
+        if (tabId === 'unifideck-epic' && this.epicGameCount === 0) {
+            return false;
+        }
+        if (tabId === 'unifideck-gog' && this.gogGameCount === 0) {
+            return false;
+        }
+        return true;
     }
 
     isInitialized(): boolean {
