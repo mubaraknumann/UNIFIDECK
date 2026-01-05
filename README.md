@@ -67,13 +67,15 @@ Your games will now appear in your Steam library!
 - Some GOG games come as multiple download files - these are handled automatically but may take longer to install
 - A few Epic multiplayer games need extra setup for online features (work in progress)
 - Not all games have artwork available - some may show default images. Suggest using SteamGrid DB.
+- Cloud Saves do not work
+- Compatibility issues with Tabmaster (WIP)
 
 ## Troubleshooting
 
 ### Games Don't Appear After Syncing
 
-1. Restart Steam completely (exit and relaunch, not just return to game mode)
-2. Re-run sync from the Quick Access Menu
+1. Restart Steam/Steam Deck
+2. Re-run sync/force sync from the Quick Access Menu
 3. Check that your accounts are still connected
 
 ### Can't Install a Game
