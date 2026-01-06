@@ -683,10 +683,11 @@ const Content: VFC = () => {
   const [storeStatus, setStoreStatus] = useState({
     epic: "Checking...",
     gog: "Checking...",
+    amazon: "Checking...",
   });
   const [authDialog, setAuthDialog] = useState<{
     show: boolean;
-    store: 'epic' | 'gog' | null;
+    store: 'epic' | 'gog' | 'amazon' | null;
     url: string;
     code: string;
     processing: boolean;
@@ -879,8 +880,10 @@ const Content: VFC = () => {
         success: boolean;
         epic: string;
         gog: string;
+        amazon: string;
         error?: string;
         legendary_installed?: boolean;
+        nile_installed?: boolean;
       }>("check_store_status");
 
       const result = await Promise.race([checkPromise, timeoutPromise]) as any;
@@ -888,25 +891,32 @@ const Content: VFC = () => {
       if (result.success) {
         setStoreStatus({
           epic: result.epic,
-          gog: result.gog
+          gog: result.gog,
+          amazon: result.amazon
         });
 
         // Show warning if legendary not installed
         if (result.legendary_installed === false) {
           console.warn("[Unifideck] Legendary CLI not installed - Epic Games won't work");
         }
+        // Show warning if nile not installed
+        if (result.nile_installed === false) {
+          console.warn("[Unifideck] Nile CLI not installed - Amazon Games won't work");
+        }
       } else {
         console.error("[Unifideck] Status check failed:", result.error);
         setStoreStatus({
           epic: "Error - Check logs",
-          gog: "Error - Check logs"
+          gog: "Error - Check logs",
+          amazon: "Error - Check logs"
         });
       }
     } catch (error) {
       console.error("[Unifideck] Error checking store status:", error);
       setStoreStatus({
         epic: "Error - " + (error as Error).message,
-        gog: "Error - " + (error as Error).message
+        gog: "Error - " + (error as Error).message,
+        amazon: "Error - " + (error as Error).message
       });
     }
   };
@@ -1070,7 +1080,7 @@ const Content: VFC = () => {
   /**
    * Poll store status to detect when authentication completes
    */
-  const pollForAuthCompletion = async (store: 'epic' | 'gog'): Promise<boolean> => {
+  const pollForAuthCompletion = async (store: 'epic' | 'gog' | 'amazon'): Promise<boolean> => {
     const maxAttempts = 60; // 5 minutes (60 * 5s)
     let attempts = 0;
 
@@ -1081,10 +1091,18 @@ const Content: VFC = () => {
           success: boolean;
           epic: string;
           gog: string;
+          amazon: string;
         }>("check_store_status");
 
         if (result.success) {
-          const status = store === 'epic' ? result.epic : result.gog;
+          let status: string;
+          if (store === 'epic') {
+            status = result.epic;
+          } else if (store === 'gog') {
+            status = result.gog;
+          } else {
+            status = result.amazon;
+          }
           if (status === "Connected") {
             console.log(`[Unifideck] ${store} authentication completed automatically!`);
             return true;
@@ -1121,9 +1139,16 @@ const Content: VFC = () => {
     });
   };
 
-  const startAuth = async (store: 'epic' | 'gog') => {
+  const startAuth = async (store: 'epic' | 'gog' | 'amazon') => {
     try {
-      const methodName = store === 'epic' ? 'start_epic_auth' : 'start_gog_auth_auto';
+      let methodName: string;
+      if (store === 'epic') {
+        methodName = 'start_epic_auth';
+      } else if (store === 'gog') {
+        methodName = 'start_gog_auth_auto';
+      } else {
+        methodName = 'start_amazon_auth';
+      }
 
       const result = await call<[], { success: boolean; url?: string; message?: string; error?: string }>(
         methodName
@@ -1204,9 +1229,16 @@ const Content: VFC = () => {
     }
   };
 
-  const handleLogout = async (store: 'epic' | 'gog') => {
+  const handleLogout = async (store: 'epic' | 'gog' | 'amazon') => {
     try {
-      const methodName = store === 'epic' ? 'logout_epic' : 'logout_gog';
+      let methodName: string;
+      if (store === 'epic') {
+        methodName = 'logout_epic';
+      } else if (store === 'gog') {
+        methodName = 'logout_gog';
+      } else {
+        methodName = 'logout_amazon';
+      }
       const result = await call<[], { success: boolean; message?: string }>(
         methodName
       );
@@ -1446,6 +1478,43 @@ const Content: VFC = () => {
                 ) : null}
               </div>
             </PanelSectionRow>
+          </PanelSection>
+
+          {/* Amazon Games Section */}
+          <PanelSection title="AMAZON GAMES">
+            <PanelSectionRow>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+                <div style={{ fontSize: "14px" }}>
+                  Status: {
+                    storeStatus.amazon === "Connected" ? "✓ Connected" :
+                      storeStatus.amazon === "Nile not installed" ? "⚠️ Missing CLI" :
+                        storeStatus.amazon === "Checking..." ? "Checking..." :
+                          storeStatus.amazon.includes("Error") ? `❌ ${storeStatus.amazon}` :
+                            "✗ Not Connected"
+                  }
+                </div>
+              </div>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <div>
+                {storeStatus.amazon === "Connected" ? (
+                  <ButtonItem layout="below" onClick={() => handleLogout('amazon')}>
+                    <div style={{ fontSize: "0.85em", padding: "2px" }}>Logout</div>
+                  </ButtonItem>
+                ) : storeStatus.amazon !== "Checking..." && !storeStatus.amazon.includes("Error") && storeStatus.amazon !== "Nile not installed" ? (
+                  <ButtonItem layout="below" onClick={() => startAuth('amazon')}>
+                    <div style={{ fontSize: "0.85em", padding: "2px" }}>Authenticate</div>
+                  </ButtonItem>
+                ) : null}
+              </div>
+            </PanelSectionRow>
+            {storeStatus.amazon === "Nile not installed" && (
+              <PanelSectionRow>
+                <div style={{ fontSize: '11px', opacity: 0.7 }}>
+                  Nile CLI not found. Amazon Games unavailable.
+                </div>
+              </PanelSectionRow>
+            )}
           </PanelSection>
 
           {/* Library Sync Section */}
