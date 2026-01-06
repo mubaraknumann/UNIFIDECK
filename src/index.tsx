@@ -9,6 +9,8 @@ import { UnifiedLibraryView } from "./views/UnifiedLibraryView";
 // Import tab system
 import { patchLibrary, tabManager } from "./tabs";
 
+import { syncUnifideckCollections } from "./spoofing/CollectionManager";
+
 // Import Downloads feature components
 import { DownloadsTab } from "./components/DownloadsTab";
 import { StorageSettings } from "./components/StorageSettings";
@@ -1027,6 +1029,12 @@ const Content: VFC = () => {
       console.log(`[Unifideck] Artwork Fetched: ${syncResult.artwork_count}`);
       console.log("[Unifideck] =====================================");
 
+      // Phase 3: Sync Steam Collections
+      // Update collections ([Unifideck] Epic Games, etc.) with new games
+      await syncUnifideckCollections().catch(err =>
+        console.error("[Unifideck] Failed to sync collections:", err)
+      );
+
       await checkStoreStatus();
     } catch (error) {
       console.error("[Unifideck] Manual sync failed:", error);
@@ -1748,6 +1756,17 @@ export default definePlugin(() => {
 
   console.log("[Unifideck] ✓ All route patches registered (including game details)");
 
+  // Sync Unifideck Collections on load (with delay to ensure Steam is ready)
+  setTimeout(async () => {
+    console.log("[Unifideck] Triggering initial collection sync...");
+    try {
+      await syncUnifideckCollections();
+      console.log("[Unifideck] ✓ Initial collection sync complete");
+    } catch (err) {
+      console.error("[Unifideck] Initial collection sync failed:", err);
+    }
+  }, 5000); // 5 second delay to ensure Steam is fully loaded
+
   // Inject CSS AFTER patches with delay to ensure patches are active
   setTimeout(() => {
     console.log("[Unifideck] Hiding original tabs with CSS");
@@ -1799,6 +1818,8 @@ export default definePlugin(() => {
     content: <Content />,
     onDismount() {
       console.log("[Unifideck] Plugin unloading");
+
+
 
       // Remove CSS injection
       const styleEl = document.getElementById("unifideck-tab-hider");

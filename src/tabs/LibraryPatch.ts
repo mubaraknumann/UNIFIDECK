@@ -4,7 +4,8 @@
  * Patches the Steam library to inject custom tabs that include
  * Epic and GOG games alongside Steam games.
  * 
- * Based on TabMaster's approach: intercepts useMemo hook to replace tabs array.
+ * When TabMaster is detected, custom tabs are NOT injected - instead,
+ * users can use [Unifideck] collections via TabMaster.
  */
 
 import {
@@ -16,7 +17,7 @@ import {
 } from '@decky/ui';
 import { RoutePatch, routerHook } from '@decky/api';
 import { ReactElement, useEffect, useState } from 'react';
-import { tabManager, UnifideckTabContainer, HIDDEN_DEFAULT_TABS } from './TabContainer';
+import { tabManager, getHiddenDefaultTabs, isTabMasterInstalled } from './TabContainer';
 
 // Cache for tab app grid component
 let TabAppGridComponent: any = undefined;
@@ -49,6 +50,14 @@ export function patchLibrary(): RoutePatch {
     );
 
     return addPatch('/library', (props: { path: string; children: ReactElement }) => {
+
+        // Check if TabMaster is installed
+        if (isTabMasterInstalled()) {
+            console.log('[Unifideck] TabMaster detected - skipping custom tab injection (use [Unifideck] collections instead)');
+            // Don't inject tabs, let Steam + TabMaster handle it
+            return props;
+        }
+
         afterPatch(props.children, 'type', (_: Record<string, unknown>[], ret1: ReactElement) => {
             if (!ret1?.type) {
                 console.error('[Unifideck] Failed to find outer library element');
@@ -88,7 +97,6 @@ export function patchLibrary(): RoutePatch {
                             Object.values((window.SP_REACT as any)?.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE || {}).find((p: any) => p?.useEffect);
 
                         if (!hooks?.useMemo) {
-                            console.error('[Unifideck] Failed to find React hooks');
                             return origMemoComponent(...args);
                         }
 
@@ -146,15 +154,13 @@ export function patchLibrary(): RoutePatch {
                                     .filter((tab): tab is SteamTab => tab !== null);
 
                                 // Filter out default tabs that we're replacing
-                                // First, log all tab IDs for debugging
-                                console.log('[Unifideck] Steam tabs:', tabs.map(t => t.id).join(', '));
-
+                                const hiddenTabs = getHiddenDefaultTabs();
                                 const filteredDefaultTabs = tabs.filter(tab =>
-                                    !HIDDEN_DEFAULT_TABS.includes(tab.id)
+                                    !hiddenTabs.includes(tab.id)
                                 );
 
                                 // Return custom tabs first, then remaining default tabs
-                                console.log(`[Unifideck] Showing ${customTabs.length} custom tabs + ${filteredDefaultTabs.length} default tabs (hidden: ${tabs.length - filteredDefaultTabs.length})`);
+                                console.log(`[Unifideck] Showing ${customTabs.length} custom tabs + ${filteredDefaultTabs.length} default tabs (hidden: ${hiddenTabs.length})`);
                                 return [...customTabs, ...filteredDefaultTabs];
                             }, deps);
                         };

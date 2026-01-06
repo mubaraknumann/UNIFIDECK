@@ -66,14 +66,41 @@ export const UNIFIDECK_TABS: UnifideckTab[] = [
     }
 ];
 
-// IDs of default Steam tabs to hide
+// IDs of default Steam tabs to hide (when TabMaster is NOT present)
 // Note: Non-Steam tab is called 'DesktopApps' internally by Steam!
-export const HIDDEN_DEFAULT_TABS = [
+const DEFAULT_TABS_TO_HIDE = [
     'GreatOnDeck',
     'AllGames',
     'Installed',
     'DesktopApps',   // This is Steam's actual ID for the Non-Steam tab!
 ];
+
+/**
+ * Check if TabMaster plugin is installed
+ */
+export function isTabMasterInstalled(): boolean {
+    try {
+        const plugins = (window as any).DeckyPluginLoader?.plugins ?? [];
+        return plugins.some((p: any) => p.name === 'TabMaster' || p.name === 'Tab Master');
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Get tabs to hide based on TabMaster presence
+ * If TabMaster is present, we don't hide any tabs (user can manage via TabMaster)
+ */
+export function getHiddenDefaultTabs(): string[] {
+    if (isTabMasterInstalled()) {
+        console.log('[Unifideck] TabMaster detected - not hiding default tabs');
+        return []; // Don't hide any tabs, let TabMaster manage
+    }
+    return DEFAULT_TABS_TO_HIDE;
+}
+
+// Export for backward compatibility
+export const HIDDEN_DEFAULT_TABS = DEFAULT_TABS_TO_HIDE;
 
 /**
  * Custom Tab Container for Unifideck
