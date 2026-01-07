@@ -2435,6 +2435,39 @@ class AmazonConnector:
             logger.error(f"[Amazon] Error installing game {game_id}: {e}")
             return {'success': False, 'error': str(e)}
 
+    async def uninstall_game(self, game_id: str) -> Dict[str, Any]:
+        """Uninstall Amazon game using nile CLI"""
+        if not self.nile_bin:
+            return {'success': False, 'error': 'Nile CLI not found'}
+
+        try:
+            logger.info(f"[Amazon] Starting uninstallation of {game_id}")
+
+            proc = await asyncio.create_subprocess_exec(
+                self.nile_bin, 'uninstall', game_id, '--yes',
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+
+            if proc.returncode == 0:
+                logger.info(f"[Amazon] Successfully uninstalled {game_id}")
+                return {
+                    'success': True,
+                    'message': f'Successfully uninstalled {game_id}'
+                }
+            else:
+                error_msg = stderr.decode() if stderr else 'Unknown error'
+                logger.error(f"[Amazon] Uninstallation failed: {error_msg}")
+                return {
+                    'success': False,
+                    'error': f'Uninstallation failed: {error_msg}'
+                }
+
+        except Exception as e:
+            logger.error(f"[Amazon] Error uninstalling game {game_id}: {e}")
+            return {'success': False, 'error': str(e)}
+
 
 class GOGAPIClient:
     """Handles GOG via direct API calls using OAuth"""
@@ -5127,7 +5160,10 @@ class Plugin:
                         elif store == 'gog':
                             installed_ids = await self.gog.get_installed()
                             is_installed = game_id in installed_ids
-                        elif store not in ('epic', 'gog'):
+                        elif store == 'amazon':
+                            installed_ids = await self.amazon.get_installed()
+                            is_installed = game_id in installed_ids
+                        elif store not in ('epic', 'gog', 'amazon'):
                             return {'error': f'Unknown store: {store}'}
 
                     # Get game size - try cache first (instant), fallback to API (slow)
@@ -5144,6 +5180,8 @@ class Plugin:
                                 size_bytes = await self.epic.get_game_size(game_id)
                             elif store == 'gog':
                                 size_bytes = await self.gog.get_game_size(game_id)
+                            elif store == 'amazon':
+                                size_bytes = await self.amazon.get_game_size(game_id)
                             
                             # Cache the result for next time
                             if size_bytes and size_bytes > 0:
@@ -5308,6 +5346,11 @@ class Plugin:
             
             elif store == 'gog':
                 result = await self.gog.uninstall_game(game_id)
+                if not result['success']:
+                    return result
+            
+            elif store == 'amazon':
+                result = await self.amazon.uninstall_game(game_id)
                 if not result['success']:
                     return result
             
@@ -5671,6 +5714,7 @@ class Plugin:
             # Get installed game IDs from each store
             epic_installed = set(await self.epic.get_installed())
             gog_installed = set(await self.gog.get_installed())
+            amazon_installed = set(await self.amazon.get_installed())
             
             # Load steam_app_id cache for ProtonDB lookups
             steam_appid_cache = load_steam_appid_cache()
@@ -5695,6 +5739,8 @@ class Plugin:
                     is_installed = game_id in epic_installed
                 elif store == 'gog':
                     is_installed = game_id in gog_installed
+                elif store == 'amazon':
+                    is_installed = game_id in amazon_installed
                 
                 # Get appId
                 app_id = shortcut.get('appid')
