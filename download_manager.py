@@ -39,7 +39,7 @@ class StorageLocation(str, Enum):
 
 # Storage paths
 STORAGE_PATHS = {
-    StorageLocation.INTERNAL: "/home/deck/Games",
+    StorageLocation.INTERNAL: os.path.expanduser("~/Games"),
     # SD Card path will be resolved dynamically
     StorageLocation.SDCARD: "/run/media/mmcblk0p1/Games" 
 }
@@ -217,7 +217,7 @@ class DownloadQueue:
                 return os.path.join(sd_root, "Games")
             # Fallback
             return "/run/media/mmcblk0p1/Games"
-        return "/home/deck/Games"
+        return os.path.expanduser("~/Games")
 
     def _resolve_sd_path(self) -> Optional[str]:
         """Resolve the actual path to the SD card"""

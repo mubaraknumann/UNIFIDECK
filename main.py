@@ -143,13 +143,6 @@ class CDPOAuthMonitor:
                     if ws_url:
                         logger.info(f"[CDP] Closing page via CDP: {page.get('url', '')[:80]}...")
 
-                        # Add bundled lib directory to path
-                        import sys
-                        import os
-                        plugin_dir = os.path.dirname(os.path.abspath(__file__))
-                        lib_path = os.path.join(plugin_dir, 'lib')
-                        if lib_path not in sys.path:
-                            sys.path.insert(0, lib_path)
                         import websockets
 
                         async with websockets.connect(ws_url, ping_interval=None) as websocket:
@@ -190,12 +183,6 @@ class CDPOAuthMonitor:
                 return False
 
             # Connect and clear cookies
-            import sys
-            import os
-            plugin_dir = os.path.dirname(os.path.abspath(__file__))
-            lib_path = os.path.join(plugin_dir, 'lib')
-            if lib_path not in sys.path:
-                sys.path.insert(0, lib_path)
             import websockets
 
             async with websockets.connect(ws_url, ping_interval=None) as websocket:
@@ -241,13 +228,6 @@ class CDPOAuthMonitor:
             logger.info(f"[CDP] Connecting to page via WebSocket...")
 
             # Connect via WebSocket and get page content
-            # Add bundled lib directory to path
-            import sys
-            import os
-            plugin_dir = os.path.dirname(os.path.abspath(__file__))
-            lib_path = os.path.join(plugin_dir, 'lib')
-            if lib_path not in sys.path:
-                sys.path.insert(0, lib_path)
             import websockets
 
             async with websockets.connect(ws_url, ping_interval=None) as websocket:
@@ -297,6 +277,12 @@ class CDPOAuthMonitor:
             match = re.search(r'authorizationCode=([^&\s]+)', url)
             if match:
                 return match.group(1), 'epic'
+
+        # Amazon style - looks for openid.oa2.authorization_code in URL
+        if 'amazon.com' in url.lower() and 'openid.oa2.authorization_code=' in url:
+            match = re.search(r'openid\.oa2\.authorization_code=([^&\s]+)', url)
+            if match:
+                return match.group(1), 'amazon'
 
         # GOG style
         if 'code=' in url:
@@ -690,7 +676,6 @@ class ShortcutsManager:
         possible_paths = [
             os.path.expanduser("~/.steam/steam"),
             os.path.expanduser("~/.local/share/Steam"),
-            "/home/deck/.steam/steam",  # Steam Deck default
         ]
 
         for path in possible_paths:
@@ -2070,6 +2055,10 @@ class AmazonConnector:
                     # Store login data for completion step
                     self._pending_login_data = login_data
                     logger.info(f"[Amazon] Got login URL, waiting for user authorization")
+                    
+                    # Start CDP monitoring in background to auto-capture code
+                    asyncio.create_task(self._monitor_and_complete_auth())
+                    
                     return {
                         'success': True,
                         'url': login_data.get('url', ''),
@@ -2130,6 +2119,28 @@ class AmazonConnector:
         except Exception as e:
             logger.error(f"[Amazon] Error completing auth: {e}")
             return {'success': False, 'error': str(e)}
+
+    async def _monitor_and_complete_auth(self):
+        """Monitor browser for OAuth callback and auto-complete authentication"""
+        try:
+            monitor = CDPOAuthMonitor()
+            logger.info("[Amazon] Starting CDP monitor for auth code...")
+            
+            # Monitor for Amazon OAuth code (5 min timeout)
+            code, store = await monitor.monitor_for_oauth_code(expected_store='amazon', timeout=300)
+            
+            if code and store == 'amazon':
+                logger.info(f"[Amazon] ✓ Auto-captured authorization code via CDP")
+                result = await self.complete_auth(code)
+                if result.get('success'):
+                    logger.info("[Amazon] ✓ Auto-authentication completed successfully")
+                else:
+                    logger.error(f"[Amazon] Auto-auth completion failed: {result.get('error')}")
+            else:
+                logger.warning("[Amazon] CDP monitoring timeout - user may need to manually enter code")
+                
+        except Exception as e:
+            logger.error(f"[Amazon] Error in CDP monitoring: {e}", exc_info=True)
 
     async def logout(self) -> Dict[str, Any]:
         """Logout from Amazon Games"""
@@ -5799,7 +5810,9 @@ class Plugin:
                                         # and is NOT root or home root
                                         safe_keywords = ['/Games/', '/Epic', '/GOG', 'unifideck']
                                         is_safe = any(k in install_dir for k in safe_keywords)
-                                        not_root = install_dir not in ['/', '/home/deck', '/home/deck/Games']
+                                        home_dir = os.path.expanduser("~")
+                                        games_dir = os.path.join(home_dir, "Games")
+                                        not_root = install_dir not in ['/', home_dir, games_dir]
                                         
                                         if is_safe and not_root and os.path.exists(install_dir):
                                             logger.info(f"[Cleanup] Deleting install dir: {install_dir}")

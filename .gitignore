@@ -37,3 +37,5 @@ package-lock.json
 pnpm-lock.yaml
 Thumbs.db
 
+dist/index.js
+dist/index.js.map
