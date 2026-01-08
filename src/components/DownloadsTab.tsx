@@ -8,24 +8,21 @@
  * - Cancel functionality
  */
 
-import React, { VFC, useState, useEffect, useRef } from "react";
+import { FC, useState, useEffect, useRef } from "react";
 import { call, toaster } from "@decky/api";
 import {
     PanelSection,
     PanelSectionRow,
-    ButtonItem,
     Field,
     ProgressBarWithInfo,
-    Focusable,
     DialogButton,
+    Focusable,
 } from "@decky/ui";
 import { FaTimes, FaDownload, FaCheck, FaExclamationTriangle } from "react-icons/fa";
 
 import type {
     DownloadItem,
     DownloadQueueInfo,
-    StorageLocationInfo,
-    StorageLocationsResponse,
 } from "../types/downloads";
 
 /**
@@ -56,7 +53,7 @@ function formatETA(seconds: number): string {
 /**
  * Store icon based on store type
  */
-const StoreIcon: VFC<{ store: string }> = ({ store }) => {
+const StoreIcon: FC<{ store: string }> = ({ store }) => {
     const color = store === "epic" ? "#0078f2" : store === "amazon" ? "#FF9900" : "#a855f7";
     return (
         <span
@@ -75,7 +72,7 @@ const StoreIcon: VFC<{ store: string }> = ({ store }) => {
 /**
  * Single download item display
  */
-const DownloadItemRow: VFC<{
+const DownloadItemRow: FC<{
     item: DownloadItem;
     isCurrent: boolean;
     onCancel: (id: string) => void;
@@ -89,6 +86,44 @@ const DownloadItemRow: VFC<{
         error: "#ef4444",
     };
 
+    // For completed/error/cancelled items, use PanelSectionRow with ButtonItem
+    if ((item.status === "completed" || item.status === "error" || item.status === "cancelled") && onClear) {
+        return (
+            <PanelSectionRow>
+                <Focusable style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                    <div style={{ display: "flex", alignItems: "center", flex: 1, gap: "8px", minWidth: 0 }}>
+                        <StoreIcon store={item.store} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: "bold", fontSize: "14px" }}>
+                                {item.game_title}
+                            </div>
+                            <div style={{ fontSize: "12px", color: statusColors[item.status] }}>
+                                {item.status === "completed" && <><FaCheck size={10} /> Completed</>}
+                                {item.status === "error" && <><FaExclamationTriangle size={10} /> Error</>}
+                                {item.status === "cancelled" && "Cancelled"}
+                            </div>
+                        </div>
+                    </div>
+                    <DialogButton
+                        onClick={() => onClear(item.id)}
+                        style={{
+                            padding: "6px",
+                            minWidth: "24px",
+                            width: "24px",
+                            height: "24px",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                        }}
+                    >
+                        <FaTimes size={10} />
+                    </DialogButton>
+                </Focusable>
+            </PanelSectionRow>
+        );
+    }
+
+    // For active downloads (downloading/queued), keep the custom styled container
     return (
         <div
             style={{
@@ -99,7 +134,7 @@ const DownloadItemRow: VFC<{
                 border: isCurrent ? "1px solid #1a9fff" : "1px solid #333",
             }}
         >
-            {/* Header row: Title + Store + Clear button for finished */}
+            {/* Header row: Title + Store */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
                 <div style={{ display: "flex", alignItems: "center", flex: 1 }}>
                     <StoreIcon store={item.store} />
@@ -107,26 +142,6 @@ const DownloadItemRow: VFC<{
                         {item.game_title}
                     </span>
                 </div>
-
-                {/* X button to clear finished items */}
-                {(item.status === "completed" || item.status === "error" || item.status === "cancelled") && onClear && (
-                    <DialogButton
-                        onClick={() => onClear(item.id)}
-                        style={{
-                            padding: "0",
-                            width: "20px",
-                            height: "20px",
-                            minWidth: "auto",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            backgroundColor: "transparent",
-                            color: "#666",
-                        }}
-                    >
-                        <FaTimes size={10} />
-                    </DialogButton>
-                )}
             </div>
 
             {/* Cancel button on new line for active downloads */}
@@ -158,29 +173,14 @@ const DownloadItemRow: VFC<{
                     ) : (
                         <>
                             {/* Progress bar */}
-                            <div
-                                style={{
-                                    width: "100%",
-                                    height: "6px",
-                                    backgroundColor: "#333",
-                                    borderRadius: "3px",
-                                    overflow: "hidden",
-                                    marginBottom: "8px",
-                                }}
-                            >
-                                <div
-                                    style={{
-                                        width: `${item.progress_percent}%`,
-                                        height: "100%",
-                                        backgroundColor: "#1a9fff",
-                                        transition: "width 0.3s ease",
-                                    }}
-                                />
-                            </div>
+                            <ProgressBarWithInfo
+                                nProgress={item.progress_percent / 100}
+                                sOperationText={`${item.progress_percent.toFixed(1)}%`}
+                                bottomSeparator="none"
+                            />
 
                             {/* Stats row */}
-                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: "#888" }}>
-                                <span>{item.progress_percent.toFixed(1)}%</span>
+                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: "#888", marginTop: "4px" }}>
                                 <span>
                                     {formatBytes(item.downloaded_bytes)} / {formatBytes(item.total_bytes)}
                                 </span>
@@ -211,7 +211,7 @@ const DownloadItemRow: VFC<{
 /**
  * Empty state display
  */
-const EmptyState: VFC<{ message: string }> = ({ message }) => (
+const EmptyState: FC<{ message: string }> = ({ message }) => (
     <div
         style={{
             textAlign: "center",
@@ -227,7 +227,7 @@ const EmptyState: VFC<{ message: string }> = ({ message }) => (
 /**
  * Main Downloads Tab Component
  */
-export const DownloadsTab: VFC = () => {
+export const DownloadsTab: FC = () => {
     const [queueInfo, setQueueInfo] = useState<DownloadQueueInfo | null>(null);
     const [loading, setLoading] = useState(true);
     const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);

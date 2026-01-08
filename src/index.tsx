@@ -1,6 +1,6 @@
 import { definePlugin, call, toaster, routerHook } from "@decky/api";
-import { PanelSection, PanelSectionRow, ButtonItem, staticClasses, afterPatch, findInReactTree, createReactTreePatcher, appDetailsClasses, appActionButtonClasses, playSectionClasses, appDetailsHeaderClasses, DialogButton, Focusable, ToggleField, showModal, ConfirmModal } from "@decky/ui";
-import React, { VFC, useState, useEffect, useRef } from "react";
+import { PanelSection, PanelSectionRow, ButtonItem, Field, afterPatch, findInReactTree, createReactTreePatcher, appDetailsClasses, appActionButtonClasses, playSectionClasses, appDetailsHeaderClasses, DialogButton, Focusable, ToggleField, showModal, ConfirmModal } from "@decky/ui";
+import React, { FC, useState, useEffect, useRef } from "react";
 import { FaGamepad, FaSync, FaTrash } from "react-icons/fa";
 
 // Import views
@@ -63,79 +63,11 @@ import { StorageSettings } from "./components/StorageSettings";
 const gameInfoCache = new Map<number, { info: any; timestamp: number }>();
 const CACHE_TTL = 5000; // 5 seconds - reduced from 30s for faster button state updates
 
-// Install Overlay Component - modal shown when Install button clicked
-const InstallOverlayComponent: VFC<{
-  appId: number;
-  gameInfo: any;
-  onClose: () => void;
-  onInstallComplete: () => void;
-}> = ({ appId, gameInfo, onClose, onInstallComplete }) => {
-  const [isInstalling, setIsInstalling] = useState(false);
-
-  const handleInstall = async () => {
-    setIsInstalling(true);
-    const result = await call<[number], any>("install_game_by_appid", appId);
-
-    if (result.success) {
-      onInstallComplete();
-    } else {
-      toaster.toast({
-        title: "Installation Failed",
-        body: result.error || "Unknown error",
-        duration: 10000,
-        critical: true,
-      });
-      setIsInstalling(false);
-    }
-  };
-
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 10000
-      }}
-      onClick={onClose}
-    >
-      <div
-        style={{
-          backgroundColor: '#1e2329',
-          padding: '30px',
-          borderRadius: '8px',
-          minWidth: '400px',
-          border: '2px solid #1a9fff'
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div style={{ marginBottom: '15px', fontSize: '20px', fontWeight: 'bold', color: '#fff' }}>
-          Game Not Installed
-        </div>
-        <div style={{ marginBottom: '20px', fontSize: '16px', color: '#ccc' }}>
-          {gameInfo.title}
-        </div>
-        {gameInfo.size_formatted && (
-          <div style={{ marginBottom: '25px', fontSize: '14px', color: '#888' }}>
-            Download Size: {gameInfo.size_formatted}
-          </div>
-        )}
-        <ButtonItem onClick={handleInstall} disabled={isInstalling}>
-          {isInstalling ? 'Installing...' : 'Install Now'}
-        </ButtonItem>
-      </div>
-    </div>
-  );
-};
+// Install confirmation using native Decky ConfirmModal
+// No longer needed - replaced with showModal(ConfirmModal) pattern
 
 // Install Button Component - Simple button with self-contained state
-const InstallButton: VFC<{ appId: number }> = ({ appId }) => {
+const InstallButton: FC<{ appId: number }> = ({ appId }) => {
   const [gameInfo, setGameInfo] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
@@ -235,7 +167,7 @@ const InstallButton: VFC<{ appId: number }> = ({ appId }) => {
 // ================================================
 
 // Install Info Display Component - shows download size next to play section
-const InstallInfoDisplay: VFC<{ appId: number }> = ({ appId }) => {
+const InstallInfoDisplay: FC<{ appId: number }> = ({ appId }) => {
   const [gameInfo, setGameInfo] = useState<any>(null);
   const [processing, setProcessing] = useState(false);
   const [downloadState, setDownloadState] = useState<{
@@ -650,10 +582,19 @@ function patchGameDetailsRoute() {
   );
 }
 
+// Persistent tab state (survives component remounts)
+let persistentActiveTab: 'settings' | 'downloads' = 'settings';
+
 // Settings panel in Quick Access Menu
-const Content: VFC = () => {
-  // Tab navigation state
-  const [activeTab, setActiveTab] = useState<'settings' | 'downloads'>('settings');
+const Content: FC = () => {
+  // Tab navigation state - initialize from persistent value
+  const [activeTab, setActiveTab] = useState<'settings' | 'downloads'>(persistentActiveTab);
+  
+  // Update persistent state whenever tab changes
+  const handleTabChange = (tab: 'settings' | 'downloads') => {
+    persistentActiveTab = tab;
+    setActiveTab(tab);
+  };
 
   const [syncing, setSyncing] = useState(false);
   const [syncCooldown, setSyncCooldown] = useState(false);
@@ -684,23 +625,6 @@ const Content: VFC = () => {
     epic: "Checking...",
     gog: "Checking...",
     amazon: "Checking...",
-  });
-  const [authDialog, setAuthDialog] = useState<{
-    show: boolean;
-    store: 'epic' | 'gog' | 'amazon' | null;
-    url: string;
-    code: string;
-    processing: boolean;
-    error: string;
-    autoMode: boolean;
-  }>({
-    show: false,
-    store: null,
-    url: '',
-    code: '',
-    processing: false,
-    error: '',
-    autoMode: false
   });
   const [syncProgress, setSyncProgress] = useState<{
     total_games: number;
@@ -1142,6 +1066,8 @@ const Content: VFC = () => {
   };
 
   const startAuth = async (store: 'epic' | 'gog' | 'amazon') => {
+    const storeName = store === 'epic' ? 'Epic Games' : store === 'amazon' ? 'Amazon Games' : 'GOG';
+    
     try {
       let methodName: string;
       if (store === 'epic') {
@@ -1163,70 +1089,50 @@ const Content: VFC = () => {
         const popup = window.open(authUrl, '_blank', 'width=800,height=600,popup=yes');
 
         if (!popup) {
-          setAuthDialog({
-            show: true,
-            store,
-            url: authUrl,
-            code: '',
-            processing: false,
-            error: 'Failed to open popup window - popup may be blocked',
-            autoMode: false
+          toaster.toast({
+            title: "Popup Blocked",
+            body: "Failed to open authentication window",
+            critical: true,
+            duration: 5000,
           });
           return;
         }
 
         console.log(`[Unifideck] Opened ${store} auth popup. Backend monitoring via CDP...`);
 
-        // Show dialog indicating we're waiting
-        setAuthDialog({
-          show: true,
-          store,
-          url: authUrl,
-          code: '',
-          processing: true,
-          error: '',
-          autoMode: true
-        });
-
-        // Poll for authentication completion
+        // Poll for authentication completion (no modal, just background polling)
         const completed = await pollForAuthCompletion(store);
 
         if (completed) {
           toaster.toast({
-            title: "Auth Successful",
-            body: "You can close the window",
+            title: "Authentication Successful",
+            body: `${storeName} connected successfully`,
             duration: 5000,
           });
-          setAuthDialog({ show: false, store: null, url: '', code: '', processing: false, error: '', autoMode: false });
           await checkStoreStatus(); // Refresh status
         } else {
-          setAuthDialog(prev => ({
-            ...prev,
-            processing: false,
-            error: 'Authentication timeout - please check logs or try again'
-          }));
+          toaster.toast({
+            title: "Authentication Timeout",
+            body: "Please check logs or try again",
+            critical: true,
+            duration: 5000,
+          });
         }
       } else {
-        setAuthDialog({
-          show: true,
-          store,
-          url: '',
-          code: '',
-          processing: false,
-          error: result.error || 'Failed to start authentication',
-          autoMode: false
+        toaster.toast({
+          title: "Authentication Failed",
+          body: result.error || 'Failed to start authentication',
+          critical: true,
+          duration: 5000,
         });
       }
     } catch (error: any) {
       console.error(`[Unifideck] Error starting ${store} auth:`, error);
-      setAuthDialog({
-        show: true,
-        store,
-        url: '',
-        code: '',
-        processing: false,
-        error: `Error: ${error.message || error}`,
-        autoMode: false
+      toaster.toast({
+        title: "Authentication Error",
+        body: error.message || String(error),
+        critical: true,
+        duration: 5000,
       });
     }
   };
@@ -1336,59 +1242,25 @@ const Content: VFC = () => {
 
   return (
     <>
-      {/* Tab Navigation - Vertical Stack Layout */}
+      {/* Tab Navigation */}
       <PanelSection>
-
-
-
         <PanelSectionRow>
-          <div ref={mountRef} style={{ width: "100%" }}>
-            <Focusable
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "4px",
-                width: "100%",
-              }}
-            >
-              <DialogButton
-                onClick={() => setActiveTab('settings')}
-                style={{
-                  width: "100%",
-                  padding: "8px 12px",
-                  fontSize: "13px",
-                  backgroundColor: activeTab === 'settings' ? '#1a9fff' : 'transparent',
-                  border: activeTab === 'settings' ? 'none' : '1px solid #444',
-                  borderRadius: '4px',
-                  fontWeight: activeTab === 'settings' ? 'bold' : 'normal',
-                  textAlign: "left",
-                  justifyContent: "flex-start",
-                  display: "flex",
-                  alignItems: "center",
-                }}
-              >
-                ⚙️ Settings
-              </DialogButton>
-              <DialogButton
-                onClick={() => setActiveTab('downloads')}
-                style={{
-                  width: "100%",
-                  padding: "8px 12px",
-                  fontSize: "13px",
-                  backgroundColor: activeTab === 'downloads' ? '#1a9fff' : 'transparent',
-                  border: activeTab === 'downloads' ? 'none' : '1px solid #444',
-                  borderRadius: '4px',
-                  fontWeight: activeTab === 'downloads' ? 'bold' : 'normal',
-                  textAlign: "left",
-                  justifyContent: "flex-start",
-                  display: "flex",
-                  alignItems: "center",
-                }}
-              >
-                ⬇️ Downloads
-              </DialogButton>
-            </Focusable>
-          </div>
+          <ButtonItem
+            layout="below"
+            onClick={() => handleTabChange('settings')}
+            disabled={activeTab === 'settings'}
+          >
+            <div ref={mountRef}>Settings</div>
+          </ButtonItem>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem
+            layout="below"
+            onClick={() => handleTabChange('downloads')}
+            disabled={activeTab === 'downloads'}
+          >
+            Downloads
+          </ButtonItem>
         </PanelSectionRow>
       </PanelSection>
 
@@ -1403,118 +1275,89 @@ const Content: VFC = () => {
       {/* Settings Tab */}
       {activeTab === 'settings' && (
         <>
-          <PanelSection title="Unifideck Settings">
+          {/* Store Connections - Compact View */}
+          <PanelSection title="STORE CONNECTIONS">
+            {/* Status indicators */}
             <PanelSectionRow>
-              <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                <div>
-                  Add Epic, GOG, and Amazon games to your Steam Deck library.
+              <Field description={
+                <div style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "13px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <div style={{
+                      width: "8px",
+                      height: "8px",
+                      borderRadius: "50%",
+                      backgroundColor: storeStatus.epic === "Connected" ? "#4ade80" : "#888"
+                    }} />
+                    <span>Epic Games {storeStatus.epic === "Connected" ? "✓" : ""}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <div style={{
+                      width: "8px",
+                      height: "8px",
+                      borderRadius: "50%",
+                      backgroundColor: storeStatus.gog === "Connected" ? "#4ade80" : "#888"
+                    }} />
+                    <span>GOG {storeStatus.gog === "Connected" ? "✓" : ""}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <div style={{
+                      width: "8px",
+                      height: "8px",
+                      borderRadius: "50%",
+                      backgroundColor: storeStatus.amazon === "Connected" ? "#4ade80" : "#888"
+                    }} />
+                    <span>Amazon Games {storeStatus.amazon === "Connected" ? "✓" : ""}</span>
+                  </div>
                 </div>
-                <div style={{ fontSize: "12px", opacity: 0.7 }}>
-                  All your games under one roof.
-                </div>
-              </div>
+              } />
             </PanelSectionRow>
-          </PanelSection>
 
-          {/* Epic Games Store Section */}
-          <PanelSection title="Epic Games">
-            <PanelSectionRow>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
-                <div style={{ fontSize: "14px" }}>
-                  Status: {
-                    storeStatus.epic === "Connected" ? "✓ Connected" :
-                      storeStatus.epic === "Legendary not installed" ? "⚠️ Installing..." :
-                        storeStatus.epic === "Checking..." ? "Checking..." :
-                          storeStatus.epic.includes("Error") ? `❌ ${storeStatus.epic}` :
-                            "✗ Not Connected"
-                  }
-                </div>
-              </div>
-            </PanelSectionRow>
-            <PanelSectionRow>
-              <div>
-                {storeStatus.epic === "Connected" ? (
-                  <ButtonItem layout="below" onClick={() => handleLogout('epic')}>
-                    <div style={{ fontSize: "0.85em", padding: "2px" }}>Logout</div>
-                  </ButtonItem>
-                ) : storeStatus.epic !== "Checking..." && !storeStatus.epic.includes("Error") && storeStatus.epic !== "Legendary not installed" ? (
-                  <ButtonItem layout="below" onClick={() => startAuth('epic')}>
-                    <div style={{ fontSize: "0.85em", padding: "2px" }}>Authenticate</div>
-                  </ButtonItem>
-                ) : null}
-              </div>
-            </PanelSectionRow>
-            {storeStatus.epic === "Legendary not installed" && (
+            {/* Action buttons */}
+            {/* Epic button */}
+            {storeStatus.epic !== "Checking..." && storeStatus.epic !== "Legendary not installed" && !storeStatus.epic.includes("Error") && (
               <PanelSectionRow>
-                <div style={{ fontSize: '11px', opacity: 0.7 }}>
-                  Installing legendary CLI automatically...
-                </div>
+                <ButtonItem 
+                  layout="below" 
+                  onClick={() => storeStatus.epic === "Connected" ? handleLogout('epic') : startAuth('epic')}
+                >
+                  {storeStatus.epic === "Connected" ? "Logout of Epic Games" : "Authenticate Epic Games"}
+                </ButtonItem>
               </PanelSectionRow>
             )}
-          </PanelSection>
+            
+            {/* GOG button */}
+            {storeStatus.gog !== "Checking..." && !storeStatus.gog.includes("Error") && (
+              <PanelSectionRow>
+                <ButtonItem 
+                  layout="below" 
+                  onClick={() => storeStatus.gog === "Connected" ? handleLogout('gog') : startAuth('gog')}
+                >
+                  {storeStatus.gog === "Connected" ? "Logout of GOG" : "Authenticate GOG"}
+                </ButtonItem>
+              </PanelSectionRow>
+            )}
+            
+            {/* Amazon button */}
+            {storeStatus.amazon !== "Checking..." && storeStatus.amazon !== "Nile not installed" && !storeStatus.amazon.includes("Error") && (
+              <PanelSectionRow>
+                <ButtonItem 
+                  layout="below" 
+                  onClick={() => storeStatus.amazon === "Connected" ? handleLogout('amazon') : startAuth('amazon')}
+                >
+                  {storeStatus.amazon === "Connected" ? "Logout of Amazon Games" : "Authenticate Amazon Games"}
+                </ButtonItem>
+              </PanelSectionRow>
+            )}
 
-          {/* GOG Store Section */}
-          <PanelSection title="GOG">
-            <PanelSectionRow>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
-                <div style={{ fontSize: "14px" }}>
-                  Status: {
-                    storeStatus.gog === "Connected" ? "✓ Connected" :
-                      storeStatus.gog === "Checking..." ? "Checking..." :
-                        storeStatus.gog.includes("Error") ? `❌ ${storeStatus.gog}` :
-                          "✗ Not Connected"
-                  }
-                </div>
-              </div>
-            </PanelSectionRow>
-            <PanelSectionRow>
-              <div>
-                {storeStatus.gog === "Connected" ? (
-                  <ButtonItem layout="below" onClick={() => handleLogout('gog')}>
-                    <div style={{ fontSize: "0.85em", padding: "2px" }}>Logout</div>
-                  </ButtonItem>
-                ) : storeStatus.gog !== "Checking..." && !storeStatus.gog.includes("Error") ? (
-                  <ButtonItem layout="below" onClick={() => startAuth('gog')}>
-                    <div style={{ fontSize: "0.85em", padding: "2px" }}>Authenticate</div>
-                  </ButtonItem>
-                ) : null}
-              </div>
-            </PanelSectionRow>
-          </PanelSection>
-
-          {/* Amazon Games Section */}
-          <PanelSection title="AMAZON GAMES">
-            <PanelSectionRow>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
-                <div style={{ fontSize: "14px" }}>
-                  Status: {
-                    storeStatus.amazon === "Connected" ? "✓ Connected" :
-                      storeStatus.amazon === "Nile not installed" ? "⚠️ Missing CLI" :
-                        storeStatus.amazon === "Checking..." ? "Checking..." :
-                          storeStatus.amazon.includes("Error") ? `❌ ${storeStatus.amazon}` :
-                            "✗ Not Connected"
-                  }
-                </div>
-              </div>
-            </PanelSectionRow>
-            <PanelSectionRow>
-              <div>
-                {storeStatus.amazon === "Connected" ? (
-                  <ButtonItem layout="below" onClick={() => handleLogout('amazon')}>
-                    <div style={{ fontSize: "0.85em", padding: "2px" }}>Logout</div>
-                  </ButtonItem>
-                ) : storeStatus.amazon !== "Checking..." && !storeStatus.amazon.includes("Error") && storeStatus.amazon !== "Nile not installed" ? (
-                  <ButtonItem layout="below" onClick={() => startAuth('amazon')}>
-                    <div style={{ fontSize: "0.85em", padding: "2px" }}>Authenticate</div>
-                  </ButtonItem>
-                ) : null}
-              </div>
-            </PanelSectionRow>
+            {/* Error/warning messages */}
+            {storeStatus.epic === "Legendary not installed" && (
+              <PanelSectionRow>
+                <Field description="⚠️ Installing Epic Games CLI..." />
+              </PanelSectionRow>
+            )}
             {storeStatus.amazon === "Nile not installed" && (
               <PanelSectionRow>
-                <div style={{ fontSize: '11px', opacity: 0.7 }}>
-                  Nile CLI not found. Amazon Games unavailable.
-                </div>
+                <Field description="⚠️ Amazon Games CLI not found" />
               </PanelSectionRow>
             )}
           </PanelSection>
@@ -1530,15 +1373,12 @@ const Content: VFC = () => {
                 <div style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: "2px",
-                  justifyContent: "center",
-                  fontSize: "0.85em",
-                  padding: "2px"
+                  gap: "8px",
+                  justifyContent: "center"
                 }}>
                   <FaSync style={{
                     animation: syncing ? "spin 1s linear infinite" : "none",
-                    opacity: syncCooldown ? 0.5 : 1,
-                    fontSize: "10px"
+                    opacity: syncCooldown ? 0.5 : 1
                   }} />
                   {syncing
                     ? "Syncing..."
@@ -1557,16 +1397,12 @@ const Content: VFC = () => {
                 <div style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: "2px",
-                  justifyContent: "center",
-                  color: "#ff9800",
-                  fontSize: "0.85em",
-                  padding: "2px"
+                  gap: "8px",
+                  justifyContent: "center"
                 }}>
                   <FaSync style={{
                     animation: syncing ? "spin 1s linear infinite" : "none",
-                    opacity: syncCooldown ? 0.5 : 1,
-                    fontSize: "10px"
+                    opacity: syncCooldown ? 0.5 : 1
                   }} />
                   {syncing
                     ? "..."
@@ -1584,9 +1420,7 @@ const Content: VFC = () => {
                   layout="below"
                   onClick={handleCancelSync}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#ff6b6b" }}>
-                    Cancel Sync
-                  </div>
+                  Cancel Sync
                 </ButtonItem>
               </PanelSectionRow>
             )}
@@ -1664,7 +1498,6 @@ const Content: VFC = () => {
                   disabled={syncing || deleting || syncCooldown}
                 >
                   <div style={{ display: "flex", alignItems: "center", gap: "2px", fontSize: "0.85em", padding: "2px" }}>
-                    <FaTrash style={{ fontSize: "10px" }} />
                     Delete all UNIFIDECK Libraries and Cache
                   </div>
                 </ButtonItem>
@@ -1672,26 +1505,19 @@ const Content: VFC = () => {
             ) : (
               <>
                 <PanelSectionRow>
-                  <div style={{ color: "#ff6b6b", fontWeight: "bold" }}>
-                    Are you sure? This will delete ALL Unifideck games, artwork, auth tokens, and cache.
-                    This action is irreversible.
-                  </div>
+                  <Field
+                    label="⚠️ Warning"
+                    description="This will delete ALL Unifideck games, artwork, auth tokens, and cache. This action is irreversible."
+                  />
                 </PanelSectionRow>
 
                 {/* Delete Files Checkbox */}
                 <PanelSectionRow>
-                  <div style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "10px",
-                    margin: "10px 0"
-                  }}>
-                    <ToggleField
-                      label="Also delete installed game files? (Destructive)"
-                      checked={deleteFiles}
-                      onChange={(checked) => setDeleteFiles(checked)}
-                    />
-                  </div>
+                  <ToggleField
+                    label="Also delete installed game files? (Destructive)"
+                    checked={deleteFiles}
+                    onChange={(checked) => setDeleteFiles(checked)}
+                  />
                 </PanelSectionRow>
 
                 <PanelSectionRow>
@@ -1700,9 +1526,7 @@ const Content: VFC = () => {
                     onClick={handleDeleteAll}
                     disabled={deleting}
                   >
-                    <div style={{ color: "#ff6b6b", fontSize: "0.85em", padding: "2px" }}>
-                      {deleting ? "Deleting..." : "Yes, Delete Everything"}
-                    </div>
+                    {deleting ? "Deleting..." : "Yes, Delete Everything"}
                   </ButtonItem>
                 </PanelSectionRow>
                 <PanelSectionRow>
@@ -1714,99 +1538,14 @@ const Content: VFC = () => {
                     }}
                     disabled={deleting}
                   >
-                    <div style={{ fontSize: "0.85em", padding: "2px" }}>Cancel</div>
+                    Cancel
                   </ButtonItem>
                 </PanelSectionRow>
               </>
             )}
           </PanelSection>
 
-          {/* Authentication Dialog */}
-          {authDialog.show && (
-            <div style={{
-              position: 'fixed',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              backgroundColor: 'rgba(0, 0, 0, 0.8)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              zIndex: 10000
-            }}>
-              <div style={{
-                backgroundColor: '#1e2329',
-                padding: '20px',
-                borderRadius: '8px',
-                maxWidth: '500px',
-                width: '90%',
-                maxHeight: '80vh',
-                overflow: 'auto'
-              }}>
-                <h2 style={{ marginTop: 0 }}>
-                  {authDialog.store === 'epic' ? 'Epic Games' : authDialog.store === 'amazon' ? 'Amazon Games' : 'GOG'} Authentication
-                </h2>
 
-                <div>
-                  <div style={{ marginBottom: '15px', fontSize: '14px' }}>
-                    {authDialog.processing ? (
-                      <div>
-                        <p>Please complete the login in the popup window.</p>
-                        <p style={{ fontSize: '0.9em', color: '#888', marginTop: '5px' }}>
-                          The window will close automatically after authentication.
-                        </p>
-                        <div style={{ marginTop: '20px', textAlign: 'center' }}>
-                          <div style={{ fontSize: '32px' }}>⏳</div>
-                          <p style={{ fontSize: '12px', opacity: 0.7, marginTop: '10px' }}>
-                            Waiting for authentication...
-                          </p>
-                        </div>
-                      </div>
-                    ) : (
-                      <div>
-                        <p>✓ Ready to authenticate</p>
-                      </div>
-                    )}
-                  </div>
-
-                  {authDialog.error && (
-                    <div style={{
-                      marginBottom: '15px',
-                      padding: '10px',
-                      backgroundColor: '#5c1f1f',
-                      borderRadius: '4px',
-                      fontSize: '13px'
-                    }}>
-                      {authDialog.error}
-                      {authDialog.error.includes('cross-origin') && (
-                        <p style={{ fontSize: '0.8em', marginTop: '5px' }}>
-                          The popup closed before authentication could complete. Please try again.
-                        </p>
-                      )}
-                    </div>
-                  )}
-
-                  <div style={{ display: 'flex', gap: '10px' }}>
-                    <button
-                      onClick={() => setAuthDialog({ show: false, store: null, url: '', code: '', processing: false, error: '', autoMode: false })}
-                      style={{
-                        flex: 1,
-                        padding: '10px',
-                        backgroundColor: '#3d4450',
-                        border: 'none',
-                        borderRadius: '4px',
-                        color: 'white',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      {authDialog.processing ? 'Cancel' : 'Close'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
         </>
       )}
     </>

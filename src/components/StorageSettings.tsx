@@ -5,7 +5,7 @@
  * Extracted from Content() for tab-based navigation.
  */
 
-import React, { VFC, useState, useEffect } from "react";
+import { FC, useState, useEffect } from "react";
 import { call, toaster } from "@decky/api";
 import {
     PanelSection,
@@ -13,16 +13,14 @@ import {
     Field,
     Dropdown,
     DropdownOption,
-    ButtonItem,
 } from "@decky/ui";
-import { FaSave } from "react-icons/fa";
 
 import type { StorageLocationInfo, StorageLocationsResponse } from "../types/downloads";
 
 /**
  * Storage Location Settings Component
  */
-export const StorageSettings: VFC = () => {
+export const StorageSettings: FC = () => {
     const [locations, setLocations] = useState<StorageLocationInfo[]>([]);
     const [defaultStorage, setDefaultStorage] = useState<string>("internal");
     const [saving, setSaving] = useState(false);
@@ -88,34 +86,30 @@ export const StorageSettings: VFC = () => {
 
     return (
         <PanelSection title="DOWNLOAD SETTINGS">
-            <PanelSectionRow>
-                <Field
-                    label="Install Location"
-                    description="Where new games will be downloaded"
-                >
-                    {dropdownOptions.length > 0 ? (
-                        <Dropdown
-                            rgOptions={dropdownOptions}
-                            selectedOption={selectedOption?.data}
-                            onChange={handleStorageChange}
-                            disabled={saving}
-                        />
-                    ) : (
-                        <span style={{ color: "#888", fontSize: "12px" }}>
-                            Loading storage options...
-                        </span>
-                    )}
-                </Field>
-            </PanelSectionRow>
+            {dropdownOptions.length > 0 ? (
+                <PanelSectionRow>
+                    <Dropdown
+                        label="Install Location"
+                        description="Where new games will be downloaded"
+                        rgOptions={dropdownOptions}
+                        selectedOption={selectedOption?.data}
+                        onChange={handleStorageChange}
+                        disabled={saving}
+                    />
+                </PanelSectionRow>
+            ) : (
+                <PanelSectionRow>
+                    <Field description="Loading storage options..." />
+                </PanelSectionRow>
+            )}
 
             {/* Show current default path */}
             {locations.length > 0 && (
                 <PanelSectionRow>
-                    <Field label="Path">
-                        <span style={{ color: "#888", fontSize: "12px" }}>
-                            {locations.find((l) => l.id === defaultStorage)?.path || "Unknown"}
-                        </span>
-                    </Field>
+                    <Field
+                        label="Path"
+                        description={locations.find((l) => l.id === defaultStorage)?.path || "Unknown"}
+                    />
                 </PanelSectionRow>
             )}
         </PanelSection>

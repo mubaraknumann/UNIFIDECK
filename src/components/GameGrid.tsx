@@ -1,5 +1,6 @@
-import React, { VFC } from "react";
+import { FC } from "react";
 import { UnifideckGame } from "../types/steam";
+import { Field, Focusable, DialogButton, PanelSection, PanelSectionRow } from "@decky/ui";
 
 interface GameGridProps {
   games: UnifideckGame[];
@@ -11,43 +12,27 @@ interface GameGridProps {
  * Instead of creating custom game cards, we navigate to Steam's library
  * and let Steam handle the rendering using its native components
  */
-export const GameGrid: VFC<GameGridProps> = ({ games, loading }) => {
+export const GameGrid: FC<GameGridProps> = ({ games, loading }) => {
   if (loading) {
     return (
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          height: "400px",
-          fontSize: "16px",
-          opacity: 0.7,
-        }}
-      >
-        Loading games...
-      </div>
+      <PanelSection>
+        <PanelSectionRow>
+          <Field description="Loading games..." />
+        </PanelSectionRow>
+      </PanelSection>
     );
   }
 
   if (games.length === 0) {
     return (
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          height: "400px",
-          fontSize: "16px",
-          opacity: 0.7,
-          flexDirection: "column",
-          gap: "10px",
-        }}
-      >
-        <div>No games found</div>
-        <div style={{ fontSize: "12px" }}>
-          Try syncing your libraries from the Unifideck settings
-        </div>
-      </div>
+      <PanelSection>
+        <PanelSectionRow>
+          <Field
+            label="No games found"
+            description="Try syncing your libraries from the Unifideck settings"
+          />
+        </PanelSectionRow>
+      </PanelSection>
     );
   }
 
@@ -103,85 +88,81 @@ export const GameGrid: VFC<GameGridProps> = ({ games, loading }) => {
  * Simple game card component
  * In production, this should be replaced with Steam's native GameTile component
  */
-const GameCard: VFC<{ game: UnifideckGame }> = ({ game }) => {
+const GameCard: FC<{ game: UnifideckGame }> = ({ game }) => {
   const handleClick = () => {
     // Navigate to game details in Steam
     window.location.href = `steam://nav/library/app/${game.appId}`;
   };
 
   return (
-    <div
-      onClick={handleClick}
-      style={{
-        background: "rgba(255, 255, 255, 0.05)",
-        borderRadius: "4px",
-        padding: "15px",
-        cursor: "pointer",
-        transition: "background 0.2s",
-        border: "1px solid rgba(255, 255, 255, 0.1)",
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = "rgba(255, 255, 255, 0.1)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "rgba(255, 255, 255, 0.05)";
-      }}
-    >
-      <div style={{ marginBottom: "8px", fontWeight: "bold" }}>
-        {game.title}
-      </div>
-
-      <div
+    <Focusable style={{ padding: "4px" }}>
+      <DialogButton
+        onClick={handleClick}
         style={{
+          width: "100%",
+          minHeight: "80px",
           display: "flex",
-          gap: "8px",
-          fontSize: "11px",
-          flexWrap: "wrap",
+          flexDirection: "column",
+          alignItems: "flex-start",
+          padding: "12px",
         }}
       >
-        {game.store !== "steam" && game.store !== "unknown" && (
-          <span
-            style={{
-              background: getStoreColor(game.store),
-              padding: "2px 6px",
-              borderRadius: "3px",
-            }}
-          >
-            {game.store.toUpperCase()}
-          </span>
-        )}
-
-        {game.isInstalled && (
-          <span
-            style={{
-              background: "rgba(76, 175, 80, 0.3)",
-              padding: "2px 6px",
-              borderRadius: "3px",
-            }}
-          >
-            Installed
-          </span>
-        )}
-
-        {!game.isInstalled && game.isShortcut && (
-          <span
-            style={{
-              background: "rgba(255, 152, 0, 0.3)",
-              padding: "2px 6px",
-              borderRadius: "3px",
-            }}
-          >
-            Not Installed
-          </span>
-        )}
-      </div>
-
-      {(game.playtimeMinutes ?? 0) > 0 && (
-        <div style={{ marginTop: "8px", fontSize: "11px", opacity: 0.7 }}>
-          {Math.floor((game.playtimeMinutes ?? 0) / 60)}h {(game.playtimeMinutes ?? 0) % 60}m played
+        <div style={{ marginBottom: "8px", fontWeight: "bold" }}>
+          {game.title}
         </div>
-      )}
-    </div>
+
+        <div
+          style={{
+            display: "flex",
+            gap: "8px",
+            fontSize: "11px",
+            flexWrap: "wrap",
+          }}
+        >
+          {game.store !== "steam" && game.store !== "unknown" && (
+            <span
+              style={{
+                background: getStoreColor(game.store),
+                padding: "2px 6px",
+                borderRadius: "3px",
+              }}
+            >
+              {game.store.toUpperCase()}
+            </span>
+          )}
+
+          {game.isInstalled && (
+            <span
+              style={{
+                background: "rgba(76, 175, 80, 0.3)",
+                padding: "2px 6px",
+                borderRadius: "3px",
+              }}
+            >
+              Installed
+            </span>
+          )}
+
+          {!game.isInstalled && game.isShortcut && (
+            <span
+              style={{
+                background: "rgba(255, 152, 0, 0.3)",
+                padding: "2px 6px",
+                borderRadius: "3px",
+              }}
+            >
+              Not Installed
+            </span>
+          )}
+        </div>
+
+        {(game.playtimeMinutes ?? 0) > 0 && (
+          <div style={{ marginTop: "8px", fontSize: "11px", opacity: 0.7 }}>
+            {Math.floor((game.playtimeMinutes ?? 0) / 60)}h {(game.playtimeMinutes ?? 0) % 60}m played
+          </div>
+        )}
+      </DialogButton>
+    </Focusable>
   );
 };
 
