@@ -589,7 +589,7 @@ let persistentActiveTab: 'settings' | 'downloads' = 'settings';
 const Content: FC = () => {
   // Tab navigation state - initialize from persistent value
   const [activeTab, setActiveTab] = useState<'settings' | 'downloads'>(persistentActiveTab);
-  
+
   // Update persistent state whenever tab changes
   const handleTabChange = (tab: 'settings' | 'downloads') => {
     persistentActiveTab = tab;
