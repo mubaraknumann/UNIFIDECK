@@ -59,11 +59,6 @@ bin/prefetch_winetricks.py
 # Build scripts
 build-plugin.sh
 
-# Downloaded source directories
-HeroicGamesLauncher-main/
-junkstore-main/
-ludusavi-master/
-umu-launcher-main/
 
 dist/index.js
 dist/index.js.map

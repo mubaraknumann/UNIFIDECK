@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-CLI_LOCATION="$(pwd)/cli"
-echo "Building plugin in $(pwd)"
+# Delegate to the main build script which handles permissions, versioning, and dependencies correctly
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
-if ! test -f "$CLI_LOCATION/decky"; then
-    echo "Decky CLI tool not found. Please run the setup task first."
-    exit 1
-fi
-
-echo "Building plugin..."
-$CLI_LOCATION/decky plugin build $(pwd)
+# Execute the main build script in dev mode
+cd "$ROOT_DIR"
+chmod +x build-plugin.sh
+./build-plugin.sh dev

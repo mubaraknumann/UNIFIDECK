@@ -5,7 +5,7 @@
  * Extracted from Content() for tab-based navigation.
  */
 
-import React, { VFC, useState, useEffect } from "react";
+import React, { FC, useState, useEffect } from "react";
 import { call, toaster } from "@decky/api";
 import {
     PanelSection,
@@ -22,7 +22,7 @@ import type { StorageLocationInfo, StorageLocationsResponse } from "../types/dow
 /**
  * Storage Location Settings Component
  */
-export const StorageSettings: VFC = () => {
+export const StorageSettings: FC = () => {
     const [locations, setLocations] = useState<StorageLocationInfo[]>([]);
     const [defaultStorage, setDefaultStorage] = useState<string>("internal");
     const [saving, setSaving] = useState(false);

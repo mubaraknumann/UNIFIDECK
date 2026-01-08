@@ -5,7 +5,7 @@
  * which version to use (Steam-like behavior).
  */
 
-import React, { VFC, useState } from "react";
+import React, { FC, useState } from "react";
 import { call, toaster } from "@decky/api";
 import {
     ConfirmModal,
@@ -56,7 +56,7 @@ const formatTimestamp = (timestamp: number): string => {
  * 
  * Shows when local saves differ from cloud saves, letting user choose.
  */
-export const CloudSaveConflictModal: VFC<CloudSaveConflictModalProps> = ({
+export const CloudSaveConflictModal: FC<CloudSaveConflictModalProps> = ({
     store,
     gameId,
     gameName,

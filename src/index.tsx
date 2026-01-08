@@ -1,6 +1,6 @@
 import { definePlugin, call, toaster, routerHook } from "@decky/api";
 import { PanelSection, PanelSectionRow, ButtonItem, staticClasses, afterPatch, findInReactTree, createReactTreePatcher, appDetailsClasses, appActionButtonClasses, playSectionClasses, appDetailsHeaderClasses, DialogButton, Focusable, ToggleField, showModal, ConfirmModal } from "@decky/ui";
-import React, { VFC, useState, useEffect, useRef } from "react";
+import React, { FC, useState, useEffect, useRef } from "react";
 import { FaGamepad, FaSync, FaTrash } from "react-icons/fa";
 
 // Import views
@@ -64,7 +64,7 @@ const gameInfoCache = new Map<number, { info: any; timestamp: number }>();
 const CACHE_TTL = 5000; // 5 seconds - reduced from 30s for faster button state updates
 
 // Install Overlay Component - modal shown when Install button clicked
-const InstallOverlayComponent: VFC<{
+const InstallOverlayComponent: FC<{
   appId: number;
   gameInfo: any;
   onClose: () => void;
@@ -135,7 +135,7 @@ const InstallOverlayComponent: VFC<{
 };
 
 // Install Button Component - Simple button with self-contained state
-const InstallButton: VFC<{ appId: number }> = ({ appId }) => {
+const InstallButton: FC<{ appId: number }> = ({ appId }) => {
   const [gameInfo, setGameInfo] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
@@ -235,7 +235,7 @@ const InstallButton: VFC<{ appId: number }> = ({ appId }) => {
 // ================================================
 
 // Install Info Display Component - shows download size next to play section
-const InstallInfoDisplay: VFC<{ appId: number }> = ({ appId }) => {
+const InstallInfoDisplay: FC<{ appId: number }> = ({ appId }) => {
   const [gameInfo, setGameInfo] = useState<any>(null);
   const [processing, setProcessing] = useState(false);
   const [downloadState, setDownloadState] = useState<{
@@ -651,7 +651,7 @@ function patchGameDetailsRoute() {
 }
 
 // Settings panel in Quick Access Menu
-const Content: VFC = () => {
+const Content: FC = () => {
   // Tab navigation state
   const [activeTab, setActiveTab] = useState<'settings' | 'downloads'>('settings');
 

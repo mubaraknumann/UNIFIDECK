@@ -4501,12 +4501,15 @@ class Plugin:
         """Fetch artwork for a single game with concurrency control"""
         async with semaphore:
             try:
+                # Update status to show we're working on this game (before download)
+                self.sync_progress.current_game = f"Downloading artwork for {game.title}..."
+                
                 # Pass store and store_id for official CDN artwork sources
                 result = await self.steamgriddb.fetch_game_art(
                     game.title, 
                     game.app_id,
-                    store=game.store,      # 'epic' or 'gog'
-                    store_id=game.id       # Store-specific game ID (e.g. GOG product ID, Epic app_name)
+                    store=game.store,      # 'epic', 'gog', or 'amazon'
+                    store_id=game.id       # Store-specific game ID (e.g. GOG product ID, Epic app_name, Amazon game ID)
                 )
                 
                 # Store steam_app_id from search (for ProtonDB lookups)
@@ -4519,7 +4522,7 @@ class Plugin:
                 # Build detailed source log
                 sources = result.get('sources', [])
                 art_count = result.get('artwork_count', 0)
-                sgdb = '+SGDB' if result.get('sgdb_queued') else ''
+                sgdb = '+SGDB' if result.get('sgdb_filled') else ''
                 source_str = ' '.join(sources) if sources else 'NO_SOURCE'
                 
                 # Log format: [progress] STORE: Title [sources] (artwork_count)
@@ -4764,12 +4767,13 @@ class Plugin:
                              return {'success': False, 'cancelled': True}
 
                         # Download in parallel - 30 concurrent (10 per source × 3 sources)
+                        logger.info(f"  → Starting parallel download (concurrency: 30, sources: Epic/GOG/Amazon CDN + Steam + SGDB fallback)")
                         semaphore = asyncio.Semaphore(30)
                         tasks = [self.fetch_artwork_with_progress(game, semaphore) for game in games_needing_art]
                         results = await asyncio.gather(*tasks, return_exceptions=True)
                         artwork_count = sum(1 for r in results if r is True)
                         
-                        logger.info(f"Downloaded artwork for {artwork_count} games")
+                        logger.info(f"Artwork download complete: {artwork_count}/{len(games_needing_art)} games successful")
 
                 # --- STEP 2: UPDATE GAME ICONS ---
                 # Check for local icons and update game objects
@@ -5062,12 +5066,13 @@ class Plugin:
                              return {'success': False, 'cancelled': True}
 
                         # Download in parallel - 30 concurrent
+                        logger.info(f"  → Starting parallel download (concurrency: 30, sources: Epic/GOG/Amazon CDN + Steam + SGDB fallback)")
                         semaphore = asyncio.Semaphore(30)
                         tasks = [self.fetch_artwork_with_progress(game, semaphore) for game in games_needing_art]
                         results = await asyncio.gather(*tasks, return_exceptions=True)
                         artwork_count = sum(1 for r in results if r is True)
                         
-                        logger.info(f"Downloaded artwork for {artwork_count} games")
+                        logger.info(f"Artwork download complete: {artwork_count}/{len(games_needing_art)} games successful")
 
                 # --- STEP 2: UPDATE GAME ICONS ---
                 # Check for local icons and update game objects
