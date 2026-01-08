@@ -3362,9 +3362,23 @@ class GOGAPIClient:
 
             logger.info(f"[GOG] Installing '{game_title}' to {install_path}")
 
-            # 5. Download installer
-            # 5. Download installer parts
+            # 5. Download installer parts with improved multi-part handling
             main_installer_path = None
+            
+            # Pre-calculate total size across all parts for accurate overall progress
+            total_bytes_all_parts = 0
+            part_sizes = []
+            for inst in installers_list:
+                size_str = inst.get('size', '0 MB')
+                size_bytes = self._parse_size_string(size_str)
+                part_sizes.append(size_bytes)
+                total_bytes_all_parts += size_bytes
+            
+            if total_bytes_all_parts > 0:
+                logger.info(f"[GOG] Total download size: {total_bytes_all_parts / (1024**3):.2f} GB across {len(installers_list)} parts")
+            
+            # Track cumulative downloaded bytes for weighted overall progress
+            cumulative_downloaded = 0
             
             for index, installer_data in enumerate(installers_list):
                 installer_url = installer_data.get('manualUrl') or installer_data.get('downloaderUrl')
@@ -3372,10 +3386,11 @@ class GOGAPIClient:
                     logger.warning(f"[GOG] Skipping installer part {index+1}: No URL found")
                     continue
 
-                # Get installer filename
+                # Get installer filename and expected size
                 default_filename = f'installer_part_{index}.{"sh" if installer_platform == "linux" else "exe"}'
                 installer_filename = installer_data.get('name', default_filename)
                 installer_path = os.path.join(install_path, installer_filename)
+                expected_size = part_sizes[index] if index < len(part_sizes) else 0
 
                 # Determine if this is the main installer (executable)
                 # Windows: .exe (not .bin)
@@ -3398,19 +3413,50 @@ class GOGAPIClient:
                 if is_main_part and not main_installer_path:
                     main_installer_path = installer_path
 
-                logger.info(f"[GOG] Downloading part {index+1}/{len(installers_list)}: {installer_filename}")
+                logger.info(f"[GOG] Downloading part {index+1}/{len(installers_list)}: {installer_filename} ({expected_size / (1024**2):.1f} MB)")
                 logger.info(f"[GOG] Download URL: {installer_url}")
                 
-                # Only use progress callback for the main part (usually the largest) to avoid confusing UI
-                # or split progress for each? For now, let's just use it for all but maybe we should weight it.
-                # Simple approach: pass callback for all, UI will jump around but show activity.
-                download_success = await self._download_file(installer_url, installer_path, progress_callback)
+                # Create a wrapper callback that calculates weighted overall progress
+                async def weighted_progress_callback(progress_data, part_idx=index, part_expected=expected_size):
+                    nonlocal cumulative_downloaded
+                    if progress_callback:
+                        # Calculate overall progress: completed parts + current part progress
+                        completed_bytes = sum(part_sizes[:part_idx])  # Bytes from completed parts
+                        current_part_bytes = progress_data.get('downloaded_bytes', 0)
+                        overall_downloaded = completed_bytes + current_part_bytes
+                        
+                        if total_bytes_all_parts > 0:
+                            overall_percent = (overall_downloaded / total_bytes_all_parts) * 100
+                        else:
+                            # Fallback: use per-part progress
+                            overall_percent = progress_data.get('progress_percent', 0)
+                        
+                        await progress_callback({
+                            'progress_percent': overall_percent,
+                            'downloaded_bytes': overall_downloaded,
+                            'total_bytes': total_bytes_all_parts,
+                            'speed_bps': progress_data.get('speed_bps', 0),
+                            'eta_seconds': progress_data.get('eta_seconds', 0),
+                            'current_part': part_idx + 1,
+                            'total_parts': len(installers_list)
+                        })
+                
+                # Download with expected size for skip/resume functionality
+                download_success = await self._download_file(
+                    installer_url, 
+                    installer_path, 
+                    weighted_progress_callback,
+                    expected_size=expected_size
+                )
 
                 if not download_success:
                     return {
                         'success': False,
-                        'error': f'Failed to download installer part: {installer_filename}'
+                        'error': f'Failed to download installer part {index+1}/{len(installers_list)}: {installer_filename}'
                     }
+                
+                # Update cumulative for next iteration
+                cumulative_downloaded += expected_size
 
             # Fallback: if still no main installer identified, use the first downloaded file
             if not main_installer_path and installers_list:
@@ -3702,92 +3748,204 @@ class GOGAPIClient:
 
 
 
-    async def _download_file(self, url: str, dest_path: str, progress_callback=None) -> bool:
-        """Download file from GOG with authentication"""
-        try:
-            import aiohttp
-            import ssl
+    async def _download_file(self, url: str, dest_path: str, progress_callback=None, expected_size: int = 0) -> bool:
+        """Download file from GOG with authentication - wrapper for backwards compatibility"""
+        return await self._download_file_with_resume(url, dest_path, expected_size, progress_callback)
 
-            # Create SSL context
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-
-            connector = aiohttp.TCPConnector(ssl=ssl_context)
-            # Disable total timeout for large downloads, but keep socket timeouts
-            timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=30)
-            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-                # Handle relative URLs from GOG API
-                if url.startswith('/'):
-                    url = f"https://www.gog.com{url}"
-                    logger.info(f"[GOG] Converted relative URL to: {url}")
-
-                # Add authentication if needed
-                # GOG download URLs may already include auth tokens in the URL
-                # but we'll include the bearer token just in case
+    async def _download_file_with_resume(
+        self, 
+        url: str, 
+        dest_path: str, 
+        expected_size: int = 0,
+        progress_callback=None,
+        max_retries: int = 5,
+        base_timeout: int = 120
+    ) -> bool:
+        """
+        Download file from GOG with authentication, retry, and resume support.
+        
+        Designed for large multi-part GOG installers (Cyberpunk, Witcher, etc.):
+        - Retry with exponential backoff (5 attempts: 2s, 4s, 8s, 16s, 32s delays)
+        - Resume partial downloads via HTTP Range header
+        - Skip already-downloaded files if size matches
+        - 120-second socket timeout for slow CDN servers
+        
+        Args:
+            url: Download URL (can be relative to gog.com)
+            dest_path: Local file path to save to
+            expected_size: Expected file size in bytes (0 = unknown, will use Content-Length)
+            progress_callback: Async function to report progress
+            max_retries: Maximum download attempts (default 5)
+            base_timeout: Socket read timeout in seconds (default 120)
+        
+        Returns:
+            True if download completed successfully, False otherwise
+        """
+        import aiohttp
+        import ssl
+        
+        # Handle relative URLs from GOG API
+        if url.startswith('/'):
+            url = f"https://www.gog.com{url}"
+            logger.info(f"[GOG] Converted relative URL to: {url}")
+        
+        # Check if file already exists with correct size (skip re-downloading)
+        if expected_size > 0 and os.path.exists(dest_path):
+            existing_size = os.path.getsize(dest_path)
+            if existing_size == expected_size:
+                logger.info(f"[GOG] Skipping already downloaded file: {os.path.basename(dest_path)} ({existing_size / (1024*1024):.1f} MB)")
+                # Report 100% progress for this file
+                if progress_callback:
+                    await progress_callback({
+                        'progress_percent': 100.0,
+                        'downloaded_bytes': existing_size,
+                        'total_bytes': existing_size,
+                        'speed_bps': 0,
+                        'eta_seconds': 0
+                    })
+                return True
+            elif existing_size > expected_size:
+                # File is larger than expected - corrupted, delete and re-download
+                logger.warning(f"[GOG] Existing file larger than expected ({existing_size} > {expected_size}), deleting and re-downloading")
+                os.remove(dest_path)
+        
+        # Create SSL context
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        
+        last_error = None
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                # Check for existing partial download to resume
+                resume_from = 0
+                if os.path.exists(dest_path):
+                    resume_from = os.path.getsize(dest_path)
+                    if resume_from > 0:
+                        logger.info(f"[GOG] Resuming download from byte {resume_from} ({resume_from / (1024*1024):.1f} MB)")
+                
+                # Build headers
                 headers = {}
                 if self.access_token and 'gog.com' in url:
                     headers['Authorization'] = f'Bearer {self.access_token}'
-
-                async with session.get(url, headers=headers) as response:
-                    if response.status != 200:
-                        logger.error(f"[GOG] Download failed: {response.status}")
-                        return False
-
-                    total_size = int(response.headers.get('content-length', 0))
-                    downloaded = 0
-
-                    with open(dest_path, 'wb') as f:
-                        last_logged_percent = -1  # Track last logged percentage
-                        last_callback_time = time.time()
-                        last_downloaded_for_speed = 0
-                        current_speed_bps = 0
+                
+                # Add Range header for resume
+                if resume_from > 0:
+                    headers['Range'] = f'bytes={resume_from}-'
+                
+                # Create session with longer timeout for large files
+                connector = aiohttp.TCPConnector(ssl=ssl_context)
+                timeout = aiohttp.ClientTimeout(total=None, sock_connect=60, sock_read=base_timeout)
+                
+                async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                    async with session.get(url, headers=headers) as response:
+                        # Handle response status
+                        if response.status == 200:
+                            # Full download (no resume or server doesn't support Range)
+                            if resume_from > 0:
+                                logger.info(f"[GOG] Server doesn't support resume, starting from beginning")
+                                resume_from = 0
+                            total_size = int(response.headers.get('content-length', 0))
+                            file_mode = 'wb'
+                        elif response.status == 206:
+                            # Partial content - resume successful
+                            content_range = response.headers.get('content-range', '')
+                            # Format: "bytes 12345-67890/12345678" 
+                            if '/' in content_range:
+                                total_size = int(content_range.split('/')[-1])
+                            else:
+                                total_size = resume_from + int(response.headers.get('content-length', 0))
+                            file_mode = 'ab'  # Append mode for resume
+                            logger.info(f"[GOG] Resume accepted, continuing from {resume_from / (1024*1024):.1f} MB")
+                        elif response.status == 416:
+                            # Range not satisfiable - file might be complete
+                            if expected_size > 0 and resume_from >= expected_size:
+                                logger.info(f"[GOG] File already complete: {os.path.basename(dest_path)}")
+                                return True
+                            # Otherwise, delete and restart
+                            logger.warning(f"[GOG] Range not satisfiable, restarting download")
+                            if os.path.exists(dest_path):
+                                os.remove(dest_path)
+                            resume_from = 0
+                            continue  # Retry from beginning
+                        else:
+                            logger.error(f"[GOG] Download failed with status {response.status}")
+                            last_error = f"HTTP {response.status}"
+                            raise aiohttp.ClientError(f"HTTP {response.status}")
                         
-                        async for chunk in response.content.iter_chunked(8192):
-                            f.write(chunk)
-                            downloaded += len(chunk)
-
-                            # Real-time progress logging and callback
-                            if total_size > 0:
-                                progress = (downloaded / total_size) * 100
+                        # Use expected_size if known, otherwise use Content-Length
+                        if expected_size > 0:
+                            total_size = expected_size
+                        
+                        downloaded = resume_from  # Start from resume point
+                        
+                        with open(dest_path, file_mode) as f:
+                            last_logged_percent = -1
+                            last_callback_time = time.time()
+                            last_downloaded_for_speed = downloaded
+                            current_speed_bps = 0
+                            
+                            async for chunk in response.content.iter_chunked(65536):  # 64KB chunks for speed
+                                f.write(chunk)
+                                downloaded += len(chunk)
                                 
-                                # Calculate speed
-                                now = time.time()
-                                elapsed = now - last_callback_time
-                                if elapsed >= 0.5:  # Update speed every 0.5 seconds
-                                    bytes_since_last = downloaded - last_downloaded_for_speed
-                                    current_speed_bps = bytes_since_last / elapsed
-                                    last_downloaded_for_speed = downloaded
-                                    last_callback_time = now
-
-                                # Log every 5% milestone
-                                current_percent = int(progress)
-                                if current_percent % 5 == 0 and current_percent != last_logged_percent:
-                                    mb_downloaded = downloaded / (1024 * 1024)
-                                    mb_total = total_size / (1024 * 1024)
-                                    logger.info(f"[GOG Download] {progress:.1f}% ({mb_downloaded:.1f} MB / {mb_total:.1f} MB)")
-                                    last_logged_percent = current_percent
-
-                                # Call progress callback with full stats
-                                if progress_callback:
-                                    remaining_bytes = total_size - downloaded
-                                    eta_seconds = int(remaining_bytes / current_speed_bps) if current_speed_bps > 0 else 0
+                                # Real-time progress logging and callback
+                                if total_size > 0:
+                                    progress = (downloaded / total_size) * 100
                                     
-                                    await progress_callback({
-                                        'progress_percent': progress,
-                                        'downloaded_bytes': downloaded,
-                                        'total_bytes': total_size,
-                                        'speed_bps': current_speed_bps,
-                                        'eta_seconds': eta_seconds
-                                    })
-
-                    mb_size = downloaded / (1024 * 1024)
-                    logger.info(f"[GOG] Download complete: {mb_size:.1f} MB downloaded to {dest_path}")
-                    return True
-
-        except Exception as e:
-            logger.error(f"[GOG] Error downloading file: {e}", exc_info=True)
-            return False
+                                    # Calculate speed
+                                    now = time.time()
+                                    elapsed = now - last_callback_time
+                                    if elapsed >= 0.5:
+                                        bytes_since_last = downloaded - last_downloaded_for_speed
+                                        current_speed_bps = bytes_since_last / elapsed
+                                        last_downloaded_for_speed = downloaded
+                                        last_callback_time = now
+                                    
+                                    # Log every 5% milestone
+                                    current_percent = int(progress)
+                                    if current_percent % 5 == 0 and current_percent != last_logged_percent:
+                                        mb_downloaded = downloaded / (1024 * 1024)
+                                        mb_total = total_size / (1024 * 1024)
+                                        logger.info(f"[GOG Download] {progress:.1f}% ({mb_downloaded:.1f} MB / {mb_total:.1f} MB)")
+                                        last_logged_percent = current_percent
+                                    
+                                    # Call progress callback with full stats
+                                    if progress_callback:
+                                        remaining_bytes = total_size - downloaded
+                                        eta_seconds = int(remaining_bytes / current_speed_bps) if current_speed_bps > 0 else 0
+                                        
+                                        await progress_callback({
+                                            'progress_percent': progress,
+                                            'downloaded_bytes': downloaded,
+                                            'total_bytes': total_size,
+                                            'speed_bps': current_speed_bps,
+                                            'eta_seconds': eta_seconds
+                                        })
+                        
+                        mb_size = downloaded / (1024 * 1024)
+                        logger.info(f"[GOG] Download complete: {mb_size:.1f} MB downloaded to {dest_path}")
+                        return True
+                        
+            except asyncio.CancelledError:
+                # Don't retry on cancellation
+                logger.info(f"[GOG] Download cancelled: {os.path.basename(dest_path)}")
+                raise
+                
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"[GOG] Download attempt {attempt}/{max_retries} failed: {e}")
+                
+                if attempt < max_retries:
+                    # Exponential backoff: 2, 4, 8, 16, 32 seconds
+                    delay = 2 ** attempt
+                    logger.info(f"[GOG] Retrying in {delay} seconds...")
+                    await asyncio.sleep(delay)
+        
+        # All retries exhausted
+        logger.error(f"[GOG] Download failed after {max_retries} attempts: {last_error}")
+        return False
 
     async def _run_post_install(self, install_path: str):
         """
