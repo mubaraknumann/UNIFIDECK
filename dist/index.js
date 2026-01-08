@@ -1,4 +1,4 @@
-const manifest = {"name":"Unifideck","version":"0.2.2","main":"dist/index.js","author":"numan","flags":["_root"],"api_version":2,"publish":{"tags":["library","games","epic","gog","multi-store"],"description":"Unified game library manager - Browse and install games from Steam, Epic Games, and GOG in one place","image":"https://raw.githubusercontent.com/numanmubarak-PE/unifideck/main/icon.png"}};
+const manifest = {"name":"Unifideck","version":"0.3.0","main":"dist/index.js","author":"numan","flags":["_root"],"api_version":2,"publish":{"tags":["library","games","epic","gog","multi-store"],"description":"Unified game library manager - Browse and install games from Steam, Epic Games, and GOG in one place","image":"https://raw.githubusercontent.com/numanmubarak-PE/unifideck/main/icon.png"}};
 const API_VERSION = 2;
 if (!manifest?.name) {
     throw new Error('[@decky/api]: Failed to find plugin manifest.');
@@ -970,8 +970,16 @@ async function cleanupStaleCollections() {
     const collectionStore = getCollectionStore();
     if (!collectionStore)
         return;
-    // Safety check: userCollections may not exist on all Steam versions
-    const userCollections = collectionStore.userCollections;
+    // Safety check: userCollections may not exist or may throw if Steam isn't fully initialized
+    // The getter internally calls .values() on a Map which can be undefined during early init
+    let userCollections = null;
+    try {
+        userCollections = collectionStore.userCollections;
+    }
+    catch (e) {
+        console.log('[Unifideck Collections] Error accessing userCollections, skipping cleanup:', e);
+        return;
+    }
     if (!userCollections || !Array.isArray(userCollections)) {
         console.log('[Unifideck Collections] userCollections not available, skipping cleanup');
         return;
@@ -2476,9 +2484,6 @@ const Content = () => {
 };
 var index = definePlugin(() => {
     console.log("[Unifideck] Plugin loaded");
-    // Note: Collection spoofing (app_type modification) was attempted but Steam's
-    // GetCollection property is NOT configurable. We now rely on Collections + custom tabs.
-    console.log("[Unifideck] Using Collections-based approach (spoofing not available)");
     // Patch the library to add Unifideck tabs (All, Installed, Great on Deck, Steam, Epic, GOG)
     // This uses TabMaster's approach: intercept useMemo hook to inject custom tabs
     const libraryPatch = patchLibrary();
@@ -2488,16 +2493,8 @@ var index = definePlugin(() => {
     const patchGameDetails = patchGameDetailsRoute();
     console.log("[Unifideck] ✓ All route patches registered (including game details)");
     // Sync Unifideck Collections on load (with delay to ensure Steam is ready)
-    setTimeout(async () => {
-        console.log("[Unifideck] Triggering initial collection sync...");
-        try {
-            await syncUnifideckCollections();
-            console.log("[Unifideck] ✓ Initial collection sync complete");
-        }
-        catch (err) {
-            console.error("[Unifideck] Initial collection sync failed:", err);
-        }
-    }, 5000); // 5 second delay to ensure Steam is fully loaded
+    // Automatic collection sync on load removed to prevent crashes
+    // Users can manually sync collections from the plugin settings if needed
     // Inject CSS AFTER patches with delay to ensure patches are active
     setTimeout(() => {
         console.log("[Unifideck] Hiding original tabs with CSS");

@@ -66,6 +66,9 @@ class DownloadItem:
     start_time: Optional[float] = None
     end_time: Optional[float] = None
     storage_location: str = StorageLocation.INTERNAL
+    # GUARDRAIL: Track if game was previously installed before this download started.
+    # If True, we NEVER delete the directory on cancel - the game was already complete.
+    was_previously_installed: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -257,9 +260,18 @@ class DownloadQueue:
         game_id: str,
         game_title: str,
         store: str,
-        storage_location: Optional[str] = None
+        storage_location: Optional[str] = None,
+        was_previously_installed: bool = False
     ) -> Dict[str, Any]:
-        """Add a game to the download queue"""
+        """Add a game to the download queue
+        
+        Args:
+            game_id: Store-specific game identifier
+            game_title: Display name of the game
+            store: 'epic' or 'gog'
+            storage_location: Where to install (internal/sdcard)
+            was_previously_installed: GUARDRAIL - if True, cancel will NOT delete game files
+        """
         download_id = f"{store}:{game_id}"
         
         # Check if already in queue
@@ -268,14 +280,18 @@ class DownloadQueue:
                 logger.warning(f"[DownloadQueue] {download_id} already in queue")
                 return {'success': False, 'error': 'Already in queue'}
         
-        # Create new download item
+        # Create new download item with installation guardrail
         item = DownloadItem(
             id=download_id,
             game_id=game_id,
             game_title=game_title,
             store=store,
-            storage_location=storage_location or self.get_default_storage()
+            storage_location=storage_location or self.get_default_storage(),
+            was_previously_installed=was_previously_installed
         )
+        
+        if was_previously_installed:
+            logger.info(f"[DownloadQueue] GUARDRAIL: {game_title} marked as previously installed - will NOT delete on cancel")
         
         self.queue.append(item)
         self._save()
@@ -335,21 +351,43 @@ class DownloadQueue:
             except Exception as e:
                 logger.error(f"[DownloadQueue] Error terminating process: {e}")
         
-        # Clean up downloaded files
-        try:
-            import shutil
-            install_path = self.get_install_path(current.storage_location)
-            
-            # Sanitize game title to match the folder name created during download
-            safe_title = "".join(c for c in current.game_title if c.isalnum() or c in (' ', '-', '_')).strip()
-            game_dir = os.path.join(install_path, safe_title)
-            
-            if os.path.exists(game_dir) and os.path.isdir(game_dir):
-                logger.info(f"[DownloadQueue] Cleaning up cancelled download: {game_dir}")
-                shutil.rmtree(game_dir, ignore_errors=True)
-                logger.info(f"[DownloadQueue] Deleted partial download directory: {game_dir}")
-        except Exception as e:
-            logger.error(f"[DownloadQueue] Error cleaning up cancelled download: {e}")
+        # Clean up downloaded files - ONLY if this was NOT a reinstall of existing game
+        # GUARDRAIL: Never delete directories for games that were previously installed
+        if current.was_previously_installed:
+            logger.info(f"[DownloadQueue] Skipping cleanup - game was previously installed: {current.game_title}")
+        else:
+            try:
+                import shutil
+                install_path = self.get_install_path(current.storage_location)
+                
+                # Sanitize game title to match the folder name created during download
+                safe_title = "".join(c for c in current.game_title if c.isalnum() or c in (' ', '-', '_')).strip()
+                game_dir = os.path.join(install_path, safe_title)
+                
+                # ADDITIONAL GUARDRAIL: Only delete if path looks like a game install dir
+                # and contains expected partial download indicators
+                is_safe_path = (
+                    os.path.exists(game_dir) and 
+                    os.path.isdir(game_dir) and
+                    '/Games/' in game_dir and
+                    game_dir not in ['/', '/home/deck', '/home/deck/Games']
+                )
+                
+                # Check if this is actually a partial download (no .unifideck-id marker means unfinished)
+                # Completed installs should have a marker file from mark_installed
+                marker_file = os.path.join(game_dir, '.unifideck-id')
+                is_partial_download = not os.path.exists(marker_file)
+                
+                if is_safe_path and is_partial_download:
+                    logger.info(f"[DownloadQueue] Cleaning up cancelled PARTIAL download: {game_dir}")
+                    shutil.rmtree(game_dir, ignore_errors=True)
+                    logger.info(f"[DownloadQueue] Deleted partial download directory: {game_dir}")
+                elif not is_partial_download:
+                    logger.warning(f"[DownloadQueue] NOT deleting - found .unifideck-id marker (completed install): {game_dir}")
+                else:
+                    logger.warning(f"[DownloadQueue] NOT deleting - failed safety checks: {game_dir}")
+            except Exception as e:
+                logger.error(f"[DownloadQueue] Error cleaning up cancelled download: {e}")
         
         # Just set status - let _process_queue handle queue management to avoid race condition
         current.status = DownloadStatus.CANCELLED

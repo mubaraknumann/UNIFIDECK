@@ -1757,15 +1757,8 @@ export default definePlugin(() => {
   console.log("[Unifideck] ✓ All route patches registered (including game details)");
 
   // Sync Unifideck Collections on load (with delay to ensure Steam is ready)
-  setTimeout(async () => {
-    console.log("[Unifideck] Triggering initial collection sync...");
-    try {
-      await syncUnifideckCollections();
-      console.log("[Unifideck] ✓ Initial collection sync complete");
-    } catch (err) {
-      console.error("[Unifideck] Initial collection sync failed:", err);
-    }
-  }, 5000); // 5 second delay to ensure Steam is fully loaded
+  // Automatic collection sync on load removed to prevent crashes
+  // Users can manually sync collections from the plugin settings if needed
 
   // Inject CSS AFTER patches with delay to ensure patches are active
   setTimeout(() => {
