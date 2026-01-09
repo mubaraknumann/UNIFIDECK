@@ -164,6 +164,41 @@ class CDPOAuthMonitor:
             logger.error(f"[CDP] Error closing page: {e}")
             return False
 
+    async def refresh_page_by_url(self, url_pattern: str):
+        """Refresh/reload a browser page matching URL pattern via CDP"""
+        import urllib.request
+
+        try:
+            # Get current CEF pages
+            with urllib.request.urlopen(self.cef_url, timeout=2) as response:
+                pages = json.loads(response.read().decode())
+
+            # Find page matching URL pattern
+            for page in pages:
+                if url_pattern in page.get('url', ''):
+                    ws_url = page.get('webSocketDebuggerUrl')
+
+                    if ws_url:
+                        logger.info(f"[CDP] Refreshing page via CDP: {page.get('url', '')[:80]}...")
+
+                        import websockets
+
+                        async with websockets.connect(ws_url, ping_interval=None) as websocket:
+                            await websocket.send(json.dumps({
+                                'id': 1,
+                                'method': 'Page.reload',
+                                'params': {'ignoreCache': True}
+                            }))
+                            logger.info(f"[CDP] ✓ Page refresh command sent")
+                            return True
+
+            logger.warning(f"[CDP] No page found matching: {url_pattern}")
+            return False
+
+        except Exception as e:
+            logger.error(f"[CDP] Error refreshing page: {e}")
+            return False
+
     async def clear_cookies_for_domain(self, domain: str):
         """Clear browser cookies for specific domain via CDP"""
         import urllib.request
@@ -1902,9 +1937,9 @@ class EpicConnector:
                 result = await self.complete_auth(code)
                 if result['success']:
                     logger.info("[EPIC] ✓ Authentication completed automatically!")
-
-                    # Close the auth popup window
-                    await monitor.close_page_by_url('epicgames.com')
+                    # DON'T force-close the auth page - this disrupts Steam's browser state
+                    # and can cause other auth popups to hang. User can close manually.
+                    # await monitor.close_page_by_url('epicgames.com')
 
                     # Auto-sync library after successful auth
                     if self.plugin_instance:
@@ -2913,9 +2948,9 @@ class GOGAPIClient:
                 result = await self.complete_auth(code)
                 if result['success']:
                     logger.info("[GOG] ✓ Authentication completed automatically!")
-
-                    # Close the auth popup window
-                    await monitor.close_page_by_url('gog.com')
+                    # DON'T force-close the auth page - this disrupts Steam's browser state
+                    # and can cause other auth popups to hang. User can close manually.
+                    # await monitor.close_page_by_url('gog.com')
 
                     # Auto-sync library after successful auth
                     if self.plugin_instance:
@@ -3492,8 +3527,13 @@ class GOGAPIClient:
 
             if not extract_success:
                 logger.warning(f"[GOG] Installer extraction failed, keeping installer files at {install_path}")
+                return {
+                    'success': False,
+                    'error': 'Extraction failed - game installer could not be extracted. Try downloading again.',
+                    'install_path': install_path
+                }
 
-            # 7. Find game executable
+            # 7. Find game executable (only if extraction succeeded)
             game_exe = self._find_game_executable(install_path)
             if game_exe:
                 logger.info(f"[GOG] Found game executable: {game_exe}")
@@ -3515,9 +3555,7 @@ class GOGAPIClient:
                 }
             else:
                 logger.warning(f"[GOG] No executable found in {install_path}")
-                # Even if no executable is found, we consider the installation successful
-                # if the extraction completed, as the user might manually configure it.
-                # Write marker file anyway to indicate installation attempt.
+                # Extraction succeeded but no executable found - still mark as success so user can configure manually
                 try:
                     with open(os.path.join(install_path, '.unifideck-id'), 'w') as f:
                         f.write(str(game_id))
@@ -3869,6 +3907,18 @@ class GOGAPIClient:
                                 os.remove(dest_path)
                             resume_from = 0
                             continue  # Retry from beginning
+                        elif response.status == 401:
+                            # Token expired - refresh and retry
+                            logger.warning(f"[GOG] Token expired (401), refreshing...")
+                            if await self._refresh_access_token():
+                                logger.info(f"[GOG] Token refreshed successfully, retrying download")
+                                last_error = "Token refreshed, retrying"
+                                # Don't count this as a failed attempt - just continue to retry
+                                continue
+                            else:
+                                logger.error(f"[GOG] Failed to refresh token")
+                                last_error = "Token refresh failed"
+                                raise aiohttp.ClientError("Token refresh failed")
                         else:
                             logger.error(f"[GOG] Download failed with status {response.status}")
                             last_error = f"HTTP {response.status}"
@@ -4068,14 +4118,72 @@ class GOGAPIClient:
 
         GOG Linux installers are Makeself archives containing MojoSetup.
         We use the MojoSetup silent install command to extract game files.
+        
+        Exit code 127 = "command not found" - typically means PATH is wrong
+        or required binaries (tar, gzip, etc.) aren't accessible.
         """
         extraction_succeeded = False
+        
+        # Set up a clean, complete environment for the installer
+        # Makeself archives need: bash, tar, gzip, dd, head, tail, cut, etc.
+        env = os.environ.copy()
+        
+        # Get plugin directory for bundled tools
+        plugin_dir = os.path.dirname(__file__)
+        busybox_tools = os.path.join(plugin_dir, 'bin', 'busybox-tools')
+        
+        # Ensure complete PATH with bundled tools first, then standard locations
+        # This guarantees extraction works even if system tools are missing/broken
+        if os.path.exists(busybox_tools):
+            env['PATH'] = f"{busybox_tools}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            logger.info(f"[GOG] Using bundled BusyBox tools from: {busybox_tools}")
+        else:
+            env['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+            logger.warning(f"[GOG] Bundled BusyBox tools not found, using system PATH only")
+        
+        # Set HOME - required by some installers for temp files
+        env['HOME'] = os.path.expanduser('~')
+        
+        # Set TERM to avoid ncurses issues
+        env['TERM'] = 'xterm'
+        
+        # Disable any GUI attempts by MojoSetup
+        env['DISPLAY'] = ''
+        env['WAYLAND_DISPLAY'] = ''
+        
+        # Set locale to avoid encoding issues
+        env['LANG'] = 'C.UTF-8'
+        env['LC_ALL'] = 'C.UTF-8'
+        
+        # Clear LD_PRELOAD which can interfere (Steam overlay)
+        env.pop('LD_PRELOAD', None)
+        env.pop('LD_LIBRARY_PATH', None)
+        
+        # Verify required binaries exist
+        required_bins = ['bash', 'tar', 'gzip', 'dd', 'head', 'tail', 'cut', 'wc', 'sed']
+        missing_bins = []
+        for bin_name in required_bins:
+            found = False
+            for path_dir in env['PATH'].split(':'):
+                if os.path.exists(os.path.join(path_dir, bin_name)):
+                    found = True
+                    break
+            if not found:
+                missing_bins.append(bin_name)
+        
+        if missing_bins:
+            logger.warning(f"[GOG] Missing binaries in PATH: {missing_bins}")
+        else:
+            logger.info(f"[GOG] All required binaries found in PATH")
+        
+        logger.info(f"[GOG] Extraction environment: PATH={env['PATH']}, HOME={env['HOME']}")
         
         try:
             # Method 1: MojoSetup silent install (the correct way for GOG installers)
             # GOG installers = Makeself + MojoSetup. The '-- ' passes args to MojoSetup.
             logger.info(f"[GOG] Running MojoSetup silent install")
             proc = await asyncio.create_subprocess_exec(
+                '/bin/bash',
                 installer_path,
                 '--',  # Pass following args to embedded script (MojoSetup)
                 '--i-agree-to-all-licenses',
@@ -4085,7 +4193,8 @@ class GOGAPIClient:
                 '--destination', install_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=install_path
+                cwd=install_path,
+                env=env
             )
             stdout, stderr = await proc.communicate()
             if proc.returncode == 0:
@@ -4093,16 +4202,65 @@ class GOGAPIClient:
                 extraction_succeeded = True
             else:
                 logger.warning(f"[GOG] MojoSetup silent install failed (code {proc.returncode})")
+                if stdout:
+                    logger.info(f"[GOG] stdout: {stdout.decode(errors='replace')[:1000]}")
                 if stderr:
-                    logger.debug(f"[GOG] stderr: {stderr.decode()[:500]}")
+                    logger.info(f"[GOG] stderr: {stderr.decode(errors='replace')[:1000]}")
 
-            # Method 2: Try unzip (fallback for non-MojoSetup archives)
+            # Method 2: Try Makeself extraction without running installer
+            # GOG Linux installers are Makeself archives. --noexec prevents running the installer,
+            # --target extracts to specified directory. This works when MojoSetup fails.
+            if not extraction_succeeded:
+                logger.info(f"[GOG] Trying Makeself --noexec --target extraction")
+                proc = await asyncio.create_subprocess_exec(
+                    '/bin/bash',
+                    installer_path,
+                    '--noexec',
+                    '--target', install_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=install_path,
+                    env=env
+                )
+                stdout, stderr = await proc.communicate()
+                if proc.returncode == 0:
+                    logger.info(f"[GOG] Makeself extraction successful")
+                    extraction_succeeded = True
+                else:
+                    logger.warning(f"[GOG] Makeself extraction failed (code {proc.returncode})")
+                    if stdout:
+                        logger.info(f"[GOG] stdout: {stdout.decode(errors='replace')[:1000]}")
+                    if stderr:
+                        logger.info(f"[GOG] stderr: {stderr.decode(errors='replace')[:1000]}")
+
+            # Method 3: Try Makeself --keep to just extract archive in place
+            if not extraction_succeeded:
+                logger.info(f"[GOG] Trying Makeself --keep extraction")
+                proc = await asyncio.create_subprocess_exec(
+                    '/bin/bash',
+                    installer_path,
+                    '--keep',
+                    '--noexec',
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=install_path,
+                    env=env
+                )
+                stdout, stderr = await proc.communicate()
+                if proc.returncode == 0:
+                    logger.info(f"[GOG] Makeself --keep extraction successful")
+                    extraction_succeeded = True
+                else:
+                    logger.warning(f"[GOG] Makeself --keep extraction failed (code {proc.returncode})")
+
+            # Method 4: Try unzip (fallback for non-MojoSetup archives, e.g. some very old GOG games)
             if not extraction_succeeded:
                 logger.info(f"[GOG] Trying unzip extraction")
                 proc = await asyncio.create_subprocess_exec(
                     'unzip', '-o', installer_path, '-d', install_path,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env
                 )
                 await proc.communicate()
                 if proc.returncode == 0:
