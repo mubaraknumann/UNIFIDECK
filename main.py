@@ -4118,13 +4118,69 @@ class GOGAPIClient:
 
         GOG Linux installers are Makeself archives containing MojoSetup.
         We use the MojoSetup silent install command to extract game files.
+        
+        Exit code 127 = "command not found" - typically means PATH is wrong
+        or required binaries (tar, gzip, etc.) aren't accessible.
         """
         extraction_succeeded = False
+        
+        # Set up a clean, complete environment for the installer
+        # Makeself archives need: bash, tar, gzip, dd, head, tail, cut, etc.
+        env = os.environ.copy()
+        
+        # Get plugin directory for bundled tools
+        plugin_dir = os.path.dirname(__file__)
+        busybox_tools = os.path.join(plugin_dir, 'bin', 'busybox-tools')
+        
+        # Ensure complete PATH with bundled tools first, then standard locations
+        # This guarantees extraction works even if system tools are missing/broken
+        if os.path.exists(busybox_tools):
+            env['PATH'] = f"{busybox_tools}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            logger.info(f"[GOG] Using bundled BusyBox tools from: {busybox_tools}")
+        else:
+            env['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+            logger.warning(f"[GOG] Bundled BusyBox tools not found, using system PATH only")
+        
+        # Set HOME - required by some installers for temp files
+        env['HOME'] = os.path.expanduser('~')
+        
+        # Set TERM to avoid ncurses issues
+        env['TERM'] = 'xterm'
+        
+        # Disable any GUI attempts by MojoSetup
+        env['DISPLAY'] = ''
+        env['WAYLAND_DISPLAY'] = ''
+        
+        # Set locale to avoid encoding issues
+        env['LANG'] = 'C.UTF-8'
+        env['LC_ALL'] = 'C.UTF-8'
+        
+        # Clear LD_PRELOAD which can interfere (Steam overlay)
+        env.pop('LD_PRELOAD', None)
+        env.pop('LD_LIBRARY_PATH', None)
+        
+        # Verify required binaries exist
+        required_bins = ['bash', 'tar', 'gzip', 'dd', 'head', 'tail', 'cut', 'wc', 'sed']
+        missing_bins = []
+        for bin_name in required_bins:
+            found = False
+            for path_dir in env['PATH'].split(':'):
+                if os.path.exists(os.path.join(path_dir, bin_name)):
+                    found = True
+                    break
+            if not found:
+                missing_bins.append(bin_name)
+        
+        if missing_bins:
+            logger.warning(f"[GOG] Missing binaries in PATH: {missing_bins}")
+        else:
+            logger.info(f"[GOG] All required binaries found in PATH")
+        
+        logger.info(f"[GOG] Extraction environment: PATH={env['PATH']}, HOME={env['HOME']}")
         
         try:
             # Method 1: MojoSetup silent install (the correct way for GOG installers)
             # GOG installers = Makeself + MojoSetup. The '-- ' passes args to MojoSetup.
-            # Run through /bin/bash explicitly to avoid "command not found" (exit 127) errors
             logger.info(f"[GOG] Running MojoSetup silent install")
             proc = await asyncio.create_subprocess_exec(
                 '/bin/bash',
@@ -4137,7 +4193,8 @@ class GOGAPIClient:
                 '--destination', install_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=install_path
+                cwd=install_path,
+                env=env
             )
             stdout, stderr = await proc.communicate()
             if proc.returncode == 0:
@@ -4146,9 +4203,9 @@ class GOGAPIClient:
             else:
                 logger.warning(f"[GOG] MojoSetup silent install failed (code {proc.returncode})")
                 if stdout:
-                    logger.debug(f"[GOG] stdout: {stdout.decode()[:500]}")
+                    logger.info(f"[GOG] stdout: {stdout.decode(errors='replace')[:1000]}")
                 if stderr:
-                    logger.debug(f"[GOG] stderr: {stderr.decode()[:500]}")
+                    logger.info(f"[GOG] stderr: {stderr.decode(errors='replace')[:1000]}")
 
             # Method 2: Try Makeself extraction without running installer
             # GOG Linux installers are Makeself archives. --noexec prevents running the installer,
@@ -4162,7 +4219,8 @@ class GOGAPIClient:
                     '--target', install_path,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    cwd=install_path
+                    cwd=install_path,
+                    env=env
                 )
                 stdout, stderr = await proc.communicate()
                 if proc.returncode == 0:
@@ -4170,16 +4228,39 @@ class GOGAPIClient:
                     extraction_succeeded = True
                 else:
                     logger.warning(f"[GOG] Makeself extraction failed (code {proc.returncode})")
+                    if stdout:
+                        logger.info(f"[GOG] stdout: {stdout.decode(errors='replace')[:1000]}")
                     if stderr:
-                        logger.debug(f"[GOG] stderr: {stderr.decode()[:500]}")
+                        logger.info(f"[GOG] stderr: {stderr.decode(errors='replace')[:1000]}")
 
-            # Method 3: Try unzip (fallback for non-MojoSetup archives, e.g. some very old GOG games)
+            # Method 3: Try Makeself --keep to just extract archive in place
+            if not extraction_succeeded:
+                logger.info(f"[GOG] Trying Makeself --keep extraction")
+                proc = await asyncio.create_subprocess_exec(
+                    '/bin/bash',
+                    installer_path,
+                    '--keep',
+                    '--noexec',
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=install_path,
+                    env=env
+                )
+                stdout, stderr = await proc.communicate()
+                if proc.returncode == 0:
+                    logger.info(f"[GOG] Makeself --keep extraction successful")
+                    extraction_succeeded = True
+                else:
+                    logger.warning(f"[GOG] Makeself --keep extraction failed (code {proc.returncode})")
+
+            # Method 4: Try unzip (fallback for non-MojoSetup archives, e.g. some very old GOG games)
             if not extraction_succeeded:
                 logger.info(f"[GOG] Trying unzip extraction")
                 proc = await asyncio.create_subprocess_exec(
                     'unzip', '-o', installer_path, '-d', install_path,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env
                 )
                 await proc.communicate()
                 if proc.returncode == 0:
