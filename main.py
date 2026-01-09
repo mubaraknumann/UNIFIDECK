@@ -3492,8 +3492,13 @@ class GOGAPIClient:
 
             if not extract_success:
                 logger.warning(f"[GOG] Installer extraction failed, keeping installer files at {install_path}")
+                return {
+                    'success': False,
+                    'error': 'Extraction failed - game installer could not be extracted. Try downloading again.',
+                    'install_path': install_path
+                }
 
-            # 7. Find game executable
+            # 7. Find game executable (only if extraction succeeded)
             game_exe = self._find_game_executable(install_path)
             if game_exe:
                 logger.info(f"[GOG] Found game executable: {game_exe}")
@@ -3515,9 +3520,7 @@ class GOGAPIClient:
                 }
             else:
                 logger.warning(f"[GOG] No executable found in {install_path}")
-                # Even if no executable is found, we consider the installation successful
-                # if the extraction completed, as the user might manually configure it.
-                # Write marker file anyway to indicate installation attempt.
+                # Extraction succeeded but no executable found - still mark as success so user can configure manually
                 try:
                     with open(os.path.join(install_path, '.unifideck-id'), 'w') as f:
                         f.write(str(game_id))
@@ -4112,7 +4115,30 @@ class GOGAPIClient:
                 if stderr:
                     logger.debug(f"[GOG] stderr: {stderr.decode()[:500]}")
 
-            # Method 2: Try unzip (fallback for non-MojoSetup archives)
+            # Method 2: Try Makeself extraction without running installer
+            # GOG Linux installers are Makeself archives. --noexec prevents running the installer,
+            # --target extracts to specified directory. This works when MojoSetup fails.
+            if not extraction_succeeded:
+                logger.info(f"[GOG] Trying Makeself --noexec --target extraction")
+                proc = await asyncio.create_subprocess_exec(
+                    '/bin/bash',
+                    installer_path,
+                    '--noexec',
+                    '--target', install_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=install_path
+                )
+                stdout, stderr = await proc.communicate()
+                if proc.returncode == 0:
+                    logger.info(f"[GOG] Makeself extraction successful")
+                    extraction_succeeded = True
+                else:
+                    logger.warning(f"[GOG] Makeself extraction failed (code {proc.returncode})")
+                    if stderr:
+                        logger.debug(f"[GOG] stderr: {stderr.decode()[:500]}")
+
+            # Method 3: Try unzip (fallback for non-MojoSetup archives, e.g. some very old GOG games)
             if not extraction_succeeded:
                 logger.info(f"[GOG] Trying unzip extraction")
                 proc = await asyncio.create_subprocess_exec(
