@@ -962,6 +962,164 @@ class ShortcutsManager:
         
         return {'removed': removed, 'kept': kept, 'entries_removed': entries_removed}
 
+    async def reconcile_games_map_from_installed(self, epic_client=None, gog_client=None, amazon_client=None) -> Dict[str, Any]:
+        """
+        Repair games.map for Unifideck shortcuts that are missing entries.
+        
+        This ONLY processes shortcuts that Unifideck created (LaunchOptions = store:game_id).
+        It does NOT touch Heroic, Lutris, or other tool shortcuts.
+        
+        For each Unifideck shortcut missing from games.map:
+        1. Check if game is installed via store API
+        2. If yes, get install path and add to games.map
+        
+        Called during Force Sync to repair existing installations.
+        
+        Args:
+            epic_client: EpicConnector instance for getting Epic install info
+            gog_client: GOGAPIClient instance for getting GOG install info
+            amazon_client: AmazonGamesClient instance for getting Amazon install info
+            
+        Returns:
+            dict: {'added': int, 'already_mapped': int, 'skipped': int, 'errors': list}
+        """
+        added = 0
+        already_mapped = 0
+        skipped = 0
+        errors = []
+        
+        logger.info("[ReconcileMap] Starting games.map reconciliation for Unifideck shortcuts")
+        
+        try:
+            # Load current games.map entries
+            map_file = os.path.expanduser("~/.local/share/unifideck/games.map")
+            existing_entries = set()
+            
+            if os.path.exists(map_file):
+                with open(map_file, 'r') as f:
+                    for line in f:
+                        parts = line.strip().split('|')
+                        if parts:
+                            existing_entries.add(parts[0])  # store:game_id
+            
+            # Load shortcuts and find Unifideck shortcuts missing from games.map
+            shortcuts_data = await self.read_shortcuts()
+            shortcuts = shortcuts_data.get('shortcuts', {})
+            
+            # Pre-fetch installed games from stores (for efficiency)
+            epic_installed = {}
+            gog_installed = {}
+            amazon_installed = {}
+            
+            if epic_client and epic_client.legendary_bin:
+                try:
+                    epic_installed = await epic_client.get_installed()
+                except Exception as e:
+                    errors.append(f"Epic fetch: {e}")
+            
+            if gog_client:
+                try:
+                    gog_list = await gog_client.get_installed()
+                    # GOG returns list of IDs, convert to dict with info
+                    for gid in gog_list:
+                        info = gog_client.get_installed_game_info(gid)
+                        if info:
+                            gog_installed[gid] = info
+                except Exception as e:
+                    errors.append(f"GOG fetch: {e}")
+            
+            if amazon_client:
+                try:
+                    amazon_installed = await amazon_client.get_installed()
+                except Exception as e:
+                    errors.append(f"Amazon fetch: {e}")
+            
+            # Iterate over shortcuts and find Unifideck ones missing from games.map
+            for idx, shortcut in shortcuts.items():
+                launch_options = shortcut.get('LaunchOptions', '')
+                
+                # Check if this is a Unifideck shortcut (store:game_id format)
+                # Skip if it's a Heroic/Lutris/other shortcut
+                if ':' not in launch_options:
+                    continue
+                
+                parts = launch_options.split(':', 1)
+                store = parts[0]
+                game_id = parts[1] if len(parts) > 1 else ''
+                
+                # Only process known stores
+                if store not in ('epic', 'gog', 'amazon'):
+                    continue
+                
+                key = f"{store}:{game_id}"
+                
+                # Check if already in games.map
+                if key in existing_entries:
+                    already_mapped += 1
+                    continue
+                
+                # Not in games.map - check if installed and get path
+                game_title = shortcut.get('AppName', game_id)
+                
+                try:
+                    if store == 'epic' and game_id in epic_installed:
+                        game_data = epic_installed[game_id]
+                        install_info = game_data.get('install', {})
+                        install_path = install_info.get('install_path', '')
+                        executable = game_data.get('manifest', {}).get('launch_exe', '')
+                        
+                        if install_path and os.path.exists(install_path):
+                            exe_path = os.path.join(install_path, executable) if executable else ''
+                            await self._update_game_map('epic', game_id, exe_path, install_path)
+                            added += 1
+                            logger.info(f"[ReconcileMap] Added Epic '{game_title}' to games.map")
+                        else:
+                            skipped += 1
+                            logger.debug(f"[ReconcileMap] Epic '{game_title}' not installed or path missing")
+                    
+                    elif store == 'gog' and game_id in gog_installed:
+                        game_info = gog_installed[game_id]
+                        install_path = game_info.get('install_path', '')
+                        exe_path = game_info.get('executable', '')
+                        
+                        if install_path and os.path.exists(install_path):
+                            await self._update_game_map('gog', game_id, exe_path or '', install_path)
+                            added += 1
+                            logger.info(f"[ReconcileMap] Added GOG '{game_title}' to games.map")
+                        else:
+                            skipped += 1
+                            logger.debug(f"[ReconcileMap] GOG '{game_title}' not installed or path missing")
+                    
+                    elif store == 'amazon' and game_id in amazon_installed:
+                        game_data = amazon_installed[game_id]
+                        install_path = game_data.get('path', '')
+                        executable = game_data.get('executable', '')
+                        
+                        if install_path and os.path.exists(install_path):
+                            await self._update_game_map('amazon', game_id, executable or '', install_path)
+                            added += 1
+                            logger.info(f"[ReconcileMap] Added Amazon '{game_title}' to games.map")
+                        else:
+                            skipped += 1
+                            logger.debug(f"[ReconcileMap] Amazon '{game_title}' not installed or path missing")
+                    else:
+                        skipped += 1
+                        
+                except Exception as e:
+                    errors.append(f"{game_title}: {e}")
+                    logger.error(f"[ReconcileMap] Error processing {game_title}: {e}")
+            
+            if added > 0:
+                logger.info(f"[ReconcileMap] Added {added} missing entries to games.map")
+            else:
+                logger.debug(f"[ReconcileMap] No missing entries ({already_mapped} already mapped, {skipped} skipped)")
+                
+        except Exception as e:
+            logger.error(f"[ReconcileMap] Error: {e}")
+            errors.append(str(e))
+        
+        return {'added': added, 'already_mapped': already_mapped, 'skipped': skipped, 'errors': errors}
+
     def validate_gog_exe_paths(self, gog_client=None) -> Dict[str, Any]:
         """
         Validate and auto-correct GOG executable paths that point to installers.
@@ -5073,6 +5231,14 @@ class Plugin:
 
         logger.info("[INIT] Initializing AmazonConnector")
         self.amazon = AmazonConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
+
+        # Repair games.map for Unifideck shortcuts missing entries (fixes "Game location not mapped" errors)
+        logger.info("[INIT] Reconciling games.map from installed games")
+        map_reconcile = await self.shortcuts_manager.reconcile_games_map_from_installed(
+            epic_client=self.epic, gog_client=self.gog, amazon_client=self.amazon
+        )
+        if map_reconcile.get('added', 0) > 0:
+            logger.info(f"[INIT] Added {map_reconcile['added']} missing entries to games.map")
 
         logger.info("[INIT] Initializing InstallHandler")
         self.install_handler = InstallHandler(self.shortcuts_manager, plugin_dir=DECKY_PLUGIN_DIR)
