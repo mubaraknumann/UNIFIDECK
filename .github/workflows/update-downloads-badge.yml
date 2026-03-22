@@ -1,0 +1,73 @@
+name: Update Downloads Badge
+
+on:
+  schedule:
+    # Run daily at 00:00 UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch: # Allow manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  update-badge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch cumulative downloads
+        id: downloads
+        run: |
+          TOTAL=$(curl -s https://api.github.com/repos/mubaraknumann/unifideck/releases | jq '[.[] | .assets[] | .download_count] | add')
+          # Convert to human-readable format (e.g., 38225 -> 38K+)
+          if [ "$TOTAL" -ge 1000000 ]; then
+            FORMATTED=$((TOTAL / 1000000))M+
+          elif [ "$TOTAL" -ge 1000 ]; then
+            FORMATTED=$((TOTAL / 1000))K+
+          else
+            FORMATTED=$TOTAL
+          fi
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          echo "formatted=$FORMATTED" >> $GITHUB_OUTPUT
+
+      - name: Update README badge
+        env:
+          FORMATTED: ${{ steps.downloads.outputs.formatted }}
+        run: |
+          python3 << 'EOF'
+          import re
+          import os
+          
+          formatted = os.environ['FORMATTED']
+          
+          with open('README.md', 'r') as f:
+              content = f.read()
+          
+          # Replace downloads badge
+          new_content = re.sub(
+              r'!\[Downloads\]\(https:\/\/img\.shields\.io\/badge\/downloads-.*?-brightgreen\.svg\)',
+              f'![Downloads](https://img.shields.io/badge/downloads-{formatted}-brightgreen.svg)',
+              content
+          )
+          
+          with open('README.md', 'w') as f:
+              f.write(new_content)
+          
+          print(f"Badge updated to: {formatted}")
+          EOF
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: update downloads badge to ${{ steps.downloads.outputs.total }} downloads
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+            git push
+          else
+            echo "No changes to commit"
+          fi
+
