@@ -1,4 +1,4 @@
-export type Store = "epic" | "gog" | "amazon" | "ubisoft" | "microsoft";
+export type Store = "epic" | "gog" | "amazon" | "ubisoft" | "microsoft" | "gamevault";
 
 export type StoreFinal =
   | "epic"
@@ -8,4 +8,5 @@ export type StoreFinal =
   | "ubisoft"
   | "ea"
   | "battlenet"
-  | "itch";
+  | "itch"
+  | "gamevault";

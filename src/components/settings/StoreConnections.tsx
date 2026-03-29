@@ -36,6 +36,7 @@ const STORES: {
     key: "microsoft",
     label: "storeConnections.microsoftStore",
   },
+  { key: "gamevault", label: "storeConnections.gamevault" },
 ];
 
 const StoreConnections = ({

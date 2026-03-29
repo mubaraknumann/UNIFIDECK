@@ -71,6 +71,7 @@ try:
         GOGAPIClient as BackendGOGAPIClient,
         UbisoftConnector as BackendUbisoftConnector,
         MicrosoftConnector as BackendMicrosoftConnector,
+        GameVaultConnector as BackendGameVaultConnector,
     )
     from py_modules.unifideck.auth import CDPOAuthMonitor as BackendCDPOAuthMonitor
     from py_modules.unifideck.compat import (
@@ -2131,6 +2132,9 @@ class Plugin:
         logger.info("[INIT] Initializing MicrosoftConnector")
         self.microsoft = MicrosoftConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
 
+        logger.info("[INIT] Initializing GameVaultConnector")
+        self.gamevault = GameVaultConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
+
         # Ensure the Microsoft auth shortcut is in VDF on every startup.
         # This mirrors the Ubisoft pattern above — the shortcut must exist
         # before the user clicks "Sign In" so Steam's in-memory app store
@@ -2403,7 +2407,14 @@ microsoft_client=self.microsoft,
             return await self.ubisoft.install_game(game_id, progress_callback, install_path=install_path)
 
         self.download_queue.set_ubisoft_install_callback(ubisoft_install_callback)
-        
+
+        # Set GameVault install callback
+        async def gamevault_install_callback(game_id: str, install_path: str = None, progress_callback=None, **kwargs):
+            """Delegate GameVault downloads to GameVaultConnector.install_game"""
+            return await self.gamevault.install_game(game_id, progress_callback, install_path=install_path)
+
+        self.download_queue.set_gamevault_install_callback(gamevault_install_callback)
+
         # Set size cache callback to update Install button sizes when accurate size is received
         self.download_queue.set_size_cache_callback(cache_game_size)
 
@@ -2889,6 +2900,9 @@ microsoft_client=self.microsoft,
                 self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "Microsoft Store"}}
                 microsoft_games = await self.microsoft.get_library()
 
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "GameVault"}}
+                gamevault_games = await self.gamevault.get_library()
+
                 # Robustly handle API failures (None returns)
                 valid_stores = []
                 all_games = []
@@ -2933,6 +2947,7 @@ microsoft_client=self.microsoft,
                         'gog_count': 0,
                         'amazon_count': 0,
                         'ubisoft_count': 0,
+                        'gamevault_count': 0,
                         'added_count': 0,
                         'updated_count': 0,
                         'artwork_count': 0
@@ -2942,6 +2957,12 @@ microsoft_client=self.microsoft,
                     all_games.extend(microsoft_games)
                 else:
                     microsoft_games = []
+
+                if gamevault_games is not None:
+                    valid_stores.append('gamevault')
+                    all_games.extend(gamevault_games)
+                else:
+                    gamevault_games = []
                     logger.warning("[MS] Microsoft library fetch returned None, continuing sync with other stores")
                 self.sync_progress.total_games = len(all_games)
                 self.sync_progress.synced_games = 0
@@ -3568,6 +3589,9 @@ microsoft_client=self.microsoft,
                 self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "Microsoft Store"}}
                 microsoft_games = await self.microsoft.get_library()
 
+                self.sync_progress.current_game = {"label": "sync.fetchingStore", "values": {"store": "GameVault"}}
+                gamevault_games = await self.gamevault.get_library()
+
                 # Robustly handle API failures (None returns)
                 valid_stores = []
                 all_games = []
@@ -3601,6 +3625,12 @@ microsoft_client=self.microsoft,
                     all_games.extend(microsoft_games)
                 else:
                     microsoft_games = []
+
+                if gamevault_games is not None:
+                    valid_stores.append('gamevault')
+                    all_games.extend(gamevault_games)
+                else:
+                    gamevault_games = []
                 self.sync_progress.total_games = len(all_games)
                 self.sync_progress.synced_games = 0
                 self.compat_fetcher.queue_games(all_games)
@@ -6227,6 +6257,7 @@ microsoft_client=self.microsoft,
         self.amazon = AmazonConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
         self.ubisoft = UbisoftConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
         self.microsoft = MicrosoftConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
+        self.gamevault = GameVaultConnector(plugin_dir=DECKY_PLUGIN_DIR, plugin_instance=self)
 
         return result
 
@@ -6405,6 +6436,12 @@ microsoft_client=self.microsoft,
             microsoft_status = 'connected' if microsoft_available else 'not_connected'
             logger.info(f"[STATUS] Microsoft Store: {microsoft_status}")
 
+            # Check GameVault availability (self-hosted, no CLI binary needed)
+            logger.info("[STATUS] Checking GameVault availability")
+            gamevault_available = await self.gamevault.is_available()
+            gamevault_status = 'connected' if gamevault_available else 'not_connected'
+            logger.info(f"[STATUS] GameVault: {gamevault_status}")
+
             result = {
                 'success': True,
                 'epic': epic_status,
@@ -6412,6 +6449,7 @@ microsoft_client=self.microsoft,
                 'amazon': amazon_status,
                 'ubisoft': ubisoft_status,
                 'microsoft': microsoft_status,
+                'gamevault': gamevault_status,
                 'legendary_installed': legendary_installed,
                 'nile_installed': nile_installed
             }
@@ -6427,7 +6465,8 @@ microsoft_client=self.microsoft,
                 'gog': 'error',
                 'amazon': 'error',
                 'ubisoft': 'error',
-                'microsoft': 'error'
+                'microsoft': 'error',
+                'gamevault': 'error'
             }
 
     async def get_real_steam_appid_mappings(self) -> Dict[str, Any]:
@@ -6631,6 +6670,20 @@ microsoft_client=self.microsoft,
     async def logout_microsoft(self) -> Dict[str, Any]:
         """Logout from Microsoft Store"""
         return await self.microsoft.logout()
+
+    # ── GameVault ───────────────────────────────────────────────────
+
+    async def gamevault_login(self, server_url: str, username: str, password: str) -> Dict[str, Any]:
+        """Login to GameVault with credentials"""
+        return await self.gamevault.login(server_url, username, password)
+
+    async def start_gamevault_auth(self) -> Dict[str, Any]:
+        """Start GameVault auth — returns auth_type for frontend routing"""
+        return await self.gamevault.start_auth()
+
+    async def logout_gamevault(self) -> Dict[str, Any]:
+        """Logout from GameVault"""
+        return await self.gamevault.logout()
 
     async def get_amazon_library(self) -> List[Dict[str, Any]]:
         """Get Amazon Games library"""

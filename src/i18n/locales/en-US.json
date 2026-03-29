@@ -110,6 +110,7 @@
     "amazonGames": "Amazon Games",
     "ubisoftConnect": "Ubisoft Connect",
     "microsoftStore": "Microsoft Store",
+    "gamevault": "GameVault",
     "connected": "Connected",
     "checking": "Checking...",
     "authenticate": "Sign in",
@@ -503,6 +504,14 @@
     "browserInstallFailed": "Microsoft Edge installation failed. Please install manually: flatpak install com.microsoft.Edge",
     "flatpakNotFound": "Flatpak is not available on this system",
     "signInRequired": "Sign in to play"
+  },
+  "gamevaultAuth": {
+    "title": "Connect to GameVault",
+    "serverUrl": "Server URL",
+    "username": "Username",
+    "password": "Password",
+    "signIn": "Sign In",
+    "signingIn": "Signing in..."
   },
   "authSuccess": {
     "title": "Authentication",

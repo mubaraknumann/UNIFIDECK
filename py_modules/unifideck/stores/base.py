@@ -18,7 +18,7 @@ class Game:
     """Represents a game from any store"""
     id: str
     title: str
-    store: str  # 'steam', 'epic', 'gog', 'amazon', 'ubisoft', 'microsoft'
+    store: str  # 'steam', 'epic', 'gog', 'amazon', 'ubisoft', 'microsoft', 'gamevault'
     is_installed: bool = False
     cover_image: Optional[str] = None
     install_path: Optional[str] = None

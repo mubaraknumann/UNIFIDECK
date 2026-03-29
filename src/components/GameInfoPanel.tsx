@@ -51,6 +51,7 @@ const SUPPORT_URLS: Record<StoreFinal | "steam" | "other", string> = {
   battlenet: "https://us.battle.net/support/en/",
   itch: "https://itch.io/support",
   microsoft: "https://support.xbox.com/en-US/help/games-apps/game-setup-and-play/troubleshoot-pc-games",
+  gamevault: "https://gamevau.lt/docs/",
   steam: "", // Will be filled with appId
   other: "", // Fallback
 };

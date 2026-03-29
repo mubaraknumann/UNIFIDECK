@@ -44,6 +44,7 @@ import { StorageSettings } from "./components/StorageSettings";
 import { SteamRestartModal } from "./components/SteamRestartModal";
 import { AuthSuccessModal } from "./components/AuthSuccessModal";
 import { ChromiumInstallModal } from "./components/ChromiumInstallModal";
+import { GameVaultLoginModal } from "./components/GameVaultLoginModal";
 import { AccountSwitchModal } from "./components/AccountSwitchModal";
 import { LanguageSelector } from "./components/LanguageSelector";
 import { launchMicrosoftAuthViaShortcut } from "./utils/microsoftShortcutLaunch";
@@ -686,6 +687,7 @@ const Content: FC = () => {
     amazon: "checking",
     ubisoft: "checking",
     microsoft: "checking",
+    gamevault: "checking",
   });
 
   // Game Details View Mode - persisted via localStorage
@@ -893,6 +895,7 @@ const Content: FC = () => {
         amazon: string;
         ubisoft: string;
         microsoft: string;
+        gamevault: string;
         error?: string;
         legendary_installed?: boolean;
         nile_installed?: boolean;
@@ -905,6 +908,7 @@ const Content: FC = () => {
           amazon: result.amazon,
           ubisoft: result.ubisoft,
           microsoft: result.microsoft ?? "not_connected",
+          gamevault: result.gamevault ?? "not_connected",
         };
         setStoreStatus(nextStoreStatus);
         tabManager.setConnectedStores(nextStoreStatus);
@@ -928,6 +932,7 @@ const Content: FC = () => {
           amazon: "error",
           ubisoft: "error",
           microsoft: "error",
+          gamevault: "error",
         };
         setStoreStatus(failedStoreStatus);
         tabManager.setConnectedStores(failedStoreStatus);
@@ -940,6 +945,7 @@ const Content: FC = () => {
         amazon: "error",
         ubisoft: "error",
         microsoft: "error",
+        gamevault: "error",
       };
       setStoreStatus(erroredStoreStatus);
       tabManager.setConnectedStores(erroredStoreStatus);
@@ -1350,6 +1356,8 @@ const Content: FC = () => {
         ? t("storeConnections.ubisoftConnect")
         : store === "microsoft"
         ? t("storeConnections.microsoftStore")
+        : store === "gamevault"
+        ? t("storeConnections.gamevault")
         : t("storeConnections.gog");
 
     // Ubisoft: launch UPC directly via shortcut and poll for session capture
@@ -1406,6 +1414,33 @@ const Content: FC = () => {
           duration: 5000,
         });
       }
+      return;
+    }
+
+    // GameVault: credential-based auth (no OAuth popup)
+    if (store === "gamevault") {
+      showModal(
+        <GameVaultLoginModal
+          closeModal={() => {}}
+          onLogin={async (serverUrl: string, username: string, password: string) => {
+            const result = await call<
+              [string, string, string],
+              { success: boolean; message?: string; error?: string }
+            >("gamevault_login", serverUrl, username, password);
+            if (result.success) {
+              toaster.toast({
+                title: t("toasts.authConnected", { store: storeName }),
+                body: t("toasts.authConnectedMessage", { store: storeName }),
+                duration: 5000,
+              });
+              void refreshLibraryAfterAuth("gamevault");
+              checkStoreStatus();
+            } else {
+              throw new Error(result.error || t("toasts.authFailedMessage"));
+            }
+          }}
+        />,
+      );
       return;
     }
 
@@ -1702,6 +1737,8 @@ const Content: FC = () => {
         methodName = "logout_ubisoft";
       } else if (store === "microsoft") {
         methodName = "logout_microsoft";
+      } else if (store === "gamevault") {
+        methodName = "logout_gamevault";
       } else {
         methodName = "logout_amazon";
       }

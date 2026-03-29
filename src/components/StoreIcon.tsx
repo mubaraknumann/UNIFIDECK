@@ -7,7 +7,7 @@ import {
   SiBattledotnet,
   SiItchdotio,
 } from "react-icons/si";
-import { FaGamepad, FaXbox } from "react-icons/fa";
+import { FaGamepad, FaXbox, FaServer } from "react-icons/fa";
 import { StoreFinal } from "../types/store";
 import type { IconType } from "react-icons";
 
@@ -23,6 +23,7 @@ const STORE_ICONS: Record<StoreFinal, IconType> = {
   ea: SiEa,
   battlenet: SiBattledotnet,
   itch: SiItchdotio,
+  gamevault: FaServer,
 };
 
 /**

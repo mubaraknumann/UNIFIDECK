@@ -168,6 +168,7 @@ class DownloadQueue:
         self._on_complete_callback: Optional[Callable] = None
         self._gog_install_callback: Optional[Callable] = None  # For GOG API-based downloads
         self._ubisoft_install_callback: Optional[Callable] = None  # For Ubisoft UPC-based downloads
+        self._gamevault_install_callback: Optional[Callable] = None  # For GameVault API-based downloads
         self._size_cache_callback: Optional[Callable] = None  # For updating game size cache
         self._size_cached_items: set = set()  # Track which items have had size cached (store:game_id)
         
@@ -1034,6 +1035,8 @@ class DownloadQueue:
             return await self._download_amazon(item, install_path)
         elif item.store == 'ubisoft':
             return await self._download_ubisoft(item, install_path)
+        elif item.store == 'gamevault':
+            return await self._download_gamevault(item, install_path)
         elif item.store == 'microsoft':
             # xCloud games are streamed, not downloaded
             item.error_message = "Microsoft games are streamed via Xbox Cloud Gaming"
@@ -1456,6 +1459,78 @@ class DownloadQueue:
             item.error_message = classify_download_error(str(e))
             return False
 
+    async def _download_gamevault(self, item: DownloadItem, install_path: str) -> bool:
+        """Download GameVault game via REST API.
+
+        Delegates to the GameVaultConnector.install_game() method which handles
+        downloading the game archive and extracting it.
+        """
+        if not self._gamevault_install_callback:
+            item.error_message = "GameVault install callback not set"
+            logger.error("[DownloadQueue] GameVault install callback not configured")
+            return False
+
+        logger.info(f"[DownloadQueue] Delegating GameVault download to connector: {item.game_id}")
+
+        try:
+            outer_self = self
+            last_logged_milestone = [-1]
+
+            async def progress_callback(progress):
+                if item.status == DownloadStatus.CANCELLED:
+                    logger.info("[DownloadQueue] GameVault download cancelled, raising CancelledError")
+                    raise asyncio.CancelledError("Download cancelled by user")
+
+                if isinstance(progress, dict):
+                    if 'phase' in progress:
+                        item.download_phase = progress['phase']
+                        item.phase_message = progress.get('phase_message', '')
+                        logger.info(f"[DownloadQueue] Phase update: {item.download_phase} - {item.phase_message}")
+                        self._save()
+                        return
+
+                    item.progress_percent = progress.get('progress_percent', 0)
+                    item.downloaded_bytes = int(progress.get('downloaded_bytes', 0))
+                    new_total = int(progress.get('total_bytes', 0))
+                    item.total_bytes = new_total
+                    outer_self._update_size_cache_if_needed(item, new_total)
+
+                    speed = progress.get('speed_mbps', 0)
+                    if speed > 0:
+                        item.speed_mbps = speed
+                    eta = progress.get('eta_seconds', 0)
+                    if eta > 0:
+                        item.eta_seconds = eta
+
+                    if item.progress_percent > 0:
+                        item.is_preparing = False
+
+                    milestone = int(item.progress_percent / 5) * 5
+                    if milestone > last_logged_milestone[0]:
+                        last_logged_milestone[0] = milestone
+                        self._save()
+
+            result = await self._gamevault_install_callback(
+                item.game_id, install_path, progress_callback
+            )
+
+            if result.get('success'):
+                logger.info(f"[DownloadQueue] GameVault download completed: {item.game_title}")
+                return True
+            else:
+                raw_error = result.get('error', 'Unknown GameVault download error')
+                item.error_message = classify_download_error(raw_error)
+                logger.error(f"[DownloadQueue] GameVault download failed: {raw_error}")
+                return False
+
+        except asyncio.CancelledError:
+            logger.info(f"[DownloadQueue] GameVault download cancelled: {item.game_title}")
+            return False
+        except Exception as e:
+            logger.error(f"[DownloadQueue] GameVault download error: {e}")
+            item.error_message = classify_download_error(str(e))
+            return False
+
     async def _parse_nile_output(self, item: DownloadItem) -> None:
         """Parse nile output for progress updates"""
         # Nile download progress format (from ProgressBar):
@@ -1551,6 +1626,13 @@ class DownloadQueue:
         Callback signature: callback(game_id: str, install_path: str, progress_callback) -> dict
         """
         self._ubisoft_install_callback = callback
+
+    def set_gamevault_install_callback(self, callback: Callable) -> None:
+        """Set callback for GameVault game installation (uses GameVaultConnector)
+
+        Callback signature: callback(game_id: str, install_path: str, progress_callback) -> dict
+        """
+        self._gamevault_install_callback = callback
 
     def set_size_cache_callback(self, callback: Callable) -> None:
         """Set callback for updating the game size cache on first accurate size."""
