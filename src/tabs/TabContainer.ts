@@ -260,7 +260,7 @@ class TabManager {
   private initialized = false;
   private cacheLoaded = false;
   private connectedStores = new Set<
-    "epic" | "gog" | "amazon" | "ubisoft" | "microsoft"
+    "epic" | "gog" | "amazon" | "ubisoft" | "microsoft" | "gamevault"
   >();
   private epicGameCount = 0;
   private gogGameCount = 0;
@@ -296,7 +296,7 @@ class TabManager {
       if (Array.isArray(games) && games.length > 0) {
         const cacheData = games.map((g) => ({
           appId: g.appId,
-          store: g.store as "epic" | "gog" | "amazon" | "ubisoft" | "microsoft",
+          store: g.store as "epic" | "gog" | "amazon" | "ubisoft" | "microsoft" | "gamevault",
           isInstalled: g.isInstalled,
           steamAppId: g.steamAppId, // SteamGridDB ID for ProtonDB
           realSteamAppId: g.realSteamAppId, // Real Steam Store App ID for spoofing
@@ -369,14 +369,14 @@ class TabManager {
 
   setConnectedStores(
     statuses: Partial<
-      Record<"epic" | "gog" | "amazon" | "ubisoft" | "microsoft", string>
+      Record<"epic" | "gog" | "amazon" | "ubisoft" | "microsoft" | "gamevault", string>
     >,
   ) {
     const nextConnectedStores = new Set<
-      "epic" | "gog" | "amazon" | "ubisoft" | "microsoft"
+      "epic" | "gog" | "amazon" | "ubisoft" | "microsoft" | "gamevault"
     >();
     (
-      ["epic", "gog", "amazon", "ubisoft", "microsoft"] as const
+      ["epic", "gog", "amazon", "ubisoft", "microsoft", "gamevault"] as const
     ).forEach((store) => {
       if (statuses[store] === "connected") {
         nextConnectedStores.add(store);
@@ -444,7 +444,7 @@ class TabManager {
   updateGameCache(
     games: Array<{
       appId: number;
-      store: "epic" | "gog" | "amazon" | "ubisoft" | "microsoft";
+      store: "epic" | "gog" | "amazon" | "ubisoft" | "microsoft" | "gamevault";
       isInstalled: boolean;
     }>,
   ) {

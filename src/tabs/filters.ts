@@ -24,7 +24,7 @@ export type FilterType =
 export interface FilterParams {
   installed: { installed: boolean };
   platform: { platform: "steam" | "nonSteam" | "all" };
-  store: { store: "steam" | "epic" | "gog" | "amazon" | "ubisoft" | "microsoft" | "all" };
+  store: { store: "steam" | "epic" | "gog" | "amazon" | "ubisoft" | "microsoft" | "gamevault" | "all" };
   deckCompat: {}; // No params needed - uses Native/Platinum/Verified only
   all: {};
   nonSteam: {}; // Non-Steam shortcuts excluding all Unifideck-managed games
@@ -47,7 +47,7 @@ const DECK_VERIFIED = 3; // steam_deck_compat_category
 export const unifideckGameCache: Map<
   number,
   {
-    store: "epic" | "gog" | "amazon" | "ubisoft" | "microsoft";
+    store: "epic" | "gog" | "amazon" | "ubisoft" | "microsoft" | "gamevault";
     isInstalled: boolean;
     steamAppId?: number; // Real Steam appId for ProtonDB lookups
   }
@@ -79,7 +79,7 @@ export const validThirdPartyCache: Set<number> = new Set();
 export function updateUnifideckCache(
   games: Array<{
     appId: number;
-    store: "epic" | "gog" | "amazon" | "ubisoft" | "microsoft";
+    store: "epic" | "gog" | "amazon" | "ubisoft" | "microsoft" | "gamevault";
     isInstalled: boolean;
     steamAppId?: number;
   }>,
@@ -117,7 +117,7 @@ export function updateUnifideckCache(
  */
 export function updateSingleGameStatus(game: {
   appId: number;
-  store: "epic" | "gog" | "amazon" | "ubisoft" | "microsoft";
+  store: "epic" | "gog" | "amazon" | "ubisoft" | "microsoft" | "gamevault";
   isInstalled: boolean;
 }) {
   const signedId = game.appId;
@@ -228,7 +228,7 @@ export function isUnifideckGame(appId: number): boolean {
 export function getStoreForApp(
   appId: number,
   appType: number,
-): "steam" | "epic" | "gog" | "amazon" | "ubisoft" | "microsoft" | null {
+): "steam" | "epic" | "gog" | "amazon" | "ubisoft" | "microsoft" | "gamevault" | null {
   // Check cache first (works for both signed and unsigned appId)
   const cached = unifideckGameCache.get(appId);
   if (cached) {
