@@ -367,7 +367,8 @@
     "gog": "GOG",
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
-    "microsoft": "Microsoft"
+    "microsoft": "Microsoft",
+    "gamevault": "GameVault"
   },
   "unifiedLibrary": {
     "error": "Unifideck Error",

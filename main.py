@@ -2970,12 +2970,12 @@ microsoft_client=self.microsoft,
                     all_games.extend(gamevault_games)
                 else:
                     gamevault_games = []
-                    logger.warning("[MS] Microsoft library fetch returned None, continuing sync with other stores")
+                    logger.warning("[GV] GameVault library fetch returned None, continuing sync with other stores")
                 self.sync_progress.total_games = len(all_games)
                 self.sync_progress.synced_games = 0
 
                 # Log library composition for debugging game count discrepancies
-                logger.info(f"Sync: Library composition - Epic: {len(epic_games)}, GOG: {len(gog_games)}, Amazon: {len(amazon_games)}, Ubisoft: {len(ubisoft_games)}, Microsoft: {len(microsoft_games)}, Total: {len(all_games)}")
+                logger.info(f"Sync: Library composition - Epic: {len(epic_games)}, GOG: {len(gog_games)}, Amazon: {len(amazon_games)}, Ubisoft: {len(ubisoft_games)}, Microsoft: {len(microsoft_games)}, GameVault: {len(gamevault_games)}, Total: {len(all_games)}")
                 logger.debug(f"  Total Unifideck games in all libraries: {len(all_games)} (these are from store APIs)")
                 logger.debug(f"  Note: Displayed game count may differ if some games fail shortcut registration or have invalid launch options")
 

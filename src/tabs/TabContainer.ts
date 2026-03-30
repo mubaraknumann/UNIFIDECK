@@ -85,9 +85,15 @@ export const UNIFIDECK_TABS: UnifideckTab[] = [
     filters: [{ type: "store", params: { store: "microsoft" } }],
   },
   {
+    id: "unifideck-gamevault",
+    title: t("deckTabs.gamevault"),
+    position: 9,
+    filters: [{ type: "store", params: { store: "gamevault" } }],
+  },
+  {
     id: "unifideck-nonsteam",
     title: t("deckTabs.nonSteam"),
-    position: 9,
+    position: 10,
     filters: [{ type: "nonSteam", params: {} }], // All non-Steam shortcuts except non-installed Unifideck
   },
 ];
@@ -267,6 +273,7 @@ class TabManager {
   private amazonGameCount = 0;
   private ubisoftGameCount = 0;
   private microsoftGameCount = 0;
+  private gamevaultGameCount = 0;
 
   async initialize() {
     if (this.initialized) return;
@@ -317,8 +324,11 @@ class TabManager {
         this.microsoftGameCount = games.filter(
           (g: any) => g.store === "microsoft",
         ).length;
+        this.gamevaultGameCount = games.filter(
+          (g: any) => g.store === "gamevault",
+        ).length;
         console.log(
-          `[Unifideck] Loaded ${games.length} games into cache (Epic: ${this.epicGameCount}, GOG: ${this.gogGameCount}, Amazon: ${this.amazonGameCount}, Ubisoft: ${this.ubisoftGameCount}, Microsoft: ${this.microsoftGameCount})`,
+          `[Unifideck] Loaded ${games.length} games into cache (Epic: ${this.epicGameCount}, GOG: ${this.gogGameCount}, Amazon: ${this.amazonGameCount}, Ubisoft: ${this.ubisoftGameCount}, Microsoft: ${this.microsoftGameCount}, GameVault: ${this.gamevaultGameCount})`,
         );
 
         // Load compatibility cache from backend (ProtonDB + Deck Verified)
@@ -424,6 +434,13 @@ class TabManager {
       tabId === "unifideck-microsoft" &&
       this.microsoftGameCount === 0 &&
       !this.connectedStores.has("microsoft")
+    ) {
+      return false;
+    }
+    if (
+      tabId === "unifideck-gamevault" &&
+      this.gamevaultGameCount === 0 &&
+      !this.connectedStores.has("gamevault")
     ) {
       return false;
     }
