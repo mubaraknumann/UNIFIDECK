@@ -23,7 +23,7 @@ from typing import Optional, Tuple
 # Amazon game IDs contain dots (e.g., amzn1.adg.product.xxx), so we include '.' in the pattern
 # Note: Using word boundary at end won't work with trailing dots, so we use a non-greedy match
 # and require the ID to start with alphanumeric
-STORE_ID_PATTERN = re.compile(r'\b(epic|gog|amazon|ubisoft|microsoft):([a-zA-Z0-9][a-zA-Z0-9._-]*)')
+STORE_ID_PATTERN = re.compile(r'\b(epic|gog|amazon|ubisoft|microsoft|gamevault):([a-zA-Z0-9][a-zA-Z0-9._-]*)')
 
 
 def extract_store_id(launch_options: str) -> Optional[Tuple[str, str]]:

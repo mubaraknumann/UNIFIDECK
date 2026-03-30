@@ -119,6 +119,8 @@ class GameVaultConnector(Store):
         """Proactively refresh token if older than 4 minutes (before 5-min expiry).
 
         GameVault access tokens expire in 5 minutes, so we refresh at 240 seconds.
+        If refresh fails, we still allow the request to proceed — the API call
+        handler in _api_json() will catch 401s and retry with a fresh token.
         """
         if not self.access_token or not self.refresh_token or not self.server_url:
             return False
@@ -126,7 +128,9 @@ class GameVaultConnector(Store):
         token_age = time.time() - self.token_time
         if token_age > 240:  # 4 minutes
             logger.info(f"[GameVault] Token is old ({token_age:.0f}s), refreshing proactively...")
-            return await self._refresh_access_token()
+            refreshed = await self._refresh_access_token()
+            if not refreshed:
+                logger.warning("[GameVault] Proactive refresh failed, will try existing token")
         return True
 
     async def _refresh_access_token(self) -> bool:
