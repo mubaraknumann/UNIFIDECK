@@ -6244,6 +6244,7 @@ microsoft_client=self.microsoft,
             ('amazon', self.amazon.logout),
             ('ubisoft', self.ubisoft.logout),
             ('microsoft', self.microsoft.logout),
+            ('gamevault', self.gamevault.logout),
         ]
 
         for store_name, logout in logout_actions:

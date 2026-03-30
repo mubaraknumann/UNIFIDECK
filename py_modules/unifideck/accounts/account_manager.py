@@ -39,6 +39,7 @@ AUTH_TOKEN_PATHS = {
     'ubisoft': os.path.expanduser("~/.local/share/unifideck/ubisoft_token.json"),
     'ubisoft_session': os.path.expanduser("~/.local/share/unifideck/ubisoft_upc_session.txt"),
     'microsoft': os.path.expanduser("~/.config/unifideck/microsoft_token.json"),
+    'gamevault': os.path.expanduser("~/.config/unifideck/gamevault_token.json"),
 }
 
 AUTH_STATE_CLEANUP_PATHS = {
