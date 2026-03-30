@@ -142,8 +142,7 @@ class GameVaultConnector(Store):
             async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
                 async with session.post(
                     f"{self.server_url}/api/auth/refresh",
-                    json={"refresh_token": self.refresh_token},
-                    headers={"Content-Type": "application/json"}
+                    headers={"Authorization": f"Bearer {self.refresh_token}"}
                 ) as response:
                     if response.status == 200:
                         data = await response.json()
@@ -283,11 +282,10 @@ class GameVaultConnector(Store):
             credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
 
             async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-                async with session.post(
+                async with session.get(
                     f"{server_url}/api/auth/basic/login",
                     headers={
                         'Authorization': f'Basic {credentials}',
-                        'Content-Type': 'application/json',
                     }
                 ) as response:
                     if response.status == 200 or response.status == 201:
@@ -335,7 +333,7 @@ class GameVaultConnector(Store):
                 try:
                     await self._api_json('POST', '/api/auth/revoke',
                                          timeout_seconds=5.0,
-                                         json={'token': self.access_token})
+                                         json={'refresh_token': self.refresh_token})
                 except Exception as e:
                     logger.warning(f"[GameVault] Token revocation failed (non-critical): {e}")
 
