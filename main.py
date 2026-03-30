@@ -1745,6 +1745,13 @@ if BACKEND_AVAILABLE:
     MicrosoftConnector = BackendMicrosoftConnector
 else:
     raise ImportError("backend.stores.microsoft module is required but not available")
+# ============================================================================
+# GameVaultConnector - Self-hosted game library manager
+# ============================================================================
+if BACKEND_AVAILABLE:
+    GameVaultConnector = BackendGameVaultConnector
+else:
+    raise ImportError("backend.stores.gamevault module is required but not available")
 
 class InstallHandler:
     """Handles game installations across stores"""

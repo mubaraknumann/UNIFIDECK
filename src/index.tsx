@@ -879,6 +879,7 @@ const Content: FC = () => {
           amazon: string;
           ubisoft: string;
           microsoft: string;
+          gamevault: string;
           error?: string;
           legendary_installed?: boolean;
           nile_installed?: boolean;
