@@ -4612,7 +4612,7 @@ microsoft_client=self.microsoft,
                                         logger.warning(f"[GameInfo] Failed to update games.map for Ubisoft {game_id}: {map_err}")
                                 else:
                                     logger.warning(f"[GameInfo] Ubisoft game {game_id} in prefix but path missing")
-                        elif store not in ('epic', 'gog', 'amazon', 'ubisoft', 'microsoft'):
+                        elif store not in ('epic', 'gog', 'amazon', 'ubisoft', 'microsoft', 'gamevault'):
                             return {'error': f'Unknown store: {store}'}
 
                     # Get game size - try cache first (instant), fallback to API (slow)
@@ -4633,6 +4633,8 @@ microsoft_client=self.microsoft,
                                 size_bytes = await self.amazon.get_game_size(game_id)
                             elif store == 'ubisoft':
                                 size_bytes = await self.ubisoft.get_game_size(game_id)
+                            elif store == 'gamevault':
+                                size_bytes = await self.gamevault.get_game_size(game_id)
 
                             # Cache the result for next time
                             if size_bytes and size_bytes > 0:
