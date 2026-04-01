@@ -3,6 +3,7 @@ import {
   PanelSection,
   PanelSectionRow,
   ButtonItem,
+  Tabs,
   Field,
   afterPatch,
   findInReactTree,
@@ -659,26 +660,6 @@ const Content: FC = () => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteFiles, setDeleteFiles] = useState(false);
   const microsoftAuthInProgressRef = useRef(false);
-
-  // Auto-focus ref
-  const mountRef = useRef<HTMLDivElement>(null);
-
-  // Auto-focus logic
-  useEffect(() => {
-    // Focus the first focusable element on mount
-    const timer = setTimeout(() => {
-      if (mountRef.current) {
-        const focusable = mountRef.current.querySelector(
-          'button, [tabindex="0"]',
-        );
-        if (focusable instanceof HTMLElement) {
-          focusable.focus();
-          focusable.scrollIntoView({ behavior: "smooth", block: "start" });
-        }
-      }
-    }, 100);
-    return () => clearTimeout(timer);
-  }, []);
 
   const [storeStatus, setStoreStatus] = useState<Record<Store, string>>({
     epic: "checking",
@@ -1845,40 +1826,11 @@ const Content: FC = () => {
     }
   };
 
-  return (
-    <>
-      {/* Tab Navigation */}
-      <PanelSection>
-        <PanelSectionRow>
-          <ButtonItem
-            layout="below"
-            onClick={() => handleTabChange("settings")}
-            disabled={activeTab === "settings"}
-          >
-            <div ref={mountRef}>{t("tabs.settings")}</div>
-          </ButtonItem>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem
-            layout="below"
-            onClick={() => handleTabChange("downloads")}
-            disabled={activeTab === "downloads"}
-          >
-            {t("tabs.downloads")}
-          </ButtonItem>
-        </PanelSectionRow>
-      </PanelSection>
-
-      {/* Downloads Tab */}
-      {activeTab === "downloads" && (
-        <>
-          <DownloadsTab />
-          <StorageSettings />
-        </>
-      )}
-
-      {/* Settings Tab */}
-      {activeTab === "settings" && (
+  const tabItems = [
+    {
+      id: "settings",
+      title: t("tabs.settings"),
+      content: (
         <>
           {/* Store Connections - Compact View */}
           <StoreConnections
@@ -1908,14 +1860,10 @@ const Content: FC = () => {
           <PanelSection title={t("gameDetailsSettings.title")}>
             <PanelSectionRow>
               <ToggleField
-                label={
-                  gameDetailsViewMode === "simple"
-                    ? t("gameDetailsSettings.simple")
-                    : t("gameDetailsSettings.detailed")
-                }
-                checked={gameDetailsViewMode === "simple"}
+                label={t("gameDetailsSettings.detailed")}
+                checked={gameDetailsViewMode === "detailed"}
                 onChange={(checked) =>
-                  handleViewModeChange(checked ? "simple" : "detailed")
+                  handleViewModeChange(checked ? "detailed" : "simple")
                 }
               />
             </PanelSectionRow>
@@ -1988,10 +1936,31 @@ const Content: FC = () => {
             )}
           </PanelSection>
         </>
-      )}
-    </>
-    );
-  };
+      ),
+    },
+    {
+      id: "downloads",
+      title: t("tabs.downloads"),
+      content: (
+        <>
+          <DownloadsTab />
+          <StorageSettings />
+        </>
+      ),
+    },
+  ];
+
+  return (
+    <Tabs
+      tabs={tabItems}
+      activeTab={activeTab}
+      onShowTab={(tab: string) =>
+        handleTabChange(tab as "settings" | "downloads")
+      }
+      autoFocusContents
+    />
+  );
+};
 
 // Store unpatch function for Steam stores
 let unpatchSteamStores: (() => void) | null = null;
