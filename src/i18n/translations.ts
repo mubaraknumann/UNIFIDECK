@@ -10,6 +10,7 @@ import deDE from "./locales/de-DE.json";
 import esES from "./locales/es-ES.json";
 import itIT from "./locales/it-IT.json";
 import zhCN from "./locales/zh-CN.json";
+import zhTW from "./locales/zh-TW.json";
 import koKR from "./locales/ko-KR.json";
 import nlNL from "./locales/nl-NL.json";
 import plPL from "./locales/pl-PL.json";
@@ -26,6 +27,7 @@ const resources: Record<string, { translation: object }> = {
   "es-ES": { translation: esES },
   "it-IT": { translation: itIT },
   "zh-CN": { translation: zhCN },
+  "zh-TW": { translation: zhTW },
   "ko-KR": { translation: koKR },
   "nl-NL": { translation: nlNL },
   "pl-PL": { translation: plPL },
@@ -48,6 +50,7 @@ export const LANGUAGE_NAMES: Record<string, string> = {
   "ru-RU": "Русский",
   "tr-TR": "Türkçe",
   "zh-CN": "简体中文",
+  "zh-TW": "繁體中文",
   "uk-UA": "Українська",
 };
 
@@ -73,7 +76,12 @@ export const loadTranslations = (savedLanguage?: string) => {
       de: ["de-DE"],
       es: ["es-ES"],
       it: ["it-IT"],
-      zh: ["zh-CN"],
+      "zh-CN": ["zh-CN"],
+      "zh-Hans": ["zh-CN"],
+      "zh-TW": ["zh-TW"],
+      "zh-Hant": ["zh-TW"],
+      "zh-HK": ["zh-TW"],
+      "zh-MO": ["zh-TW"],
       ko: ["ko-KR"],
       nl: ["nl-NL"],
       pl: ["pl-PL"],
@@ -81,7 +89,7 @@ export const loadTranslations = (savedLanguage?: string) => {
       uk: ["uk-UA"],
       default: ["en-US"],
     },
-    load: "languageOnly",
+    load: "currentOnly",
     interpolation: { escapeValue: false },
     debug: true,
   });
