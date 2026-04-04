@@ -1,6 +1,7 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 
+import arSA from "./locales/ar-SA.json";
 import enUS from "./locales/en-US.json";
 import frFR from "./locales/fr-FR.json";
 import ptBR from "./locales/pt-BR.json";
@@ -17,6 +18,7 @@ import trTR from "./locales/tr-TR.json";
 import ukUA from "./locales/uk-UA.json";
 
 const resources: Record<string, { translation: object }> = {
+  "ar-SA": { translation: arSA },
   "en-US": { translation: enUS },
   "fr-FR": { translation: frFR },
   "pt-BR": { translation: ptBR },
@@ -35,6 +37,7 @@ const resources: Record<string, { translation: object }> = {
 
 // Native language names for display in dropdown
 export const LANGUAGE_NAMES: Record<string, string> = {
+  "ar-SA": "العربية",
   "en-US": "English",
   "de-DE": "Deutsch",
   "es-ES": "Español",
@@ -65,6 +68,7 @@ export const loadTranslations = (savedLanguage?: string) => {
     resources,
     lng: initialLanguage,
     fallbackLng: {
+      ar: ["ar-SA"],
       pt: ["pt-BR"],
       fr: ["fr-FR"],
       en: ["en-US"],
