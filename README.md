@@ -132,7 +132,7 @@ Make sure your Epic and Ubisoft accounts are linked at [epicgames.com/id/link/ub
 
 ## Languages
 
-Unifideck currently ships with English (US), French, Brazilian Portuguese, Russian, Japanese, German, Spanish, Italian, Simplified Chinese, Korean, Dutch, Polish, Turkish, and Ukrainian.
+Unifideck currently ships with English (US), Arabic, French, Brazilian Portuguese, Russian, Japanese, German, Spanish, Italian, Simplified Chinese, Korean, Dutch, Polish, Turkish, and Ukrainian.
 
 To add a new language, create a JSON file in `src/i18n/locales/` using `en-US.json` as the template and wire it into the language selector.
 
