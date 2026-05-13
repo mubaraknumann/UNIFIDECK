@@ -1,46 +1,64 @@
-"""gogdl subprocess + progress monitor.
+"""Spawn gogdl subprocess and parse its stdout for install progress events.
 
-OP-51f | py_modules/unifideck/stores/gog/install/progress.py
+OP-22-gog-install-progress
+File: py_modules/unifideck/stores/gog/install/progress.py
 
-``_GogdlProgressMonitor`` wraps the ``gogdl`` subprocess invocation
-with structured progress reporting:
+The heart of the install pipeline: orchestrates
+``gogdl install`` / ``update`` (collectively
+``install_mode``) and bubbles up progress events
+via a callback to the UI.
 
-* parses gogdl's stdout/stderr stream to extract download progress
-  (percentage, transfer rate, ETA);
-* throttles progress callbacks to a sane frequency (~ 2 Hz) to avoid
-  flooding the bus;
-* enforces a watchdog timeout — if gogdl stops producing output for
-  too long, kill it and report failure;
-* handles a separate "repair pass" mode used after the main download
-  to validate file checksums.
+gogdl emits progress on stdout in a free-form
+text format that we parse line by line:
 
-Exit-code interpretation handles gogdl's non-standard codes (license
-not accepted, partial install, network drop) and maps each to a
-specific ``InstallResult`` error code.
+* ``Progress: <pct> <written>/<total>, ETA: <hms>``
+  → percent, byte counts, ETA in seconds;
+* ``+ Download <speed> MiB/s`` → speed in bytes/sec.
+
+Stall protection: if no line is read within
+``_GOGDL_STALL_TIMEOUT_S`` seconds (default 120),
+we conclude gogdl is hung (network dropout,
+deadlock), kill it, and return failure. The
+caller's retry loop can then decide whether to
+re-attempt.
+
+After install, ``run_gogdl_repair_pass`` does a
+``gogdl repair`` to verify the install — non-fatal
+if it fails since the marker is already written.
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
 import os
 from collections.abc import Awaitable, Callable
-from typing import (
-    TYPE_CHECKING,
-    Any,
-)
+from typing import (TYPE_CHECKING, Any)
 from .primitives import GOGFolderOps
 
 if TYPE_CHECKING:
     from .installer import GOGInstaller
+
 logger = logging.getLogger(__name__)
+
 _GOGDL_STALL_TIMEOUT_S = 120.0
 
 
 class _GogdlProgressMonitor:
-    """Gogdl progress monitor."""
+    """Subprocess + stdout parser for ``gogdl install``/``update``.
+
+    Bound to a ``GOGInstaller`` parent for
+    access to ``_gogdl_bin``, ``_config``,
+    ``_tokens``. Each install creates a fresh
+    instance.
+    """
 
     def __init__(self, parent: GOGInstaller) -> None:
-        """Initialize the instance."""
+        """Stash parent reference.
+
+        Args:
+            parent: ``GOGInstaller``.
+        """
         self._parent = parent
 
     async def run_gogdl_with_progress(
@@ -51,17 +69,36 @@ class _GogdlProgressMonitor:
         path: str,
         support_dir: str,
         languages: list[str],
-        progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
+        progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None
     ) -> bool:
-        """Run GOGDL with progress."""
-        cmd = self._build_gogdl_cmd(
-            install_mode,
-            game_id,
-            platform,
-            path,
-            support_dir,
-            languages,
-        )
+        """Spawn gogdl + parse stdout + call progress_cb; return True on clean exit.
+
+        Pipeline:
+
+        1. Build the gogdl command line;
+        2. Spawn the subprocess with the gogdl
+           credentials env;
+        3. Read stdout line by line with stall
+           protection;
+        4. Stall → kill, return False;
+        5. EOF → wait for exit, check return
+           code.
+
+        Args:
+            install_mode: ``"install"`` or
+                ``"update"``.
+            game_id: product id.
+            platform: ``"linux"`` or ``"windows"``.
+            path: install path.
+            support_dir: gogdl support cache.
+            languages: language codes.
+            progress_cb: optional async callback
+                receiving the progress dict.
+
+        Returns:
+            True iff gogdl exited cleanly.
+        """
+        cmd = self._build_gogdl_cmd(install_mode, game_id, platform, path, support_dir, languages)
         proc = await self._spawn_gogdl(cmd)
         loop_ok = await self._read_progress_loop(proc, progress_cb)
         if not loop_ok:
@@ -75,16 +112,33 @@ class _GogdlProgressMonitor:
             return False
         return True
 
-    def _build_gogdl_cmd(
-        self,
-        install_mode: str,
-        game_id: str,
-        platform: str,
-        path: str,
-        support_dir: str,
-        languages: list[str],
-    ) -> list[str]:
-        """Build GOGDL cmd."""
+    def _build_gogdl_cmd(self, install_mode: str, game_id: str, platform: str, path: str, support_dir: str, languages: list[str]) -> list[str]:
+        """Construct the gogdl argv for install or update.
+
+        Common args:
+
+        * ``--auth-config-path`` — point gogdl at
+          the credentials file;
+        * ``install_mode`` — ``install`` or
+          ``update`` as positional;
+        * ``--platform``, ``--path``, ``--support``
+          — destination + caches;
+        * ``--with-dlcs`` — always include DLCs
+          (entitlement-gated by gogdl);
+        * ``--lang`` — one occurrence per
+          language code.
+
+        Args:
+            install_mode: positional command.
+            game_id: product id.
+            platform: target platform.
+            path: install dir.
+            support_dir: support cache dir.
+            languages: language codes.
+
+        Returns:
+            Argv list.
+        """
         cmd = [
             self._parent._gogdl_bin,
             "--auth-config-path",
@@ -104,11 +158,23 @@ class _GogdlProgressMonitor:
         return cmd
 
     async def _spawn_gogdl(self, cmd: list[str]) -> asyncio.subprocess.Process:
-        """Spawn GOGDL."""
-        logger.info(
-            "[GOGInstaller] spawning gogdl: %s",
-            " ".join(cmd),
-        )
+        """Spawn the gogdl subprocess and attach a cleanup hook.
+
+        stderr is redirected to stdout so we
+        catch error output in the same parse
+        loop. The gogdl credentials cleanup
+        callable is attached to the proc object
+        as ``_unifideck_gogdl_cleanup`` so the
+        caller can release it after the proc
+        exits.
+
+        Args:
+            cmd: argv from ``_build_gogdl_cmd``.
+
+        Returns:
+            Spawned ``Process``.
+        """
+        logger.info("[GOGInstaller] spawning gogdl: %s"," ".join(cmd))
         env, cleanup = await self._parent._tokens.acquire_gogdl_creds()
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -122,9 +188,27 @@ class _GogdlProgressMonitor:
     async def _read_progress_loop(
         self,
         proc: asyncio.subprocess.Process,
-        progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
+        progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None
     ) -> bool:
-        """Read progress loop."""
+        """Read stdout lines with stall timeout, dispatch progress on each line.
+
+        Returns True on EOF (gogdl finished
+        emitting), False on stall (killed and
+        gave up). Stall timeout fires when no
+        line has been read in
+        ``_GOGDL_STALL_TIMEOUT_S`` seconds.
+
+        Initial progress dict has zeroed counters
+        + a placeholder phase message; the parse
+        loop mutates it in place.
+
+        Args:
+            proc: subprocess.
+            progress_cb: optional callback.
+
+        Returns:
+            True on clean EOF, False on stall.
+        """
         progress: dict[str, Any] = {
             "progress_percent": 0,
             "downloaded_bytes": 0,
@@ -162,9 +246,32 @@ class _GogdlProgressMonitor:
         self,
         line_str: str,
         progress: dict[str, Any],
-        progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
+        progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None
     ) -> None:
-        """Handle progress line."""
+        """Decide whether to log + emit a progress update for a single stdout line.
+
+        Three checks:
+
+        1. Is this a "regular" log line? If yes,
+           and it's not gogdl's own prefix
+           (``"[gogdl]"``), echo at INFO so we
+           see what gogdl is doing;
+        2. Parse the line for progress metrics
+           (in-place mutation of ``progress``);
+        3. Decide whether to push to ``progress_cb``
+           — only on Progress: or
+           ``+ Download`` lines (other lines
+           don't change visible state).
+
+        Callback exceptions are logged at DEBUG
+        and swallowed — the UI is best-effort, we
+        never abort install for a UI hiccup.
+
+        Args:
+            line_str: trimmed line.
+            progress: shared progress dict.
+            progress_cb: optional callback.
+        """
         is_progress_line = "Progress:" in line_str or "Download" in line_str
         if not is_progress_line and not line_str.startswith("[gogdl]"):
             logger.info("[gogdl] %s", line_str)
@@ -184,7 +291,20 @@ class _GogdlProgressMonitor:
 
     @staticmethod
     def _parse_eta(line: str) -> int | None:
-        """Parse eta."""
+        """Pull the ETA from a gogdl progress line and convert to seconds.
+
+        Accepts both ``HH:MM:SS`` and
+        ``MM:SS`` formats — gogdl uses the
+        shorter form once the ETA is under an
+        hour. ``ValueError`` on the int parse →
+        return None.
+
+        Args:
+            line: progress line.
+
+        Returns:
+            Seconds, or ``None``.
+        """
         if "ETA:" not in line:
             return None
         eta_part = line.split("ETA:", 1)[1].strip()
@@ -205,7 +325,22 @@ class _GogdlProgressMonitor:
 
     @staticmethod
     def _parse_speed_mib(line: str) -> float | None:
-        """Parse speed mib."""
+        """Pull the download speed (MiB/s) from a gogdl line, convert to bytes/sec.
+
+        Only fires on lines containing
+        ``+ Download`` and ``MiB/s``. The format
+        is ``+ Download <pkg> <speed> MiB/s``; we
+        take the last whitespace-separated token
+        before ``MiB/s`` as the speed.
+
+        ``ValueError`` → return None.
+
+        Args:
+            line: stdout line.
+
+        Returns:
+            Bytes per second, or ``None``.
+        """
         if "+ Download" not in line or "MiB/s" not in line:
             return None
         tail = line.split("Download", 1)[1]
@@ -221,7 +356,27 @@ class _GogdlProgressMonitor:
 
     @staticmethod
     def _parse_progress_line(line: str, progress: dict[str, Any]) -> None:
-        """Parse progress line."""
+        """Parse a single line and mutate ``progress`` in place.
+
+        Handles both kinds of update lines:
+
+        * Speed lines (``+ Download``) update
+          ``speed_bps`` only;
+        * Progress lines (``Progress:``) update
+          percent, byte counts, ETA, and the
+          phase message.
+
+        ValueError + IndexError → log at DEBUG
+        (malformed line, gogdl probably mid-
+        transition) and continue. Progress dict
+        is never partially-updated on parse fail
+        — we only assign once we have all the
+        fields.
+
+        Args:
+            line: stdout line.
+            progress: in-place state dict.
+        """
         speed_bps = _GogdlProgressMonitor._parse_speed_mib(line)
         if speed_bps is not None:
             progress["speed_bps"] = speed_bps
@@ -253,7 +408,16 @@ class _GogdlProgressMonitor:
 
     @staticmethod
     async def _terminate_gogdl(proc: asyncio.subprocess.Process) -> None:
-        """Terminate GOGDL."""
+        """Graceful SIGTERM with 1s grace, then SIGKILL if still alive.
+
+        Used on stall timeout. Any exception
+        during termination logs at ERROR (it's
+        rare — usually a race with the proc
+        exiting on its own).
+
+        Args:
+            proc: subprocess to terminate.
+        """
         try:
             proc.terminate()
             await asyncio.sleep(1)
@@ -265,15 +429,31 @@ class _GogdlProgressMonitor:
                 e,
             )
 
-    async def run_gogdl_repair_pass(
-        self,
-        game_id: str,
-        platform: str,
-        base_path: str,
-        folder_name: str | None,
-        preferred_lang: str,
-    ) -> None:
-        """Run GOGDL repair pass."""
+    async def run_gogdl_repair_pass(self, game_id: str, platform: str, base_path: str, folder_name: str | None, preferred_lang: str) -> None:
+        """Post-install ``gogdl repair`` — verify file integrity, non-fatal.
+
+        Pipeline:
+
+        1. Resolve the actual install path (it
+           may not match predicted);
+        2. Build the repair command;
+        3. Spawn + stream stdout (log lines at
+           INFO with a ``[gogdl-verify]`` prefix);
+        4. Wait for exit, log non-zero as WARN
+           (non-fatal — install is already
+           marked complete).
+
+        Errors during spawn or cleanup are
+        logged at WARN; we never raise to the
+        caller — repair is best-effort.
+
+        Args:
+            game_id: product id.
+            platform: target platform.
+            base_path: install root.
+            folder_name: predicted folder.
+            preferred_lang: lang to verify.
+        """
         repair_path = self._resolve_repair_path(
             game_id,
             base_path,
@@ -333,12 +513,30 @@ class _GogdlProgressMonitor:
             )
 
     @staticmethod
-    def _resolve_repair_path(
-        game_id: str,
-        base_path: str,
-        folder_name: str | None,
-    ) -> str:
-        """Resolve repair path."""
+    def _resolve_repair_path(game_id: str, base_path: str, folder_name: str | None) -> str:
+        """Find the install directory for repair (predicted folder or scan).
+
+        Two-stage resolution:
+
+        1. Predicted folder
+           (``base_path/folder_name``) — fast
+           path;
+        2. Scan ``base_path`` for any subdir
+           containing the goggame info file.
+
+        Last-resort fallback: ``base_path``
+        itself (with a WARN). gogdl will probably
+        refuse to run repair on a non-install
+        dir, but at least we tried.
+
+        Args:
+            game_id: product id.
+            base_path: install root.
+            folder_name: predicted name.
+
+        Returns:
+            Repair path string.
+        """
         if folder_name:
             predicted = os.path.join(base_path, folder_name)
             if os.path.exists(predicted):

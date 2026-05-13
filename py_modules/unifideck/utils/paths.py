@@ -1,33 +1,29 @@
-"""utils/paths.py — Centralized path resolution for game installations.
+"""Game-install path resolution + mount-root scanning.
 
-Refactor of legacy ``utils/paths.py`` (130 lines). Provides a
-single source of truth for where Unifideck looks for installed
-games: default install dirs per store, mounted SD cards/USB
-drives, and optional user-configured custom paths.
+OP-21c | py_modules/unifideck/utils/paths.py
 
-The legacy module hardcoded ``~/.local/share/unifideck/...``
-paths and a fixed list of store install directories. This
-refactor:
+Resolves the set of directories where installed games may
+live. The plugin needs this for the discovery pass (find
+games that were installed outside Unifideck) and for the
+default install location per store.
 
-- Reads default install paths from ``stores.<n>.install_dir``
-- Reads custom override from ``download.custom_path``
-- Reads the SD card mount root from ``paths.sd_card_root``
-- Returns a deduplicated list of existing directories
+Three layers of sources:
 
-Pure helpers (no I/O):
+* **Per-store defaults** (``DEFAULT_INSTALL_DIRS``) —
+  hard-coded conventional paths;
+* **Config overrides** — ``stores.<id>.install_dir`` per
+  store + ``download.custom_path`` for user-picked extra
+  location;
+* **Removable media scan** — walks ``/run/media`` (Steam
+  Deck's microSD mount point) looking for game roots two
+  levels deep.
 
-- ``expand`` : tilde + env-var expansion in one shot
-- ``dedupe_paths`` : remove duplicates preserving order
-
-Filesystem helpers:
-
-- ``get_all_game_directories(config)`` : full discovery scan
-- ``get_games_map_path(config)`` : the games.map location
-- ``ensure_games_map_dir(config)`` : create the parent dir
-
-Reference: Technical Document v1.0 — Section 3.6.1 (games.map),
-3.9 (ConfigManager), 5.6 (installation pipeline).
+All paths go through ``expand`` to handle ``~`` and
+``$VAR`` substitution, and through ``dedupe_paths`` to
+ensure the discovery walk doesn't process the same
+directory twice (via different symlinks).
 """
+
 from __future__ import annotations
 
 import logging
@@ -42,9 +38,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Default install directories per store, used when no override
-# is set in ``stores.<n>.install_dir``. These match the legacy
-# paths so existing user installs are still discovered.
 DEFAULT_INSTALL_DIRS = {
     "epic": "~/Games/Epic",
     "gog": "~/GOG Games",
@@ -53,53 +46,47 @@ DEFAULT_INSTALL_DIRS = {
     "ubisoft": "~/Games/Ubisoft",
 }
 
-# Where the games.map lives by default. Steam Deck never
-# relocates this without explicit user action, so the path is
-# stable.
 DEFAULT_GAMES_MAP = "~/.local/share/unifideck/games.map"
-
-# Mount root for SD cards / external drives on the Steam Deck
 DEFAULT_SD_ROOT = "/run/media"
 
-# ── Legacy compatibility aliases ──────────────────────────────
-# Keep the old constant names working so legacy modules
-# (utils/__init__.py, accounts/account_manager.py, etc.) that
-# ``from .paths import GAMES_MAP_PATH, DEFAULT_PATHS`` continue
-# to import successfully during the migration window. Both forms
-# resolve to the same expanded value.
 GAMES_MAP_PATH = str(Path(DEFAULT_GAMES_MAP).expanduser())
 DEFAULT_PATHS = {
-    store: str(Path(path).expanduser())
-    for store, path in DEFAULT_INSTALL_DIRS.items()
+    store: str(Path(path).expanduser()) for store, path in DEFAULT_INSTALL_DIRS.items()
 }
 
 
-# ══════════════════════════════════════════════════════════════
-# Pure helpers
-# ══════════════════════════════════════════════════════════════
-
-
 def expand(path: str) -> str:
-    """Expand ``~`` and ``$VAR`` references in a path string.
+    """Apply ``$VAR`` then ``~`` expansion to a path string.
 
-    Pure function — no filesystem I/O. Returns an absolute path
-    (when the input is absolute or contains ``~``) or a relative
-    path unchanged.
+    Order matters: ``expandvars`` first (so ``$HOME``
+    becomes ``/home/user``) then ``expanduser`` (so a
+    bare ``~`` becomes the same). The double pass handles
+    paths like ``$HOME/Games`` and ``~/Games`` uniformly.
 
-    Uses ``os.path.expandvars`` for env var substitution because
-    ``pathlib.Path`` has no equivalent. The result is then
-    wrapped through ``Path(...).expanduser()`` for the tilde
-    resolution.
+    Args:
+        path: raw path with optional ``$VAR`` and ``~``.
+
+    Returns:
+        Expanded string path.
     """
     return str(Path(os.path.expandvars(path)).expanduser())
 
 
 def dedupe_paths(paths: list[str]) -> list[str]:
-    """Remove duplicate paths preserving order.
+    """Drop duplicate paths preserving order, comparing by ``normpath``.
 
-    Two paths are considered equal if their normalized form
-    (``os.path.normpath``) matches. Useful when merging
-    discovery results from multiple sources that may overlap.
+    Two entries are duplicates if their ``os.normpath``
+    is identical — handles trailing slashes, doubled
+    separators, ``.``/``..`` segments. The first
+    occurrence wins; original casing is preserved
+    (normpath only normalises separator / segment
+    structure, not case).
+
+    Args:
+        paths: list of path strings.
+
+    Returns:
+        Deduplicated list preserving input order.
     """
     seen: set[str] = set()
     out: list[str] = []
@@ -113,56 +100,69 @@ def dedupe_paths(paths: list[str]) -> list[str]:
 
 
 def _cfg(config: ConfigManager | None, key: str, default: Any) -> Any:
-    """Legacy alias for backward compatibility. Delegates to `get_cfg`."""
+    """Thin wrapper around ``get_cfg`` — local convention.
+
+    Same idea as the ``_cfg`` in ``core/manifest.py``: a
+    short alias keeps call sites compact.
+
+    Args:
+        config: optional ``ConfigManager``.
+        key: dotted config key.
+        default: fallback.
+
+    Returns:
+        Config value or default.
+    """
     return get_cfg(config, key, default)
 
 
-# ══════════════════════════════════════════════════════════════
-# Filesystem discovery
-# ══════════════════════════════════════════════════════════════
-
-
 def get_all_game_directories(config: ConfigManager | None = None) -> list[str]:
-    """Return every directory that may contain installed games.
+    """Resolve every directory the discovery pass should walk.
 
-    Combines:
+    Combines three sources:
 
-    1. Per-store install dirs from ``stores.<n>.install_dir``
-       (or ``DEFAULT_INSTALL_DIRS`` as fallback)
-    2. The user's custom path from ``download.custom_path``
-    3. SD card / external drive mounts under
-       ``paths.sd_card_root`` — scans 2 levels deep for
-       ``Games/`` and ``GOG Games/`` folders
+    1. Per-store install dirs (config or default);
+    2. The user's custom path (``download.custom_path``)
+       if set;
+    3. Game roots found by ``_scan_mount_root`` on the
+       SD-card mount root (``/run/media`` by default).
 
-    Only returns directories that actually exist on disk.
-    Result is deduplicated.
+    Output is filtered to existing directories (skipping
+    typos / missing SD cards) and deduplicated. The
+    discovery pass calls this once at boot.
+
+    Args:
+        config: optional ``ConfigManager``.
+
+    Returns:
+        Deduplicated list of existing directory paths.
     """
     candidates: list[str] = []
-
-    # 1. Per-store install dirs
     for store, default in DEFAULT_INSTALL_DIRS.items():
         path = _cfg(config, f"stores.{store}.install_dir", default)
         candidates.append(expand(path))
-
-    # 2. Custom user path
     custom = get_cfg(config, "download.custom_path", "")
     if custom:
         candidates.append(expand(custom))
-
-    # 3. SD card / external drive scan
     media_root = get_cfg(config, "paths.sd_card_root", DEFAULT_SD_ROOT)
     candidates.extend(_scan_mount_root(media_root))
-
-    # Filter to existing dirs and dedupe
     existing = [p for p in candidates if Path(p).is_dir()]
     return dedupe_paths(existing)
 
 
 def _collect_game_dirs(parent_path: Path) -> list[str]:
-    """Return ``Games/`` and ``GOG Games/`` subdirs of ``parent_path``.
+    """Return the conventional game-dir subpaths under ``parent_path``.
 
-    Helper for ``_scan_mount_root`` — factored out so the scan
-    loop stays shallow. Symlinks are skipped to avoid loops.
+    Two well-known subdirectory names: ``"Games"`` and
+    ``"GOG Games"`` (the latter is GOG Galaxy's
+    default). Symlinks are skipped to avoid duplicates
+    when the user has a symlink farm.
+
+    Args:
+        parent_path: directory to inspect.
+
+    Returns:
+        List of matching subpaths (typically 0-2).
     """
     found: list[str] = []
     for sub in ("Games", "GOG Games"):
@@ -173,89 +173,102 @@ def _collect_game_dirs(parent_path: Path) -> list[str]:
 
 
 def _scan_level2(level1_path: Path) -> list[str]:
-    """Scan the level-2 subtree under ``level1_path`` for game dirs.
+    """Walk one level deeper to find nested game roots.
 
-    Some Decks (LUKS-on-external SSD setups notably) mount
-    game partitions one level deeper than the standard
-    ``/run/media/<user>/<mount>/Games`` layout — this helper
-    handles the ``<mount>/<level2>/Games`` case. Returns an
-    empty list on any I/O error (mount disappeared between
-    listings, permissions trouble).
+    Used inside ``_scan_mount_root`` to handle the
+    nested case ``/run/media/<user>/<drive>/Games``:
+    level1 is ``<user>``, level2 is ``<drive>``.
+    Each level2 subdirectory is checked for the
+    standard game-dir subpaths.
+
+    OSError on iteration is swallowed silently — happens
+    when a mount disappeared between listing levels.
+
+    Args:
+        level1_path: a ``<user>``-level directory.
+
+    Returns:
+        List of game-root paths found at level 2.
     """
     found: list[str] = []
     try:
         for level2_path in level1_path.iterdir():
-            if (
-                not level2_path.is_dir()
-                or level2_path.is_symlink()
-            ):
+            if not level2_path.is_dir() or level2_path.is_symlink():
                 continue
             found.extend(_collect_game_dirs(level2_path))
     except OSError:
-        # best-effort operation; failure is non-fatal here
         pass
     return found
 
 
 def _scan_mount_root(root: str) -> list[str]:
-    """Walk ``/run/media/<user>/<mount>/`` looking for game folders.
+    """Walk the mount root looking for game directories at depth 1 and 2.
 
-    Returns paths matching ``<mount>/Games/`` or
-    ``<mount>/GOG Games/`` where they exist. Errors are logged
-    at debug level only — a missing ``/run/media`` on a
-    non-Deck system is normal.
+    The Steam Deck's removable-media convention is
+    ``/run/media/<user>/<volume>``. Some users have the
+    games at level 1 (root → volume → Games) and others
+    at level 2 (root → user → volume → Games); this
+    function scans both.
 
-    SECURITY/ROBUSTNESS: symbolic links are skipped at every
-    level. A symlink loop (e.g. ``Games/Other -> Games/``) would
-    otherwise cause the scan to recurse indefinitely or return
-    duplicate paths. The dedupe pass at the caller would mask
-    the duplicates but the wasted CPU on a symlink loop could
-    freeze sync.
+    Symlinks skipped at every level. OSError on root
+    iteration is logged at DEBUG and the partial result
+    is returned.
+
+    Args:
+        root: mount-root path (e.g. ``"/run/media"``).
+
+    Returns:
+        List of discovered game directory paths.
     """
     root_path = Path(root)
     if not root_path.is_dir():
         return []
-
     found: list[str] = []
     try:
         for level1_path in root_path.iterdir():
-            if (
-                not level1_path.is_dir()
-                or level1_path.is_symlink()
-            ):
+            if not level1_path.is_dir() or level1_path.is_symlink():
                 continue
-            # /run/media/<level1>/Games or GOG Games
             found.extend(_collect_game_dirs(level1_path))
-            # /run/media/<level1>/<level2>/Games (some Decks)
             found.extend(_scan_level2(level1_path))
     except OSError as e:
         logger.debug(
-            "[paths] mount scan failed on %s: %s", root, e,
+            "[paths] mount scan failed on %s: %s",
+            root,
+            e,
         )
     return found
 
 
-# ══════════════════════════════════════════════════════════════
-# games.map location
-# ══════════════════════════════════════════════════════════════
-
-
 def get_games_map_path(config: ConfigManager | None = None) -> str:
-    """Return the absolute path to the games.map file.
+    """Return the resolved path of the unified ``games.map`` file.
 
-    Reads ``paths.games_map`` from config if set, otherwise
-    falls back to ``~/.local/share/unifideck/games.map``. Tilde
-    and env vars in the configured path are expanded.
+    Config-overridable via ``paths.games_map``;
+    defaults to ``~/.local/share/unifideck/games.map``.
+
+    Args:
+        config: optional ``ConfigManager``.
+
+    Returns:
+        Expanded absolute path string.
     """
     raw = get_cfg(config, "paths.games_map", DEFAULT_GAMES_MAP)
     return expand(raw)
 
 
 def ensure_games_map_dir(config: ConfigManager | None = None) -> str | None:
-    """Create the parent directory for games.map if missing.
+    """Create the parent directory of ``games.map`` if it doesn't exist.
 
-    Returns the directory path on success, None on failure.
-    Idempotent — safe to call on every plugin start.
+    Idempotent (``exist_ok=True``). Returns the directory
+    path on success or ``None`` on OSError (logged at
+    WARN — typically permission denied on locked-down
+    setups).
+
+    Args:
+        config: optional ``ConfigManager``.
+
+    Returns:
+        Created/existing directory path, or ``None`` on
+        failure.
     """
     path = Path(get_games_map_path(config))
     parent = path.parent
@@ -264,6 +277,8 @@ def ensure_games_map_dir(config: ConfigManager | None = None) -> str | None:
         return str(parent)
     except OSError as e:
         logger.warning(
-            "[paths] mkdir %s failed: %s", parent, e,
+            "[paths] mkdir %s failed: %s",
+            parent,
+            e,
         )
         return None

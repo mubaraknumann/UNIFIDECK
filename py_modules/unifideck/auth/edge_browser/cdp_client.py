@@ -1,26 +1,24 @@
-"""auth.edge_browser.cdp_client — Chrome DevTools Protocol client for Edge.
+"""Minimal sync CDP client tuned for the Edge auth/xCloud flows.
 
-Extracted from edge_browser.py to isolate CDP-level concerns (the HTTP
-protocol used to enumerate tabs, navigate, and close targets) from the
-browser process lifecycle and the installer. This module knows nothing
-about subprocess management — it only speaks to a running Edge
-instance through its ``--remote-debugging-port=N`` endpoint.
+OP-15c6 | py_modules/unifideck/auth/edge_browser/cdp_client.py
 
-The module is imported by ``EdgeBrowser`` which composes an
-``EdgeCDPClient`` as ``self._cdp`` and delegates the four pure-CDP
-methods through thin stubs, preserving the pre-split public API for
-``_list_cdp_targets``, ``_get_browser_ws_url``, ``navigate_tab``, and
-``_close_all_cdp_targets``.
+Sync I/O on top of ``urllib`` rather than aiohttp —
+keeps the dependency surface minimal and works inside
+``asyncio.to_thread`` calls. The class is built around
+the few CDP endpoints we actually use:
 
-Responsibilities:
- - Probe the CDP /json/version endpoint (used for up/down checks)
- - List CDP targets (tabs + workers) via /json/list
- - Navigate a target to a URL via websocket (used after OAuth to
-   visit xbox.com so session cookies land in the shared profile)
- - Close all CDP targets via /json/close/{id}
+* ``/json/version`` — health check + browser-level WS;
+* ``/json/list`` — enumerate page targets;
+* ``/json/close/<id>`` — close a specific target;
+* WebSocket ``Page.navigate`` — drive the page to a
+  URL with load-event tracking.
 
-Reference: edge_browser.py pre-split, lines 430-598.
+For the websocket path, we drop down to the
+``websockets`` library directly since this client
+needs only a single short-lived connection per
+navigation.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -32,30 +30,34 @@ logger = logging.getLogger(__name__)
 
 
 class EdgeCDPClient:
-    """Pure-CDP client for a locally running Edge instance.
-
-    Constructor takes only the CDP port number; everything else is
-    derived from HTTP calls to ``http://127.0.0.1:{port}/json/*`` and
-    websocket connections to target-specific URLs returned by the
-    /json/list endpoint.
-
-    Usage::
-
-        cdp = EdgeCDPClient(cdp_port=9222)
-        if cdp.probe_cdp():   # port is up
-            await cdp.navigate_tab("https://xbox.com")
-            await cdp.close_all_targets(log_prefix="auth")
-    """
+    """Tiny CDP client for one Edge instance at a known port."""
 
     def __init__(self, cdp_port: int) -> None:
-        """Build a CDP client bound to the given debugging port."""
+        """Capture the port number; nothing else to set up.
+
+        Args:
+            cdp_port: ``--remote-debugging-port``
+                value Edge was launched with.
+        """
         self.cdp_port = cdp_port
 
-    # ── Lightweight probes ───────────────────────────────────────────
-
     def get_browser_ws_url(self) -> str | None:
-        """Return the live CDP browser websocket URL, if the browser is up."""
+        """Hit ``/json/version`` and return the browser-level WS URL.
+
+        Used by ``close_all_targets`` to detect when
+        all pages have actually closed (Edge's
+        ``/json/version`` stops responding once the
+        browser exits).
+
+        Returns ``None`` on any failure — short
+        timeout (1 s) is intentional, the probe is
+        in a tight loop.
+
+        Returns:
+            WebSocket URL string, or ``None``.
+        """
         import urllib.request as _req
+
         try:
             with _req.urlopen(
                 f"http://127.0.0.1:{self.cdp_port}/json/version",
@@ -64,24 +66,42 @@ class EdgeCDPClient:
                 data = json.loads(r.read().decode())
                 ws_url = data.get("webSocketDebuggerUrl")
                 return ws_url if ws_url else None
-        except Exception:  # noqa: BLE001 — probe must never raise
+        except Exception:
             return None
 
     def probe_cdp(self) -> bool:
-        """Blocking probe of /json/version — True if the browser answers."""
+        """Boolean health check on the CDP HTTP endpoint.
+
+        Used during launch to detect when Edge has
+        finished starting up. Returns True the moment
+        ``/json/version`` responds; doesn't care about
+        the actual contents.
+
+        Returns:
+            True if responsive.
+        """
         import urllib.request
+
         try:
             with urllib.request.urlopen(
                 f"http://127.0.0.1:{self.cdp_port}/json/version",
                 timeout=1,
             ):
                 return True
-        except Exception:  # noqa: BLE001 — probe must never raise
+        except Exception:
             return False
 
     def list_targets(self) -> list[dict[str, Any]]:
-        """Return the current CDP targets exposed by the browser."""
+        """Hit ``/json/list`` and return parsed list of CDP target dicts.
+
+        Empty list on any failure or non-list
+        response (defensive).
+
+        Returns:
+            List of CDP target dicts (possibly empty).
+        """
         import urllib.request as _req
+
         try:
             with _req.urlopen(
                 f"http://127.0.0.1:{self.cdp_port}/json/list",
@@ -89,25 +109,47 @@ class EdgeCDPClient:
             ) as r:
                 data = json.loads(r.read().decode())
                 return data if isinstance(data, list) else []
-        except Exception:  # noqa: BLE001 — probe must never raise
+        except Exception:
             return []
 
-    # ── Navigation ───────────────────────────────────────────────────
-
-    async def navigate_tab(  # noqa: PLR0911 — intentional: one return per error code / routing branch
+    async def navigate_tab(
         self,
         url: str,
-        timeout: float = 15.0,  # noqa: ASYNC109 — navigation deadline
+        timeout: float = 15.0,
     ) -> bool:
-        """Navigate the first page target to *url* via CDP and wait for load.
+        """Drive the first page target to ``url`` via ``Page.navigate``.
 
-        Used after OAuth to visit ``xbox.com`` so session cookies are
-        established in the shared profile before the browser is closed.
-        Returns ``True`` if navigation succeeded, ``False`` on any error.
+        Four-step:
+
+        1. ``list_targets`` to find the first
+           type=``"page"`` target;
+        2. Open a short-lived websocket to its
+           ``webSocketDebuggerUrl``;
+        3. Send ``Page.enable`` (subscribes us to
+           page lifecycle events) + ``Page.navigate``;
+        4. ``_await_navigation_result`` waits for the
+           navigation ack + load event with the
+           supplied timeout.
+
+        Returns False with a WARN log on:
+
+        * No page target;
+        * No WS URL on the target (rare);
+        * ``websockets`` library not installed
+          (defensive);
+        * Any exception during the WS dance.
+
+        Args:
+            url: URL to navigate to.
+            timeout: overall wait for the load event.
+
+        Returns:
+            True on successful navigation.
         """
         targets = self.list_targets()
         page_target = next(
-            (t for t in targets if t.get("type") == "page"), None,
+            (t for t in targets if t.get("type") == "page"),
+            None,
         )
         if not page_target:
             logger.warning("[Edge] navigate_tab: no page target found")
@@ -125,39 +167,69 @@ class EdgeCDPClient:
                 "[Edge] navigate_tab: websockets not available",
             )
             return False
-
         try:
             async with websockets.connect(ws_url, close_timeout=3) as ws:
-                # Enable Page events so we receive load notifications
-                await ws.send(json.dumps({
-                    "id": 1,
-                    "method": "Page.enable",
-                    "params": {},
-                }))
-                # Wait for Page.enable ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "id": 1,
+                            "method": "Page.enable",
+                            "params": {},
+                        }
+                    )
+                )
                 try:
                     await asyncio.wait_for(ws.recv(), timeout=3)
                 except TimeoutError:
-                    # timed out; best-effort, fall through
                     pass
-                # Navigate
-                await ws.send(json.dumps({
-                    "id": 2,
-                    "method": "Page.navigate",
-                    "params": {"url": url},
-                }))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "id": 2,
+                            "method": "Page.navigate",
+                            "params": {"url": url},
+                        }
+                    )
+                )
                 deadline = asyncio.get_event_loop().time() + timeout
                 return await _await_navigation_result(
-                    ws, deadline, url,
+                    ws,
+                    deadline,
+                    url,
                 )
-        except Exception as exc:  # noqa: BLE001 — navigation boundary
+        except Exception as exc:
             logger.warning("[Edge] navigate_tab failed: %s", exc)
             return False
 
-    # ── Close all targets ────────────────────────────────────────────
-
     async def close_all_targets(self, *, log_prefix: str) -> bool:
-        """Close all live targets exposed on this browser's CDP port."""
+        """Send ``/json/close/<id>`` for every target and wait for browser shutdown.
+
+        Used during a graceful Edge shutdown — closing
+        every CDP target causes Edge to exit cleanly
+        (last-window-closed semantics).
+
+        Per-target:
+
+        * Skip empty ids;
+        * Run the close HTTP call in a thread (urllib
+          is sync);
+        * 404 errors are silenced (target already
+          gone — race condition between list and
+          close);
+        * Other HTTP/exception → WARN log + continue.
+
+        After closes, polls ``get_browser_ws_url`` up
+        to 5 s; once it stops responding, the browser
+        has fully exited.
+
+        Args:
+            log_prefix: ``"auth"`` / ``"xCloud"`` for
+                log context.
+
+        Returns:
+            True if any target was closed (vs nothing
+            to do).
+        """
         targets = self.list_targets()
         if not targets:
             return False
@@ -165,10 +237,13 @@ class EdgeCDPClient:
         import urllib.request as _req
 
         def _close_target(target_id: str) -> None:
-            """Blocking helper: one HTTP close call."""
+            """Sync HTTP GET for one ``/json/close/<id>`` endpoint.
+
+            Args:
+                target_id: CDP target id.
+            """
             with _req.urlopen(
-                f"http://127.0.0.1:{self.cdp_port}"
-                f"/json/close/{target_id}",
+                f"http://127.0.0.1:{self.cdp_port}/json/close/{target_id}",
                 timeout=2,
             ) as r:
                 r.read()
@@ -185,12 +260,16 @@ class EdgeCDPClient:
                 if e.code != 404:
                     logger.warning(
                         "[Edge] Could not close %s target %s: %s",
-                        log_prefix, target_id, e,
+                        log_prefix,
+                        target_id,
+                        e,
                     )
-            except Exception as e:  # noqa: BLE001 — best-effort close loop
+            except Exception as e:
                 logger.warning(
                     "[Edge] Could not close %s target %s: %s",
-                    log_prefix, target_id, e,
+                    log_prefix,
+                    target_id,
+                    e,
                 )
         if closed_any:
             for _ in range(20):
@@ -198,24 +277,42 @@ class EdgeCDPClient:
                 if not self.get_browser_ws_url():
                     break
             logger.info(
-                "[Edge] Closed %s browser targets via "
-                "DevTools HTTP",
+                "[Edge] Closed %s browser targets via DevTools HTTP",
                 log_prefix,
             )
         return closed_any
 
 
 async def _await_navigation_result(
-    ws: Any, deadline: float, url: str,
+    ws: Any,
+    deadline: float,
+    url: str,
 ) -> bool:
-    """Poll a CDP websocket for ``Page.navigate`` + frame-stopped-loading.
+    """Pump the WebSocket waiting for navigate ack + load event.
 
-    Returns True on successful navigation (id=2 ack without
-    error + a Page.frameStoppedLoading or Page.loadEventFired
-    event), or True if only the ack was seen before the
-    deadline (cookies still end up set, just the full load
-    event was missed). Returns False on error payload or
-    deadline reached without ack.
+    State machine:
+
+    * ``id=2`` reply → either ``"error"`` (return
+      False) or success (set ``got_navigate_ok``,
+      keep listening for load).
+    * ``method=Page.frameStoppedLoading`` or
+      ``Page.loadEventFired`` with
+      ``got_navigate_ok=True`` → success.
+
+    Timeout (loop exhausted) with
+    ``got_navigate_ok=True`` → log a "load timed
+    out" line + return True. The navigation itself
+    succeeded; the page just took longer than the
+    timeout. Caller decides whether that's OK.
+
+    Args:
+        ws: open ``websockets`` connection.
+        deadline: monotonic deadline.
+        url: target URL (for logging).
+
+    Returns:
+        True on navigation success (with or without
+        load event).
     """
     got_navigate_ok = False
     while asyncio.get_event_loop().time() < deadline:
@@ -224,12 +321,12 @@ async def _await_navigation_result(
             break
         try:
             raw = await asyncio.wait_for(
-                ws.recv(), timeout=remaining,
+                ws.recv(),
+                timeout=remaining,
             )
         except TimeoutError:
             break
         msg = json.loads(raw)
-        # Response to our Page.navigate call.
         if msg.get("id") == 2:
             if "error" in msg:
                 logger.warning(
@@ -238,24 +335,23 @@ async def _await_navigation_result(
                 )
                 return False
             got_navigate_ok = True
-        # Frame finished loading.
         if (
-            msg.get("method") in (
+            msg.get("method")
+            in (
                 "Page.frameStoppedLoading",
                 "Page.loadEventFired",
             )
             and got_navigate_ok
         ):
             logger.info(
-                "[Edge] navigate_tab: loaded %s", url,
+                "[Edge] navigate_tab: loaded %s",
+                url,
             )
             return True
-    # Navigation started but page didn't fully load — still OK
-    # for cookies.
     if got_navigate_ok:
         logger.info(
-            "[Edge] navigate_tab: navigation sent, "
-            "load timed out for %s", url,
+            "[Edge] navigate_tab: navigation sent, load timed out for %s",
+            url,
         )
         return True
     return False

@@ -1,24 +1,36 @@
-"""GOG library facade — owned games + installed-state + display metadata.
+"""GOG library reader — fetch the user's owned games + match local installs.
 
-OP-50c | py_modules/unifideck/stores/gog/library.py
+OP-22-gog-library | py_modules/unifideck/stores/gog/library.py
 
-``GOGLibrary`` is the public entry point of the library logic for the
-GOG store. Responsibilities:
+Three responsibilities:
 
-* fetch the owned-games list from GOG.com via the ``embed.gog.com``
-  account endpoint (REST, JSON);
-* scan ``download_dir`` for installed games (via ``.unifideck-id``
-  markers);
-* merge owned-list + install-state into uniform ``GameRecord`` entries
-  ready for display in the UI;
-* trigger marker migration (``library_migration.py``, OP-50d) on first
-  run to upgrade pre-v6 markers to the canonical JSON format.
+1. **Auth verification** — ``is_available``
+   probes ``/userData.json`` to confirm tokens
+   are valid, with a 401-refresh-retry loop;
+2. **Library fetch** — paginated walk through
+   ``/account/getFilteredProducts`` to build the
+   list of owned games;
+3. **Install detection** — scan the download dir
+   for ``.unifideck-id`` markers (preferred) or
+   goggame info files (fallback) to identify
+   installed games.
 
-In-memory cached; invalidated on auth state change, install/uninstall,
-or manual user refresh.
+The library API doesn't expose install paths —
+those are discovered by scanning the local disk
+in ``get_installed`` / ``get_installed_game_info``.
+
+The marker migration helper (``_MarkerMigration``)
+is invoked from ``migrate_old_markers`` — typically
+called once at first library sync per session.
+
+URL safety: ``is_available`` refuses to probe a
+non-HTTPS userdata URL — defensive measure
+against misconfigured ``base_url`` that could
+otherwise leak the bearer token in clear text.
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -27,6 +39,7 @@ import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
+
 from ...core.types import Game
 from .config import GOGConfig
 from .http import build_ssl_context, fetch_json_get
@@ -34,12 +47,19 @@ from .library_migration import _MarkerMigration
 from .tokens import GOGTokenManager
 
 logger = logging.getLogger(__name__)
+
 _INSTALL_MARKER = ".unifideck-id"
 _GOG_LIBRARY_TIMEOUT_S = 15.0
 
 
 class GOGLibrary:
-    """Goglibrary."""
+    """Read-only library + install detector for the GOG store.
+
+    Holds the config, tokens, and exe-finder
+    callable. The migration helper is created at
+    construction time but only runs when
+    ``migrate_old_markers`` is invoked.
+    """
 
     def __init__(
         self,
@@ -47,18 +67,46 @@ class GOGLibrary:
         tokens: GOGTokenManager,
         exe_finder: Callable[[str], str | None] | None = None,
     ) -> None:
-        """Initialize the instance."""
+        """Stash dependencies + build the migration helper.
+
+        Args:
+            config: ``GOGConfig``.
+            tokens: ``GOGTokenManager``.
+            exe_finder: optional callable
+                resolving exe paths (typically
+                ``GOGExeResolver.find``). When
+                ``None``, install info is
+                returned without an executable.
+        """
         self._config = config
         self._tokens = tokens
         self._find_exe = exe_finder
         self._migration = _MarkerMigration(self)
 
     def migrate_old_markers(self) -> dict[str, int]:
-        """Migrate old markers."""
+        """Run the one-shot marker migration. Returns count summary.
+
+        Returns:
+            ``{"migrated": int, "skipped": int}``.
+        """
         return self._migration.migrate_old_markers()
 
     async def is_available(self) -> bool:
-        """Check whether available."""
+        """Probe ``/userData.json`` to verify tokens are valid (with 401 refresh).
+
+        Pipeline:
+
+        1. If no tokens in memory, try
+           ``load()`` from disk; still no →
+           False;
+        2. Probe userdata;
+        3. 200 → True;
+        4. 401 → refresh + retry once;
+        5. Other status → False (logged at WARN).
+
+        Returns:
+            True iff the auth probe succeeded.
+        """
         if not self._tokens.has_tokens:
             loaded = await self._tokens.load()
             if not loaded:
@@ -85,7 +133,20 @@ class GOGLibrary:
         return False
 
     async def _probe_userdata(self) -> int:
-        """Probe userdata."""
+        """Single auth probe — return HTTP status code (0 on network error).
+
+        Refuses non-HTTPS URLs as a defensive
+        measure — without this check, a
+        misconfigured ``base_url`` could leak
+        the bearer token in clear text.
+
+        5-second timeout (this is a fast
+        liveness check, not a normal call).
+
+        Returns:
+            HTTP status, or 0 on
+            error/refused.
+        """
         url = f"{self._config.base_url}/userData.json"
         access = self._tokens.access_token
         if not access:
@@ -98,7 +159,13 @@ class GOGLibrary:
             return 0
 
         def _probe_sync() -> int:
-            """Probe sync."""
+            """Blocking urllib probe — returns status code or 0 on error.
+
+            Catches HTTPError to extract its code
+            (not all status codes raise) and
+            falls through to 0 on any other
+            exception.
+            """
             try:
                 ctx = build_ssl_context()
                 req = urllib.request.Request(
@@ -126,7 +193,25 @@ class GOGLibrary:
         return await asyncio.to_thread(_probe_sync)
 
     async def fetch_library(self) -> list[Game]:
-        """Fetch library."""
+        """Paginated walk through the GOG library API, returning all owned games.
+
+        First page reveals ``totalPages`` and
+        ``totalGamesFound`` (logged at INFO).
+        Subsequent pages walk until exhausted.
+
+        Per-page failure → log + break (we return
+        whatever we managed to collect). Empty/
+        absent ``products`` field per page just
+        means an empty page, not an error.
+
+        ``Game`` objects are built with
+        ``installed=False`` — installed status
+        is reconciled later by the store via
+        ``get_installed``.
+
+        Returns:
+            All ``Game`` objects, possibly empty.
+        """
         if not self._tokens.access_token:
             logger.warning("[GOGLibrary] not authenticated")
             return []
@@ -179,7 +264,26 @@ class GOGLibrary:
         return games
 
     async def get_game_slug(self, game_id: str) -> str | None:
-        """Get game slug."""
+        """Resolve a game's URL slug (used for storefront / DLC URLs).
+
+        Two-stage:
+
+        1. ``/products/<id>?locale=en-US``
+           returns a ``slug`` field directly;
+        2. Fallback: parse the
+           ``links.product_card`` URL for the
+           slug after ``/game/``.
+
+        Returns ``None`` on any failure
+        (auth refresh fail, non-dict response,
+        missing slug).
+
+        Args:
+            game_id: product id.
+
+        Returns:
+            Slug or ``None``.
+        """
         if not await self._tokens.refresh_if_stale():
             return None
         access = self._tokens.access_token
@@ -206,7 +310,19 @@ class GOGLibrary:
         return None
 
     def get_installed(self) -> list[str]:
-        """Get installed."""
+        """Scan the download dir for ``.unifideck-id`` markers; return game IDs.
+
+        Iterates top-level subdirs of the
+        download path; each subdir with a
+        valid marker contributes its game id.
+
+        Missing download dir → empty list
+        (no error). OSError during scan → log +
+        empty list.
+
+        Returns:
+            List of installed game ids.
+        """
         download_path = Path(
             self._config.download_dir,
         ).expanduser()
@@ -233,7 +349,28 @@ class GOGLibrary:
         return installed
 
     def get_installed_game_info(self, game_id: str) -> dict[str, str | None] | None:
-        """Get installed game info."""
+        """Find install path + exe for a specific game id.
+
+        Two match strategies:
+
+        1. ``.unifideck-id`` marker matches the
+           requested ``game_id`` — primary path;
+        2. No marker found but a goggame info
+           file with matching id exists in the
+           dir — fallback for cases where the
+           marker was deleted but the install
+           survived.
+
+        Returns ``None`` if neither match — game
+        isn't installed.
+
+        Args:
+            game_id: product id.
+
+        Returns:
+            ``{install_path, executable}`` dict
+            or ``None``.
+        """
         download_path = Path(
             self._config.download_dir,
         ).expanduser()
@@ -272,7 +409,25 @@ class GOGLibrary:
 
     @staticmethod
     def _read_marker(game_dir: str) -> str | None:
-        """Read marker."""
+        """Parse a ``.unifideck-id`` marker file — handles legacy + new formats.
+
+        Three valid shapes:
+
+        * JSON dict with ``game_id`` or
+          ``gameId`` field (new format);
+        * JSON string/number (legacy interim);
+        * Raw text (oldest legacy).
+
+        Empty file or unreadable → ``None``.
+        Falls through to raw-text fallback on
+        any JSON parse error.
+
+        Args:
+            game_dir: install dir.
+
+        Returns:
+            Game id or ``None``.
+        """
         marker_path = Path(game_dir) / _INSTALL_MARKER
         if not marker_path.is_file():
             return None
@@ -300,11 +455,20 @@ class GOGLibrary:
 
     @staticmethod
     def _has_goggame_info(game_dir: str, game_id: str) -> bool:
-        """Has goggame info."""
-        for candidate in (
-            game_dir,
-            str(Path(game_dir) / "game"),
-        ):
+        """Check for ``goggame-<id>.info`` in the install dir or its ``game/`` subdir.
+
+        Mirrors the search pattern used
+        throughout the GOG codebase: try the root
+        first, then the ``game/`` subdirectory.
+
+        Args:
+            game_dir: install root.
+            game_id: product id.
+
+        Returns:
+            True iff the marker file exists.
+        """
+        for candidate in (game_dir, str(Path(game_dir) / "game")):
             try:
                 if not Path(candidate).is_dir():
                     continue
@@ -316,7 +480,20 @@ class GOGLibrary:
         return False
 
     def _resolve_exe(self, install_path: str) -> str | None:
-        """Resolve exe."""
+        """Call the injected exe-finder, defensively swallow exceptions.
+
+        The exe-finder is third-party callable
+        territory (typically
+        ``GOGExeResolver.find``). We don't want
+        a resolver bug to crash library
+        reading, so we catch + log.
+
+        Args:
+            install_path: install root.
+
+        Returns:
+            Exe path, or ``None``.
+        """
         if self._find_exe is None:
             return None
         try:
@@ -328,12 +505,21 @@ class GOGLibrary:
             )
             return None
 
-    async def _fetch_json(
-        self,
-        url: str,
-        headers: dict[str, str] | None = None,
-    ) -> Any | None:
-        """Fetch JSON."""
+    async def _fetch_json(self, url: str, headers: dict[str, str] | None = None) -> Any | None:
+        """Thin wrapper around ``fetch_json_get`` with library defaults.
+
+        Sets bearer to the current access token,
+        UA from config, 15-second timeout, log
+        prefix ``[GOGLibrary]``.
+
+        Args:
+            url: target URL.
+            headers: extra headers (merged on top
+                of defaults).
+
+        Returns:
+            Parsed JSON or ``None``.
+        """
         return await fetch_json_get(
             url,
             bearer=self._tokens.access_token,

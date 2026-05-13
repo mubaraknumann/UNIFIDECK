@@ -1,23 +1,20 @@
-"""bootstrap.teardown — clean shutdown sequence for the plugin.
+"""Plugin teardown — symmetric counterpart to ``boot_plugin``.
 
-Called from the Decky lifecycle hook ``Plugin._unload`` when the
-plugin is being deactivated (reload, uninstall, or Steam Deck
-shutdown). Ordering matters:
+OP-23d | py_modules/unifideck/bootstrap/teardown.py
 
-  1. Stop every Layer-5 service — they may still be emitting
-     events on the bus; letting them run past this point would
-     cause writes to dead collaborators.
-  2. Stop the PriorityDispatcher — drains the pending queue
-     so in-flight events complete before teardown continues.
-  3. Clear the EventBus — releases all subscriptions; anything
-     that still holds a reference to the bus after this point
-     becomes a no-op emitter.
+Reverses the boot sequence in the same order:
 
-Each step logs its completion so operators debugging a stuck
-unload can identify which stage failed. None of the steps
-raises — teardown is best-effort; a failure in one stage must
-not prevent the later stages from running.
+1. Stop every Layer-5 service (cancels long-running
+   tasks, flushes pending writes).
+2. Stop the ``PriorityDispatcher`` if it was wired (drains
+   the per-priority queues).
+3. Clear the bus's subscriber tables.
+
+Each step logs at INFO so the unload trace is visible
+in plugin logs — useful when diagnosing "plugin won't
+reload" issues.
 """
+
 from __future__ import annotations
 
 import logging
@@ -29,17 +26,18 @@ logger = logging.getLogger(__name__)
 
 
 async def unload_plugin(plugin: Any) -> None:
-    """Execute the full teardown sequence for ``plugin``.
+    """Tear down every layer attached to ``plugin`` in reverse boot order.
+
+    Defensive ``hasattr`` check on the dispatcher
+    handles the edge case where boot failed partway
+    through (the dispatcher might not have been wired
+    yet). ``bus.clear()`` is called unconditionally
+    because the bus is the first thing built and the
+    last thing to go.
 
     Args:
-        plugin: The ``Plugin`` instance being unloaded. Expected
-            attributes: ``services``, ``dispatcher`` (optional),
-            ``bus``.
-
-    Never raises — teardown is best-effort. If an exception
-    propagates from a service stop, the caller (Decky's lifecycle
-    hook) would log it and still proceed; we preserve that
-    contract by letting stop_all_services handle its own errors.
+        plugin: the plugin instance (must have ``services``
+            and ``bus`` attributes from a prior boot).
     """
     await stop_all_services(plugin.services)
     if hasattr(plugin, "dispatcher") and plugin.dispatcher is not None:

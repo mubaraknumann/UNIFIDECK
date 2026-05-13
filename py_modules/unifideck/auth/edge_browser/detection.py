@@ -1,20 +1,29 @@
-"""auth.edge_browser.detection — Edge install detection utilities.
+"""Edge presence detection — Flatpak preferred, native fallback.
 
-Pure-function helpers that probe the system to determine whether
-Microsoft Edge is present. Used both by ``EdgeInstaller`` (to
-decide if install is needed) and by ``EdgeBrowser.is_installed``
-(for UI availability checks).
+OP-15c1 | py_modules/unifideck/auth/edge_browser/detection.py
 
-Extracted from ``installer.py`` on 2026-04-18 to separate the
-read-only detection concern from the mutate-the-system install
-concern. The two were conflated in a single class; keeping them
-apart makes the detection side trivially testable without any
-install side effects.
+Detection priority:
 
-Functions here take ``clean_env_fn`` as first argument rather
-than being methods of a class — detection has no instance state,
-it's a series of subprocess probes.
+1. **Flatpak** (``com.microsoft.Edge``) — preferred
+   because it's the standard install path on SteamOS
+   and is sandboxed;
+2. **Native binaries** (``microsoft-edge`` /
+   ``microsoft-edge-stable``) — works on regular
+   distros.
+
+Two probe levels:
+
+* ``find_edge_cmd`` returns the argv prefix
+  (``["flatpak", "run", "com.microsoft.Edge"]`` or
+  ``["microsoft-edge"]``) so callers can append per-
+  launch args.
+* ``is_edge_installed`` is the boolean wrapper.
+
+All ``subprocess`` calls receive a sanitised env via
+the ``clean_env_fn`` callback (avoids leaking the
+plugin's env vars into the child).
 """
+
 from __future__ import annotations
 
 import logging
@@ -27,22 +36,33 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-
-# Flatpak app identifiers. Only Microsoft Edge is supported because
-# it is the only browser that ships native xCloud gamepad + Steam
-# Deck controller support. Shared with installer.py.
 _FLATPAK_APPS = ("com.microsoft.Edge",)
-# Native binary names to search if no flatpak found (Edge only)
 _NATIVE_BINS = ("microsoft-edge", "microsoft-edge-stable")
 
 
 def flatpak_remote_names(
-    clean_env_fn: Callable[[], dict], scope: str,
+    clean_env_fn: Callable[[], dict],
+    scope: str,
 ) -> set[str]:
-    """Return configured flatpak remote names for the given scope.
+    """Return the names of every configured Flatpak remote at the given scope.
 
-    Empty set is a valid "no remotes" signal — caller shouldn't
-    treat it as an error.
+    Used by the installer to know whether
+    ``flathub`` is already enabled. Three guards:
+
+    * Invalid scope (not ``--user`` or ``--system``)
+      → empty set;
+    * Subprocess exception or non-zero exit →
+      empty set;
+    * Header row (``"name"``) is dropped on parse.
+
+    Args:
+        clean_env_fn: callable returning sanitised
+            env dict for the subprocess.
+        scope: ``"--user"`` or ``"--system"``.
+
+    Returns:
+        Set of remote names (lowercase preserved
+        from the output).
     """
     if scope not in ("--user", "--system"):
         return set()
@@ -55,10 +75,7 @@ def flatpak_remote_names(
             env=clean_env_fn(),
             check=False,
         )
-    except Exception:  # noqa: BLE001, S110 — flatpak may be missing
-        # Intentional: flatpak may be missing (non-Deck), or the
-        # scope unsupported. An empty set is a "no remotes" signal
-        # and is fine for callers.
+    except Exception:
         return set()
     if result.returncode != 0:
         return set()
@@ -74,14 +91,25 @@ def flatpak_remote_names(
 def find_edge_cmd(
     clean_env_fn: Callable[[], dict],
 ) -> list[str] | None:
-    """Find an available Microsoft Edge browser command.
+    """Return the argv prefix to launch Edge, or ``None`` if not installed.
 
-    Checks both ``--user`` and ``--system`` flatpak installations,
-    then falls back to native Edge binaries.
+    Two-stage probe:
+
+    1. If ``flatpak`` is on PATH, try each known
+       Flatpak app id via ``_try_flatpak_app``;
+    2. Otherwise (or no Flatpak hit) try native
+       binaries from PATH.
+
+    Returns ``None`` only when both probes fail —
+    the caller's signal to run the installer.
+
+    Args:
+        clean_env_fn: env-builder callback.
 
     Returns:
-      Command as a list (for subprocess), or ``None``.
-
+        Argv prefix list (e.g.
+        ``["flatpak", "run", "com.microsoft.Edge"]``),
+        or ``None``.
     """
     if shutil.which("flatpak"):
         for app_id in _FLATPAK_APPS:
@@ -95,33 +123,47 @@ def find_edge_cmd(
 
 
 def _try_flatpak_app(
-    app_id: str, clean_env_fn: Callable[[], dict],
+    app_id: str,
+    clean_env_fn: Callable[[], dict],
 ) -> list[str] | None:
-    """Probe ``flatpak info`` for ``app_id`` in user and system scopes.
+    """Probe ``flatpak info <flag> <app_id>`` at user + system scope.
 
-    Returns the runnable command list if the app is installed
-    in either scope, None if neither scope has it OR if the
-    probe itself raised (timeout, missing flatpak binary after
-    a race). The caller just moves to the next app_id / native
-    fallback on None.
+    Returns the matching ``flatpak run`` argv on the
+    first scope that knows the app. Any subprocess
+    exception is swallowed (probe is best-effort).
+
+    Args:
+        app_id: e.g. ``"com.microsoft.Edge"``.
+        clean_env_fn: env-builder callback.
+
+    Returns:
+        Argv prefix or ``None``.
     """
     try:
         for flag in ("--user", "--system"):
             result = subprocess.run(
                 ["flatpak", "info", flag, app_id],
-                capture_output=True, timeout=5,
+                capture_output=True,
+                timeout=5,
                 env=clean_env_fn(),
             )
             if result.returncode == 0:
                 return ["flatpak", "run", app_id]
-    except Exception:  # noqa: BLE001, S110 — fall through
-        # Flatpak probe can raise many things (subprocess
-        # timeout, OSError from missing binary after race).
-        # Fall through to the next app_id / native fallback.
+    except Exception:
         pass
     return None
 
 
 def is_edge_installed(clean_env_fn: Callable[[], dict]) -> bool:
-    """Return True if Microsoft Edge is available (flatpak or native)."""
+    """Boolean wrapper around ``find_edge_cmd``.
+
+    Convenience for callers that don't need the
+    argv prefix.
+
+    Args:
+        clean_env_fn: env-builder callback.
+
+    Returns:
+        True if any Edge form was detected.
+    """
     return find_edge_cmd(clean_env_fn) is not None

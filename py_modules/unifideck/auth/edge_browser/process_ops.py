@@ -1,23 +1,24 @@
-"""auth/edge_browser/process_ops.py — Edge process lifecycle helpers.
+"""Process lifecycle helpers — graceful kill + startup-crash detection.
 
-Extracted on 2026-04-20 from ``edge.py`` to keep ``EdgeBrowser``
-as a pure façade. The two functions here handle the only
-real logic left in ``EdgeBrowser`` after the 4-sub-component
-decomposition (CDP client, installer, profile manager, launch):
+OP-15c3 | py_modules/unifideck/auth/edge_browser/process_ops.py
 
- - ``graceful_kill(proc)`` — terminate with SIGTERM/SIGKILL,
-   preferring the process group when available so Chromium
-   renderer children get reaped too, falling back to the
-   single-process path on platforms without pgid support.
- - ``wait_and_check_crash(proc, probe_cdp)`` — poll at 500 ms
-   for up to 10 s: return False if the process exited during
-   startup (crash), True when CDP responds or the timeout is
-   hit with the process still alive.
+Edge has two operational quirks the plugin works
+around:
 
-Both are pure in the sense of taking the process/probe as
-explicit arguments — no ``self``, no hidden state on the
-class, so they test cleanly with a subprocess stub.
+* It buffers cookies in memory and only writes them
+  to disk on a clean shutdown — so a hard kill loses
+  the auth cookies we just captured. Hence the
+  ``_COOKIE_FLUSH_DELAY_S`` pause before SIGTERM.
+* It can crash silently within the first 10 seconds
+  if Gamescope's compositor isn't ready. Hence the
+  poll loop that watches both ``proc.poll()`` and
+  the CDP port.
+
+Two-tier kill: SIGTERM (10 s grace) → SIGKILL (3 s
+grace). Process-group signal preferred over per-pid
+to kill Edge's helper processes too.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -42,41 +43,64 @@ _CRASH_LOG_TAIL_CHARS = 300
 
 
 def graceful_kill(proc: subprocess.Popen[bytes] | None) -> None:
-    """Stop the Edge auth browser cleanly, SIGKILL on timeout.
+    """Stop Edge cleanly so cookies flush; force-kill on timeout.
 
-    Waits 1 s before SIGTERM so cookies can flush to disk, then
-    escalates to SIGKILL if the process hasn't exited after 10 s.
+    Four-step:
 
-    Does NOT ``pkill`` by profile name — that would kill game
-    sessions launched by the launcher sharing the same profile.
-    Does not touch the profile state — callers are expected to
-    call ``cleanup_stale_profile_state`` themselves if needed.
+    1. ``time.sleep(1)`` — gives Edge a moment to
+       finish writing cookies if we caught the
+       redirect mid-write;
+    2. Send SIGTERM to the process group (catches
+       helpers);
+    3. ``wait(10s)`` — typical clean shutdown;
+    4. On timeout → SIGKILL via ``_force_kill``.
+
+    ``None`` arg → no-op (safe to call when proc is
+    unset). Errors during the kill log at DEBUG and
+    are swallowed — there's nothing actionable we
+    can do.
+
+    Args:
+        proc: ``Popen`` instance or ``None``.
     """
     if proc is None:
         return
     try:
         import time
+
         time.sleep(_COOKIE_FLUSH_DELAY_S)
         _signal_group_or_single(proc, signal.SIGTERM)
         proc.wait(timeout=_TERM_TIMEOUT_S)
         logger.info("[Edge] Auth browser closed (cookies flushed)")
     except subprocess.TimeoutExpired:
         _force_kill(proc)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.debug("[Edge] Auth browser kill error (non-fatal): %s", e)
 
 
 def _signal_group_or_single(
-    proc: subprocess.Popen[bytes], sig: int,
+    proc: subprocess.Popen[bytes],
+    sig: int,
 ) -> None:
-    """Send ``sig`` to the process group if one exists, else to PID.
+    """Send ``sig`` to the process group; fall back to single-process kill.
 
-    Chromium spawns renderer subprocesses in its own process
-    group; signalling the group reaps them atomically. On the
-    rare systems where ``getpgid`` fails (permission, namespaces,
-    race with reaping), we fall back to signalling the leader
-    only — some renderers may linger but will be cleaned up by
-    the init process.
+    Process-group signalling kills Edge's helper
+    processes too (renderer, GPU, network service).
+    Without it, those linger and may keep the CDP
+    port occupied.
+
+    Guards:
+
+    * ``getpgid`` fails → fall back to per-pid;
+    * The group is our own process group →
+      fall back to per-pid (don't suicide).
+
+    For SIGTERM → ``terminate``; for SIGKILL →
+    ``kill``. Other signals are not used here.
+
+    Args:
+        proc: target ``Popen``.
+        sig: signal number.
     """
     pgid = _safe_getpgid(proc.pid)
     if pgid is not None and pgid != os.getpgrp():
@@ -88,33 +112,36 @@ def _signal_group_or_single(
 
 
 def _safe_getpgid(pid: int) -> int | None:
-    """Return ``os.getpgid(pid)`` or None on any error.
+    """``os.getpgid`` wrapper returning ``None`` on any failure.
 
-    Raced reap, permission denied, and missing-pid all degrade
-    to a None return — callers interpret that as "fall back to
-    single-process signalling".
+    Args:
+        pid: target pid.
+
+    Returns:
+        Process group id, or ``None``.
     """
     try:
         return os.getpgid(pid)
-    except Exception:  # noqa: BLE001
-        # process already reaped, no permission, namespace quirk
+    except Exception:
         return None
 
 
 def _force_kill(proc: subprocess.Popen[bytes]) -> None:
-    """SIGKILL escalation when SIGTERM didn't stop the process.
+    """Send SIGKILL after SIGTERM timeout, wait briefly for reap.
 
-    Best-effort: if the kill itself fails or the post-wait
-    times out again, we log and move on — at that point the
-    process is either stuck in uninterruptible sleep (kernel
-    bug territory) or already gone.
+    Last-resort path triggered by ``graceful_kill``
+    when the SIGTERM grace expired. All failures
+    swallowed — we're past the point where the
+    caller can usefully recover.
+
+    Args:
+        proc: target ``Popen``.
     """
     logger.debug("[Edge] Auth browser didn't exit -- sending SIGKILL")
     try:
         _signal_group_or_single(proc, signal.SIGKILL)
         proc.wait(timeout=_KILL_TIMEOUT_S)
-    except Exception:  # noqa: BLE001, S110 — kill is best-effort
-        # process stuck in D state, or race; nothing more to do
+    except Exception:
         pass
 
 
@@ -123,22 +150,35 @@ async def wait_and_check_crash(
     probe_cdp: Callable[[], bool],
     log_file: str,
 ) -> bool:
-    """Poll for Edge startup, return False if the process crashed.
+    """Poll for either a process exit or a CDP-port success.
 
-    Called at the start of the auth monitor task. Polls every
-    500 ms for up to 10 s to allow the browser time to start on
-    loaded systems.
+    20 iterations × 500 ms = 10 second window. Each
+    iteration:
+
+    * If proc exited → log the stderr tail + return
+      False (crash);
+    * If ``probe_cdp()`` returns True → return True
+      (alive + responsive);
+    * Otherwise sleep + retry.
+
+    Timeout (loop exhausted) → return True with a
+    WARN log. The CDP port not responding doesn't
+    necessarily mean Edge crashed — it might just
+    be slow on first launch.
+
+    ``probe_cdp`` is sync (small socket connect) but
+    called via ``to_thread`` so it doesn't block
+    the event loop.
+
+    Args:
+        proc: process to monitor.
+        probe_cdp: callable returning whether CDP is
+            responsive.
+        log_file: path to the stderr log file (for
+            crash tail).
 
     Returns:
-        True if CDP became responsive, or the process is still
-            alive after the full polling window (let the caller
-            retry CDP); False if the process exited during
-            startup (crash).
-
-    ``probe_cdp`` is invoked in a thread (blocking TCP probe is
-    expected) and must return True when the CDP WebSocket
-    endpoint is reachable. ``log_file`` is peeked on crash to
-    surface the last stderr in the warning log.
+        False on detected crash, True otherwise.
     """
     if proc is None:
         return False
@@ -150,22 +190,32 @@ async def wait_and_check_crash(
         if await asyncio.to_thread(probe_cdp):
             return True
     logger.warning(
-        "[Edge] Auth browser started but CDP port not "
-        "responding after %ds",
+        "[Edge] Auth browser started but CDP port not responding after %ds",
         int(_STARTUP_POLL_STEPS * _STARTUP_POLL_INTERVAL_S),
     )
-    return True  # process is alive, let caller retry CDP
+    return True
 
 
 def _log_crash_tail(log_file: str) -> None:
-    """Best-effort read of the Edge log after a startup crash."""
+    """Read the tail of Edge's stderr log + ERROR-log it for diagnostics.
+
+    Truncates to the last
+    ``_CRASH_LOG_TAIL_CHARS`` (300 chars) — enough
+    to capture the typical crash trailer without
+    flooding the log. Read errors are silently
+    ignored (we still want the ERROR log even with
+    no detail).
+
+    Args:
+        log_file: path to Edge's stderr log file.
+    """
     err = ""
     try:
         with Path(log_file).open() as f:
             err = f.read()[:_CRASH_LOG_TAIL_CHARS]
-    except Exception:  # noqa: BLE001, S110 — log peek is optional
-        # log file missing/unreadable on Edge profile teardown
+    except Exception:
         pass
     logger.error(
-        "[Edge] Auth browser crashed before CDP. stderr: %s", err,
+        "[Edge] Auth browser crashed before CDP. stderr: %s",
+        err,
     )

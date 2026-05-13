@@ -1,21 +1,29 @@
-"""Startup-time config validation extracted from ``main.py``.
+"""Startup-time config validation orchestrator.
 
-Owns the 3-step validation sequence the plugin runs during
-``Plugin._main`` before stores are instantiated:
+OP-10c | py_modules/unifideck/config/startup.py
 
-  1. Validate ``defaults/config.json`` against the JSON schema.
-  2. Validate the user overrides file (missing is OK per TC-VAL-08).
-  3. Runtime key-presence check: every entry in
-     ``RUNTIME_REQUIRED_KEYS`` must resolve non-None after the
-     3-layer merge. Catches the "forgot to add the key to
-     defaults/config.json" drift that the pre-commit hook misses.
+Single entry point for the bootstrap's config-check
+pass. Combines two phases:
 
-Any failure flips the plugin into "degraded" mode rather than
-refusing to boot — on Steam Deck a broken-but-visible plugin is
-a better UX than a silent one. The ValidationResult is returned
-so ``main.py`` can expose it to the frontend via
-``get_config_validation_status``.
+1. **Schema validation** (``ConfigValidator``) —
+   structural check against ``schema.json``;
+2. **Key-presence check** (``collect_missing_keys``) —
+   runtime audit ensuring every key the code reads
+   is present in ``defaults/config.json``.
+
+Either failure puts the plugin in "degraded" mode
+(returned as the second element of the tuple). Degraded
+mode means: continue booting, but some features may
+use fall-back values. The caller (``boot_plugin``)
+exposes this state to the frontend via
+``UIHandlers.get_config_validation_status``.
+
+The helpers ``_log_schema_failure`` and
+``_log_missing_keys`` write detailed WARN logs so an
+operator investigating degraded mode finds actionable
+info in plugin logs.
 """
+
 from __future__ import annotations
 
 import logging
@@ -30,81 +38,75 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-async def validate_config_at_startup(  # noqa: PLR0913 — intentional: explicit dependency injection signature
+async def validate_config_at_startup(
     *,
     bus: EventBus,
     config: ConfigManager,
     defaults_path: str,
     user_config_path: str,
 ) -> tuple[ValidationResult, bool]:
-    """Run the full startup validation sequence.
+    """Run schema + key-presence validation; return ``(result, degraded_flag)``.
+
+    Two-phase:
+
+    1. ``ConfigValidator.validate_config`` checks
+       both layers against ``schema.json``. Failure
+       → log + return ``degraded=True`` immediately
+       (no point running phase 2 if the schema is
+       broken).
+    2. ``collect_missing_keys`` checks the live
+       ``ConfigManager`` against the
+       ``RUNTIME_REQUIRED_KEYS`` list. Any missing
+       keys → log + return ``degraded=True``.
+
+    Keyword-only args make the four-collaborator call
+    site self-documenting.
 
     Args:
-        bus: Event bus — CONFIG_VALIDATION_FAILED is emitted on
-            it so SecurityService can record the audit event.
-        config: Merged ConfigManager used by the runtime
-            key-presence check.
-        defaults_path: Absolute path to ``defaults/config.json``
-            (the shipped schema baseline).
-        user_config_path: Absolute path to the user overrides
-            file. Missing file is tolerated per TC-VAL-08.
+        bus: live event bus (for validator events).
+        config: live ``ConfigManager`` (for key
+            presence check).
+        defaults_path: bundled defaults file path.
+        user_config_path: user override file path.
 
     Returns:
-        ``(result, degraded)`` where ``result`` is the
-        ValidationResult to expose via the RPC surface, and
-        ``degraded`` is the flag the plugin sets on itself to
-        drive the Diagnostics banner.
+        ``(ValidationResult, degraded_flag)`` —
+        result's ``success`` flag reflects schema
+        validation; degraded flag covers both phases.
     """
     validator = ConfigValidator(bus=bus)
-    # Feed the validator both the shipped defaults AND the user
-    # overrides path so schema violations in the user file are
-    # caught at boot instead of silently ignored. validate_config
-    # is defensive about the user file being missing — it returns
-    # success with no user-source errors.
     result: ValidationResult = await validator.validate_config(
         defaults_path=defaults_path,
         user_path=user_config_path,
     )
-
     if not result.success:
         _log_schema_failure(result)
         return result, True
-
     logger.info(
-        "[Unifideck] config validation OK "
-        "(%d section(s) validated)",
+        "[Unifideck] config validation OK (%d section(s) validated)",
         19,
     )
-
-    # Runtime key-presence check: verifies every key listed in
-    # RUNTIME_REQUIRED_KEYS resolves to a non-None value after
-    # the 3-layer merge. Catches the case where a new call site
-    # lands in code but the author forgot to add the key to
-    # defaults/config.json. Only runs when schema validation
-    # succeeded — there's no point triggering a second class of
-    # errors on top of a broken schema.
-    #
-    # Failure mode is identical to schema validation: log a
-    # warning, flag degraded mode, continue booting. The
-    # pre-commit hook (scripts/check_config_keys.py) normally
-    # catches drift before it reaches production; this runtime
-    # check is a last-resort safety net for edit-and-deploy
-    # scenarios that bypass the hook.
     from unifideck.config.key_presence import collect_missing_keys
+
     missing = collect_missing_keys(config)
     if missing:
         _log_missing_keys(missing)
         return result, True
-
     logger.info("[Unifideck] runtime key-presence check OK")
     return result, False
 
 
 def _log_schema_failure(result: ValidationResult) -> None:
-    """Log the first schema validation error in a structured way.
+    """Emit a WARN log summarising the schema-validation failure.
 
-    Surfaces path + message so operators can locate the
-    problem without opening the full JSON schema report.
+    Shows the first error's path + message inline so
+    an operator gets actionable info without enabling
+    DEBUG. The full error list is on the
+    ``ValidationResult`` for callers that want
+    more detail.
+
+    Args:
+        result: typed validation result with errors.
     """
     first = result.errors[0] if result.errors else None
     first_path = first.path if first else "<unknown>"
@@ -119,17 +121,24 @@ def _log_schema_failure(result: ValidationResult) -> None:
 
 
 def _log_missing_keys(missing: list[str]) -> None:
-    """Log runtime key-presence failures with first 10 keys.
+    """Emit a WARN log listing missing runtime keys (first 10 + overflow).
 
-    Long tails get truncated with a ``(+N more)`` suffix to
-    keep the log line readable.
+    Truncates to 10 keys in the log message to keep
+    it readable — the full list lives in the
+    ``RUNTIME_REQUIRED_KEYS`` source. The "+N more"
+    suffix signals overflow clearly.
+
+    The message also documents the fix path: either
+    add the key to defaults or remove it from
+    RUNTIME_REQUIRED_KEYS if the code stopped
+    reading it.
+
+    Args:
+        missing: list of dotted keys absent from
+            defaults.
     """
     sample = ", ".join(missing[:10])
-    overflow = (
-        f" (+{len(missing) - 10} more)"
-        if len(missing) > 10
-        else ""
-    )
+    overflow = f" (+{len(missing) - 10} more)" if len(missing) > 10 else ""
     logger.warning(
         "[Unifideck] %d runtime-required config key(s) "
         "missing from defaults/config.json: %s%s. "

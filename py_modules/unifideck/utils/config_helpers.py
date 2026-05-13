@@ -1,37 +1,27 @@
-"""utils/config_helpers.py — None-safe ConfigManager accessors.
+"""Defensive config-reading helpers — survive missing managers.
 
-Centralizes the ``_cfg`` helper that was copy-pasted across 13
-modules (cdp_client, artwork_service, cloud_save_service,
-metacritic, unifidb, paths, locale, browser, library, manifest,
-gog_config, and two others). The historical pattern:
+OP-21a | py_modules/unifideck/utils/config_helpers.py
 
-    def _cfg(config: "ConfigManager | None", key, default):
-        if config is None:
-            return default
-        try:
-            return config.get(key, default)
-        except Exception:
-            return default
+Most of the codebase reads configuration through a
+``ConfigManager`` instance, but a handful of edge cases
+need to work without one:
 
-is reproduced here verbatim for semantic parity, with one
-addition: a rate-limited WARNING log the first time a given
-caller passes ``config=None``, making latent "forgot to inject
-config" bugs observable in Decky's logs instead of being
-silently papered over.
+* cold-start paths that run before the manager exists;
+* dev / test contexts that construct objects without
+  the full plugin scaffolding;
+* fallback paths that should degrade gracefully when
+  the manager wasn't injected.
 
-Design notes:
+``get_cfg`` is the standard read; ``read_config_int_cold_start``
+parses the config JSON directly when even ``ConfigManager``
+isn't available.
 
-- Exposed as ``get_cfg`` (public, imported) rather than ``_cfg``
-  (module-private, the old name). Callers should import
-  ``from unifideck.utils.config_helpers import get_cfg``.
-- The broad ``except Exception`` is intentional: ``ConfigManager``
-  is duck-typed — tests pass a stub, prod passes the real
-  class. Any AttributeError or KeyError on the stub must
-  degrade to the default, not propagate.
-- The warning tracks (caller_module, caller_lineno) so noisy
-  call sites only log once per (site, process) rather than
-  flooding on every access during a sync loop.
+The module also tracks call sites that hit the ``None``
+branch and logs each unique site exactly once (a strong
+signal that a service forgot to receive the config
+injection).
 """
+
 from __future__ import annotations
 
 import logging
@@ -43,8 +33,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# (module, lineno) pairs that have already emitted a WARNING about
-# config=None. Prevents log spam from hot paths like sync loops.
 _none_sites_seen: set[tuple[str, int]] = set()
 
 
@@ -53,28 +41,27 @@ def get_cfg(
     key: str,
     default: Any,
 ) -> Any:
-    """Read ``key`` from ``config`` with graceful fallback.
+    """Read ``key`` from ``config``, falling back to ``default`` on any failure.
 
-    Behavior:
+    Two arms:
 
-    - If ``config`` is None, return ``default``. Log a one-time
-      WARNING identifying the caller so missing-injection bugs
-      surface in logs instead of silently returning ``default``
-      on every access.
-    - If ``config.get(key, default)`` raises (non-``ConfigManager``
-      stubs in tests, schema drift in prod), swallow the
-      exception and return ``default``.
-    - Otherwise return what ``config.get`` returns.
+    * ``config is None`` — log the call site (module +
+      lineno) once at WARN and return ``default``. The
+      one-shot log keeps plugin logs clean even when a
+      missing manager is hit in a hot loop.
+    * ``config`` present but ``get`` raises — silently
+      fall back to ``default`` (the manager itself logs
+      its own errors).
 
-    The ``default`` must match the value declared for ``key`` in
-    ``defaults/config.json`` — ``get_cfg`` is a safety net, not
-    a place to introduce new defaults. Divergence between the
-    schema default and the value passed here is a bug.
+    Args:
+        config: optional config manager.
+        key: dotted config key.
+        default: fallback value.
+
+    Returns:
+        Config value or ``default``.
     """
     if config is None:
-        # Once-per-site WARNING so a forgotten injection is
-        # visible but we don't flood the log when the same
-        # buggy object is used in a tight loop.
         frame = sys._getframe(1)
         site = (frame.f_globals.get("__name__", "?"), frame.f_lineno)
         if site not in _none_sites_seen:
@@ -83,42 +70,46 @@ def get_cfg(
                 "[config_helpers] config=None at %s:%d key=%r "
                 "— falling back to default=%r. Likely a forgotten "
                 "ConfigManager injection.",
-                site[0], site[1], key, default,
+                site[0],
+                site[1],
+                key,
+                default,
             )
         return default
     try:
         return config.get(key, default)
-    except Exception:  # noqa: BLE001
-        # Duck-typed config objects in tests may raise anything.
+    except Exception:
         return default
 
 
-# Cold-start config path — used before ConfigManager is ready.
-# Must stay constant and not depend on any DI.
 _COLD_START_CONFIG_PATH = "~/.local/share/unifideck/config.json"
 
 
 def read_config_int_cold_start(key: str, default: int) -> int:
-    """Read a positive int from config.json without ConfigManager.
+    """Parse the user config JSON directly and return ``key`` as an int.
 
-    Bypasses the normal ``ConfigManager`` API because this helper
-    runs on the launcher cold-start path, before the bootstrap
-    has wired ``ConfigManager``. Reading the JSON directly keeps
-    the cold-start import graph minimal (no ``config/`` subpackage
-    dependency, no bootstrap coupling).
+    Used by code that runs **before** the
+    ``ConfigManager`` exists (e.g. the very early
+    bootstrap pre-Layer-3). Reads the user config file
+    at the conventional path, walks the dotted key
+    path, returns the value if it's a positive int.
 
-    Dotted ``key`` (e.g. ``"launcher.auth_max_seconds"``) walks
-    into nested objects. Returns ``default`` on any error — file
-    missing, malformed JSON, wrong type, key absent, non-positive
-    int — so callers never have to guard the call.
+    Defensive return-``default`` on every failure mode:
 
-    Do NOT use after bootstrap completes — prefer
-    ``ConfigManager.get_int(key, default)`` once the registry is
-    up, as it picks up in-memory overrides, defaults layering,
-    and migration rewrites.
+    * file missing → default;
+    * unreadable / malformed JSON → default;
+    * key not found → default;
+    * value isn't a positive int → default.
+
+    Args:
+        key: dotted key path.
+        default: fallback positive int.
+
+    Returns:
+        Resolved value or ``default``.
     """
     import json
-    from pathlib import Path as _P  # noqa: N814 — intentional: module-scope alias of pathlib.Path
+    from pathlib import Path as _P
 
     config_path = _P(_COLD_START_CONFIG_PATH).expanduser()
     if not config_path.is_file():

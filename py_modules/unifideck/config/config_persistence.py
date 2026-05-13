@@ -1,26 +1,25 @@
-"""config/config_persistence.py — File I/O for ConfigManager.
+"""JSON load + atomic write — the persistence primitives for the config layer.
 
-Moved from core/ to unifideck.config. A shim at
-core/config_persistence.py re-exports the public symbols for
-backward compatibility.
+OP-10b | py_modules/unifideck/config/config_persistence.py
 
+Two functions used by ``ConfigManager`` to read/write
+the defaults and user-override files.
 
-  - `load_json_layer(path)` — tolerant JSON read that returns an
-    empty dict on any failure, with a warning. Drops meta keys
-    starting with underscore (comments/schema hints). Used for
-    both defaults and user overrides.
+* ``load_json_layer`` tolerates every read failure
+  (missing file, bad JSON, wrong root type) by
+  returning an empty dict — config layers degrade
+  gracefully when one layer is broken.
+* ``atomic_write_json`` uses the
+  ``tempfile.mkstemp + fsync + replace + chmod``
+  pattern: torn writes are impossible, post-write
+  permissions are pinned to 0o600 (or caller-supplied
+  mode).
 
-  - `atomic_write_json(path, data, mode)` — write-to-temp-then-
-    rename pattern so a crash mid-write never leaves a truncated
-    config.json on disk. Mode defaults to 0o600 (P2.1 fix C6:
-    user configs may contain sensitive paths).
-
-All filesystem operations go through `pathlib.Path` for clarity.
-Callers must handle `ConfigSchemaError` if they want to react
-to validation failures — persistence itself is schema-agnostic.
-
-Reference: Technical Document v1.0 — Section 3.4.4 (ConfigManager).
+Underscore-prefixed top-level keys are stripped from
+loaded files — convention for in-file comments
+(``"_comment": "this is a comment"``).
 """
+
 from __future__ import annotations
 
 import json
@@ -34,16 +33,25 @@ logger = logging.getLogger(__name__)
 
 
 def load_json_layer(path: Path) -> dict[str, Any]:
-    """Read a single JSON config layer from disk.
+    """Read + parse one JSON config layer, returning ``{}`` on any failure.
 
-    Returns an empty dict on any failure (file missing, permission
-    error, malformed JSON) and logs a warning. This tolerant
-    behaviour is deliberate: the caller will merge multiple layers
-    and can proceed with whatever it successfully read.
+    Four-arm failure tolerance:
 
-    Meta keys starting with `_` are dropped — they're used by
-    config authors to leave JSON-safe comments or schema hints
-    that should never reach runtime consumers.
+    1. Falsy / non-existent path → ``{}``.
+    2. JSON / OS error → log at WARN + ``{}``.
+    3. Non-dict root → log at WARN + ``{}``.
+    4. Otherwise → return dict with ``_*`` keys
+       stripped (in-file comment convention).
+
+    The strip-underscore step is one-level only —
+    nested keys retain their leading underscores
+    (they're rare; not worth recursive walking).
+
+    Args:
+        path: file path to load.
+
+    Returns:
+        Parsed dict (possibly empty).
     """
     if not path or not path.exists():
         return {}
@@ -52,48 +60,49 @@ def load_json_layer(path: Path) -> dict[str, Any]:
     except (json.JSONDecodeError, OSError) as e:
         logger.warning(
             "[config_persistence] %s unreadable (%s): %s",
-            path, type(e).__name__, e,
+            path,
+            type(e).__name__,
+            e,
         )
         return {}
-
     if not isinstance(data, dict):
         logger.warning(
-            "[config_persistence] %s is not a JSON object (got %s) — "
-            "ignoring",
-            path, type(data).__name__,
+            "[config_persistence] %s is not a JSON object (got %s) — ignoring",
+            path,
+            type(data).__name__,
         )
         return {}
-
-    # Drop meta keys (comments, schema hints, etc.)
     return {k: v for k, v in data.items() if not k.startswith("_")}
 
 
-def atomic_write_json(
-    path: Path,
-    data: dict[str, Any],
-    mode: int = 0o600,
-) -> None:
-    """Write JSON to `path` atomically.
+def atomic_write_json(path: Path, data: dict[str, Any], mode: int = 0o600) -> None:
+    """Write ``data`` to ``path`` atomically with the given mode.
 
-    Uses the write-to-temp-then-rename pattern so a crash mid-write
-    cannot leave a truncated file on disk. The temp file is created
-    in the same directory as `path` to guarantee the final rename
-    stays on the same filesystem (cross-fs renames are not atomic).
+    Pipeline:
 
-    The default mode is 0o600 because user configs may contain
-    sensitive paths (data dirs, Steam install paths, OAuth-related
-    filenames). Callers can override for files that genuinely need
-    to be world-readable.
+    1. Ensure parent dir exists;
+    2. ``mkstemp`` a sibling temp file with hidden
+       prefix (so it doesn't pollute directory
+       listings if anything goes wrong);
+    3. Dump JSON sorted by key (deterministic output
+       for diffability);
+    4. ``flush + fsync`` for durability;
+    5. ``chmod`` to the target mode (before rename
+       so the file is never world-readable);
+    6. ``replace`` over the target (atomic);
+    7. On any failure in ``try``, attempt to unlink
+       the leftover tmp file in ``finally``.
 
-    Raises:
-      OSError: if the parent directory cannot be created, or the
-        temp file cannot be renamed. Callers should catch and log.
+    ``tmp_path = None`` after successful rename
+    short-circuits the cleanup — only unfinished
+    writes get the cleanup pass.
 
+    Args:
+        path: target file path.
+        data: serialisable dict.
+        mode: octal file mode (default ``0o600``).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Create the temp file in the same directory as the target to
-    # guarantee the rename is atomic (single filesystem).
     fd, tmp_path_init = tempfile.mkstemp(
         prefix=f".{path.name}.",
         suffix=".tmp",
@@ -101,31 +110,16 @@ def atomic_write_json(
     )
     tmp_path: str | None = tmp_path_init
     try:
-        # Write the JSON payload via the file descriptor so we can
-        # close it before the rename (Windows requires closed handle
-        # for rename, and this also flushes any OS buffer).
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, sort_keys=True)
             f.flush()
             os.fsync(f.fileno())
-
-        # Apply the requested mode BEFORE the rename so the
-        # published file never exists with default (0o644+) mode.
-        # tmp_path_init is the original `str` from mkstemp — using
-        # it directly avoids re-narrowing through the Optional
-        # `tmp_path` bookkeeping var.
         Path(tmp_path_init).chmod(mode)
-
-        # Atomic swap. If this raises, the caller's old config is
-        # still intact on disk, unmodified.
         Path(tmp_path_init).replace(path)
-        tmp_path = None  # successfully renamed, nothing to clean
+        tmp_path = None
     finally:
-        # Defence in depth: if anything above raised before the
-        # rename, the temp file still exists and must be removed.
         if tmp_path is not None:
             try:
                 Path(tmp_path).unlink()
             except OSError:
-                # best-effort cleanup; file may already be gone or locked
                 pass

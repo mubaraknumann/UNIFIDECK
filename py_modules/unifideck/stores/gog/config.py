@@ -1,37 +1,38 @@
-"""GOG store configuration — frozen dataclass with deferred path resolution.
+"""Strongly-typed GOG store config block, loaded from ConfigManager.
 
-OP-50b | py_modules/unifideck/stores/gog/config.py
+OP-22-gog-config | py_modules/unifideck/stores/gog/config.py
 
-``GOGConfig`` is a frozen dataclass holding every tunable parameter
-of the GOG sub-package: download directory, gogdl binary path,
-OAuth URLs, token file location, gogdl config directory, etc.
+Wraps the ``stores.gog.*`` config entries behind a
+frozen dataclass. Same pattern as
+``MicrosoftConfig`` but with GOG-specific fields:
 
-The class exposes two kinds of fields:
+* OAuth (client_id, client_secret, auth/token URLs);
+* GOG API roots (``base_url``, ``api_gog_url``) for
+  library + catalog;
+* gogdl integration paths (``gogdl_config_dir``
+  where we write the credentials JSON file that
+  gogdl reads);
+* ``download_dir`` — default install location;
+* ``supported_languages`` — languages the install
+  planner should consider for the user's locale.
 
-* **Raw fields** (e.g. ``download_dir``, ``token_file``) — strings as
-  configured, may contain ``~``.
-* **Expanded properties** (e.g. ``download_dir_expanded``) — same value
-  with ``~`` resolved at access time. We defer expansion to property
-  access so that a user changing ``$HOME`` mid-session sees the new
-  value.
-
-Configuration is loaded via ``from_config_manager(config)`` which reads
-the ``stores.gog.*`` namespace of the user config, falling back to the
-hard-coded defaults if a key is missing or malformed.
-
-The dataclass is intentionally ``frozen=True`` — any mutation must go
-through a new ``GOGConfig`` instance.
+The auth URL file constant (``GOG_AUTH_URL_FILE``)
+is module-level since the auth flow writes it.
 """
 
 from __future__ import annotations
+
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
 from unifideck.utils.config_helpers import get_cfg
 
 if TYPE_CHECKING:
     from ...config import ConfigManager
+
 logger = logging.getLogger(__name__)
+
 _GOG_CONFIG_PREFIX = "stores.gog"
 _DEFAULT_TOKEN_FILE = "~/.config/unifideck/gog_token.json"
 _DEFAULT_GOGDL_CONFIG_DIR = "~/.config/unifideck/gogdl"
@@ -41,7 +42,15 @@ GOG_AUTH_URL_FILE = "~/.local/share/unifideck/gog_auth_url.txt"
 
 @dataclass(frozen=True)
 class GOGConfig:
-    """Gogconfig."""
+    """Frozen value-object holding the GOG store's runtime configuration.
+
+    Frozen so it can be passed around without
+    fear of mutation. Default values for the
+    fields that have sensible defaults (paths,
+    languages, UA); empty defaults for the
+    required OAuth fields so ``is_valid`` can
+    detect "not configured".
+    """
 
     client_id: str = ""
     client_secret: str = ""
@@ -56,33 +65,60 @@ class GOGConfig:
     download_dir: str = _DEFAULT_DOWNLOAD_DIR
     token_refresh_threshold_seconds: int = 2400
     supported_languages: list[str] = field(
-        default_factory=lambda: [
-            "en",
-            "de",
-            "fr",
-            "pl",
-            "ru",
-            "pt",
-            "es",
-            "it",
-            "zh",
-            "ko",
-            "ja",
-        ],
+        default_factory=lambda: ["en", "de", "fr", "pl", "ru", "pt", "es", "it", "zh", "ko", "ja"],
     )
     user_agent: str = "Unifideck/1.0"
 
     @classmethod
     def from_config_manager(cls, config: ConfigManager | None) -> GOGConfig:
-        """From config manager."""
+        """Build a ``GOGConfig`` from the plugin's ConfigManager.
 
-        def _s(key: str, default: str = "") -> str:
-            """S."""
+        Same three inner helpers as
+        ``MicrosoftConfig.from_config_manager`` —
+        ``_s`` (string + trim), ``_i`` (int +
+        safe coerce), ``_list`` (list of non-empty
+        strings).
+
+        Post-load:
+
+        * ``allowed_redirect_uris`` fallback — if
+          no list configured but
+          ``redirect_uri`` set, use it as the
+          singleton allowed value;
+        * ``supported_languages`` fallback — if
+          empty, use the hard-coded 11-language
+          default that covers the major regions.
+
+        Args:
+            config: ``ConfigManager`` or ``None``.
+
+        Returns:
+            New ``GOGConfig``.
+        """
+
+        def _str(key: str, default: str = "") -> str:
+            """Read string config with trim, tolerate None.
+
+            Args:
+                key: relative key.
+                default: fallback.
+
+            Returns:
+                Trimmed string.
+            """
             val = get_cfg(config, f"{_GOG_CONFIG_PREFIX}.{key}", default)
             return str(val).strip() if val is not None else default
 
-        def _i(key: str, default: int) -> int:
-            """I."""
+        def _int(key: str, default: int) -> int:
+            """Read int config with safe coercion.
+
+            Args:
+                key: relative key.
+                default: fallback.
+
+            Returns:
+                Parsed int.
+            """
             val = get_cfg(config, f"{_GOG_CONFIG_PREFIX}.{key}", default)
             try:
                 return int(val)
@@ -90,7 +126,14 @@ class GOGConfig:
                 return default
 
         def _list(key: str) -> list[str]:
-            """List."""
+            """Read list-of-string config, filter empties.
+
+            Args:
+                key: relative key.
+
+            Returns:
+                List of strings.
+            """
             val = get_cfg(config, f"{_GOG_CONFIG_PREFIX}.{key}", None)
             if not isinstance(val, list):
                 return []
@@ -102,19 +145,7 @@ class GOGConfig:
             allowed = [primary_redirect]
         supported = _list("supported_languages")
         if not supported:
-            supported = [
-                "en",
-                "de",
-                "fr",
-                "pl",
-                "ru",
-                "pt",
-                "es",
-                "it",
-                "zh",
-                "ko",
-                "ja",
-            ]
+            supported = ["en", "de", "fr", "pl", "ru", "pt", "es", "it", "zh", "ko", "ja"]
         return cls(
             client_id=_s("client_id"),
             client_secret=_s("client_secret"),
@@ -139,7 +170,15 @@ class GOGConfig:
         )
 
     def is_valid(self) -> bool:
-        """Check whether valid."""
+        """Check all required OAuth + API URLs are configured.
+
+        Seven mandatory fields. Logs missing names
+        at WARN. Doesn't validate the format of the
+        URLs — that's the OAuth call's job.
+
+        Returns:
+            True iff all required fields non-empty.
+        """
         required = (
             ("client_id", self.client_id),
             ("client_secret", self.client_secret),
@@ -160,16 +199,31 @@ class GOGConfig:
 
     @property
     def auth_config_path(self) -> str:
-        """Auth config path."""
+        """Compute the gogdl credentials file path (under ``gogdl_config_dir``).
+
+        gogdl reads credentials from
+        ``<config_dir>/gog_credentials.json``;
+        the token manager writes this file on
+        successful auth so subprocess gogdl runs
+        pick up the user's session.
+
+        Returns:
+            Absolute path string (with ``~``
+            expanded).
+        """
         import os
 
-        return os.path.join(
-            os.path.expanduser(self.gogdl_config_dir),
-            "gog_credentials.json",
-        )
+        return os.path.join(os.path.expanduser(self.gogdl_config_dir), "gog_credentials.json")
 
     def describe(self) -> str:
-        """Describe."""
+        """Return a short human-readable summary for logging.
+
+        Truncates client_id to 6 chars to avoid
+        leaking the full OAuth client id.
+
+        Returns:
+            Description string.
+        """
         return (
             f"GOGConfig(client_id={self.client_id[:6]}…, "
             f"base_url={self.base_url}, "

@@ -1,41 +1,96 @@
-"""Install-pipeline helpers — game info probe + language picking.
+"""Pre-install helpers — probe game info, parse gogdl output, choose languages.
 
-OP-51h | py_modules/unifideck/stores/gog/install/helpers.py
+OP-22-gog-install-helpers
+File: py_modules/unifideck/stores/gog/install/helpers.py
 
-``_InstallHelpers`` exposes the two helper methods that the installer
-calls during the "probe & prepare" phase :
+Two responsibilities collected on
+``_InstallHelpers``:
 
-* ``probe_game_info(game_id)`` — query gogdl for the game's platform,
-  expected folder name, and supported languages;
-* ``pick_languages(preferred, explicit, supported)`` — given the user's
-  locale and the game's available languages, decide which language
-  list to pass to gogdl. Honors an explicit override (always wins) or
-  picks a smart match (delegates to ``languages.py``, OP-51c).
+1. **Probe**: run ``gogdl info`` to discover the
+   game's platform (Linux vs Windows fallback),
+   folder name (gogdl picks this), and supported
+   languages list. Linux is tried first; on
+   non-zero exit we retry with Windows (Wine/Proton
+   will run it).
+
+2. **Language pick**: given the user's primary
+   locale and the supported list, decide which
+   language(s) to install. Two flavours:
+
+   * ``explicit=True`` — user picked a specific
+     language, install just that one (fallback to
+     supported[0] if not available);
+   * ``explicit=False`` — install primary +
+     en-US fallback so the game has a usable
+     default text.
+
+A 60-second timeout on ``gogdl info`` protects
+against hung subprocesses; on timeout we kill the
+process and treat it as a probe failure.
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
-from typing import (
-    TYPE_CHECKING,
-)
+from typing import TYPE_CHECKING,
 from .languages import smart_match_language
 
 if TYPE_CHECKING:
     from .installer import GOGInstaller
+
 logger = logging.getLogger(__name__)
 
 
 class _InstallHelpers:
-    """Install helpers."""
+    """Internal helpers used by ``GOGInstaller`` during install setup.
+
+    Holds a back-reference to its parent so it
+    can read the gogdl binary path + tokens +
+    config. Kept separate from the installer
+    itself for testability + readability.
+    """
 
     def __init__(self, parent: GOGInstaller) -> None:
-        """Initialize the instance."""
+        """Stash the parent reference.
+
+        Args:
+            parent: ``GOGInstaller`` instance.
+        """
         self._parent = parent
 
     async def probe_game_info(self, game_id: str) -> tuple[str, str | None, list[str]]:
-        """Probe game info."""
+        """Run ``gogdl info`` to discover platform + folder name + languages.
+
+        Tries Linux first, Windows as fallback if
+        the Linux build doesn't exist. For each
+        attempt:
+
+        1. Acquire gogdl credentials (tempdir +
+           env);
+        2. Spawn ``gogdl info`` with 60-second
+           timeout;
+        3. On timeout, kill the subprocess and
+           continue (we'll either retry with
+           Windows or give up);
+        4. Always release the gogdl credentials
+           via the cleanup callable (in
+           ``finally``);
+        5. On Linux failure, log + continue to
+           Windows;
+        6. On success, parse the JSON-lines
+           output for ``folder_name`` and
+           ``languages``.
+
+        Args:
+            game_id: GOG product id.
+
+        Returns:
+            ``(platform, folder_name,
+            languages)`` triple. ``folder_name``
+            is ``None`` on total failure.
+        """
         platform = "linux"
         folder_name: str | None = None
         languages: list[str] = []
@@ -100,7 +155,25 @@ class _InstallHelpers:
 
     @staticmethod
     def parse_info_output(stdout: str) -> tuple[str | None, list[str]]:
-        """Parse info output."""
+        """Parse gogdl info's JSON-lines stdout for folder_name + languages.
+
+        gogdl emits multiple JSON lines on stdout;
+        we want the *latest* values for
+        ``folder_name`` and ``languages``, so we
+        iterate in *reverse* and take the first
+        match for each.
+
+        Non-JSON lines are skipped silently
+        (gogdl mixes log lines with JSON in some
+        versions). Returns whatever was found, or
+        ``(None, [])`` if nothing matched.
+
+        Args:
+            stdout: full stdout text.
+
+        Returns:
+            ``(folder_name_or_None, languages)``.
+        """
         folder_name: str | None = None
         languages: list[str] = []
         for line in reversed(stdout.splitlines()):
@@ -122,12 +195,20 @@ class _InstallHelpers:
         return folder_name, languages
 
     @staticmethod
-    def pick_languages(
-        primary_lang: str,
-        explicit: bool,
-        supported: list[str],
-    ) -> list[str]:
-        """Pick languages."""
+    def pick_languages(primary_lang: str, explicit: bool, supported: list[str]) -> list[str]:
+        """Dispatch to explicit-vs-implicit language picker.
+
+        Args:
+            primary_lang: user's primary locale.
+            explicit: True iff the user picked a
+                specific language.
+            supported: gogdl-reported supported
+                languages.
+
+        Returns:
+            List of language codes to pass to
+            gogdl.
+        """
         if explicit:
             return _InstallHelpers._pick_explicit_lang(
                 primary_lang,
@@ -140,7 +221,22 @@ class _InstallHelpers:
 
     @staticmethod
     def _pick_explicit_lang(primary_lang: str, supported: list[str]) -> list[str]:
-        """Pick explicit lang."""
+        """User picked a specific language — match it or fall back to first supported.
+
+        If ``supported`` is empty (probe failed),
+        trust the user's choice as-is. Otherwise,
+        smart-match; if no match, warn and use
+        the first available language so the
+        install proceeds.
+
+        Args:
+            primary_lang: requested code.
+            supported: available codes.
+
+        Returns:
+            Single-element list with the chosen
+            code.
+        """
         if not supported:
             return [primary_lang]
         matched = smart_match_language(primary_lang, supported)
@@ -155,7 +251,33 @@ class _InstallHelpers:
 
     @staticmethod
     def _pick_implicit_langs(primary_lang: str, supported: list[str]) -> list[str]:
-        """Pick implicit langs."""
+        """No explicit pick — install primary + English fallback for safety.
+
+        If ``supported`` is empty, just return
+        ``[primary_lang]`` plus ``"en-US"`` if not
+        already there.
+
+        With a supported list:
+
+        1. Smart-match primary → add;
+        2. No primary match → smart-match en-US
+           as a fallback → add;
+        3. No en-US match either → first
+           supported as last resort.
+
+        Returns just the matched-primary-or-
+        fallback (single-element list) — we
+        don't add a second english entry because
+        users with stable connections paying for
+        bandwidth shouldn't double-download.
+
+        Args:
+            primary_lang: user's locale.
+            supported: gogdl languages.
+
+        Returns:
+            List with the chosen language(s).
+        """
         if not supported:
             langs = [primary_lang]
             if "en-US" not in langs:

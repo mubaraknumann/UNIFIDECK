@@ -1,21 +1,26 @@
-"""py_modules/unifideck/security/__init__.py — Security package.
+"""Security primitives — token encryption + device identity + audit events.
 
-Groups every module that deals with hardware-derived encryption,
-device fingerprinting, and token confidentiality. The companion
-SecurityService (in services/security_service.py) consumes events
-emitted by these modules to build an in-memory audit log and
-enforce centralised policies (brute-force detection, permission
-auto-repair, device freshness checks).
+OP-11 | py_modules/unifideck/security/__init__.py
 
-Public API re-exported here so callers don't have to know the
-internal file layout. Import as:
+Four cooperating components:
 
-    from ...security import SecureTokenStore, DeviceIdentity
+* ``device_identity`` — derives a stable per-device
+  AES key from machine-id, hostname, and user uid;
+* ``device_fingerprint`` — broader machine fingerprint
+  state used to detect device-reset scenarios;
+* ``secure_token_store`` — AES-GCM encryption of OAuth
+  tokens / refresh-tokens at rest, with legacy plaintext
+  migration support;
+* ``audit_emitter`` (+ ``audit_decorators``) — fires
+  ``SECURITY_*`` events on the bus for every privileged
+  operation (token encrypt/decrypt, permission check,
+  auth flow start/complete/fail).
 
-Or for the exception types:
-
-    from ...security import SecureTokenStoreError, DeviceIdentityError
+Re-exports the public surface so consumers can
+``from unifideck.security import SecureTokenStore,
+emit_auth_started``.
 """
+
 from .audit_emitter import (
     audit_auth_flow,
     emit_auth_completed,
@@ -24,7 +29,6 @@ from .audit_emitter import (
     emit_external_auth_check_failed,
     emit_legacy_plaintext_detected,
     emit_permissions_check,
-    emit_token_age_exceeded,
     emit_token_file_migrated,
 )
 from .device_fingerprint import (
@@ -36,17 +40,6 @@ from .device_identity import (
     DeviceIdentityError,
     FakeDeviceIdentity,
 )
-from .ephemeral_creds import (
-    EphemeralCredentialContext,
-    EphemeralCredentialError,
-    InPlaceEphemeralFile,
-)
-from .redaction import redact_for_audit
-from .secure_io import (
-    SecureIOError,
-    secure_read_bytes,
-    secure_write_atomic,
-)
 from .secure_token_store import (
     SecureTokenStore,
     SecureTokenStoreError,
@@ -55,13 +48,9 @@ from .secure_token_store import (
 __all__ = [
     "DeviceIdentity",
     "DeviceIdentityError",
-    "EphemeralCredentialContext",
-    "EphemeralCredentialError",
-    "InPlaceEphemeralFile",
     "FakeDeviceIdentity",
     "DeviceFingerprint",
     "FingerprintState",
-    "SecureIOError",
     "SecureTokenStore",
     "SecureTokenStoreError",
     "audit_auth_flow",
@@ -72,8 +61,4 @@ __all__ = [
     "emit_legacy_plaintext_detected",
     "emit_permissions_check",
     "emit_external_auth_check_failed",
-    "emit_token_age_exceeded",
-    "redact_for_audit",
-    "secure_read_bytes",
-    "secure_write_atomic",
 ]

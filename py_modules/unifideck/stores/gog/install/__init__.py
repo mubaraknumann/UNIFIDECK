@@ -1,10 +1,25 @@
-"""Install sub-package — exposes nothing publicly.
+"""GOG install pipeline — public re-exports.
 
-OP-51 | py_modules/unifideck/stores/gog/install/__init__.py
+OP-22-gog-install-init | py_modules/unifideck/stores/gog/install/__init__.py
 
-This ``__init__`` is intentionally empty. Install components are
-internal to the GOG sub-package — callers reach them through
-``GOGInstaller`` exposed by ``store.py`` (OP-50a).
+The install pipeline is broken into focused
+modules:
+
+* ``installer`` — public ``GOGInstaller`` class
+  orchestrating the install flow;
+* ``planner`` — choose gogdl args (language,
+  branch, manifest, install path);
+* ``progress`` — parse gogdl stdout for progress
+  events;
+* ``marker`` — write/read the install marker
+  file that proves an install is complete;
+* ``helpers`` — small utilities (path
+  resolution, dir prep);
+* ``primitives`` — folder operations (size,
+  count, cleanup);
+* ``languages`` — locale → gogdl language
+  matching;
+* ``uninstall_pipeline`` — uninstall flow.
 """
 
 from .installer import GOGInstaller

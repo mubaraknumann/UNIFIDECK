@@ -1,38 +1,62 @@
-"""Background update checker for installed GOG games.
+"""GOG update checker + update runner — buildId comparison + gogdl update subprocess.
 
-OP-50g | py_modules/unifideck/stores/gog/updates.py
+OP-22-gog-updates | py_modules/unifideck/stores/gog/updates.py
 
-``GOGUpdatesChecker`` periodically polls GOG.com for new versions of
-installed games and emits events when an update is available. The
-check is rate-limited to avoid abusing the GOG API; the cached
-"last-checked" timestamp lives in the cache manager and is invalidated
-when a new install is detected.
+Update logic uses GOG's content-system endpoint
+(``content-system.gog.com``) which returns the
+list of available builds for a product. The first
+build in the list is the latest; comparing its
+``build_id`` to the locally-installed buildId
+tells us if an update is available.
 
-Update application itself is delegated to the installer pipeline
-(``install/installer.py``, OP-51a) which re-runs gogdl in update mode.
+Local buildId sources (in priority order):
+
+1. ``goggame-<id>.info`` — gogdl writes it
+   post-install;
+2. ``.unifideck-id`` marker — fallback if
+   goggame info is missing.
+
+Update execution mirrors the install pipeline but
+uses ``gogdl update`` instead of ``install``.
+We don't do progress reporting for updates (the
+UI just shows "updating…") — output is logged at
+INFO for diagnostics.
+
+The check uses Windows platform builds always —
+GOG's API is reliable for windows; Linux builds
+sometimes return stale data.
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
+
 from ...core.types import Result
 from .config import GOGConfig
 from .http import fetch_json_get
 from .tokens import GOGTokenManager
 
 logger = logging.getLogger(__name__)
-_CONTENT_SYSTEM_URL_TEMPLATE = (
-    "https://content-system.gog.com/products/{game_id}/os/windows/builds?generation=2"
-)
+
+_CONTENT_SYSTEM_URL_TEMPLATE = "https://content-system.gog.com/products/{game_id}/os/windows/builds?generation=2"
 _UPDATE_CHECK_TIMEOUT_S = 10.0
 
 
 class GOGUpdatesChecker:
-    """Gogupdates checker."""
+    """Update detection + execution for GOG installs.
+
+    Deps (config, tokens, gogdl bin) injected at
+    construction; the two callables
+    (``get_installed_ids``,
+    ``resolve_install_info``) point back at the
+    library so we don't tightly couple update
+    checking to library iteration.
+    """
 
     def __init__(
         self,
@@ -40,12 +64,21 @@ class GOGUpdatesChecker:
         tokens: GOGTokenManager,
         gogdl_bin: str,
         get_installed_ids: Callable[[], list[str]],
-        resolve_install_info: Callable[
-            [str],
-            dict[str, str | None] | None,
-        ],
+        resolve_install_info: Callable[[str], dict[str, str | None] | None]
     ) -> None:
-        """Initialize the instance."""
+        """Stash dependencies.
+
+        Args:
+            config: ``GOGConfig``.
+            tokens: ``GOGTokenManager``.
+            gogdl_bin: gogdl binary path.
+            get_installed_ids: callable returning
+                the list of installed game ids.
+            resolve_install_info: callable that
+                takes a game id and returns its
+                ``{install_path}`` dict, or
+                ``None`` if not installed.
+        """
         self._config = config
         self._tokens = tokens
         self._gogdl_bin = gogdl_bin
@@ -54,7 +87,30 @@ class GOGUpdatesChecker:
 
     @staticmethod
     def get_local_build_id(install_path: str, game_id: str) -> str | None:
-        """Get local build ID."""
+        """Find the locally-installed buildId from goggame info or marker file.
+
+        Priority:
+
+        1. ``goggame-<id>.info`` in
+           ``install_path/`` or
+           ``install_path/game/`` — read the
+           ``buildId`` field;
+        2. ``.unifideck-id`` marker as fallback
+           (post-Sprint-12 markers include
+           ``buildId`` since they cache the
+           goggame info).
+
+        Returns ``None`` if no buildId is found —
+        caller treats this as "can't check"
+        rather than "no update".
+
+        Args:
+            install_path: install root.
+            game_id: product id.
+
+        Returns:
+            Local buildId or ``None``.
+        """
         install_p = Path(install_path)
         for search_dir in (install_p, install_p / "game"):
             info_file = search_dir / f"goggame-{game_id}.info"
@@ -101,7 +157,30 @@ class GOGUpdatesChecker:
         return None
 
     async def check_for_game_update(self, game_id: str) -> bool | None:
-        """Check for game update."""
+        """Check whether a single game has an available update.
+
+        Pipeline:
+
+        1. Refresh tokens; fail → return
+           ``None`` (can't auth, can't check);
+        2. Resolve install path; not installed
+           → return ``None`` (nothing to update);
+        3. Read local buildId; missing →
+           ``None`` (can't compare);
+        4. Fetch remote latest buildId;
+        5. Compare — return True iff different.
+
+        Note ``None`` vs ``False`` distinction:
+        ``None`` means "couldn't determine",
+        ``False`` means "definitively no update".
+
+        Args:
+            game_id: product id.
+
+        Returns:
+            True if update available, False if
+            up-to-date, None if can't check.
+        """
         if not await self._tokens.refresh_if_stale():
             logger.warning(
                 "[GOGUpdatesChecker] not authenticated for update check of %s",
@@ -146,7 +225,24 @@ class GOGUpdatesChecker:
         return has_update
 
     async def _fetch_remote_build_id(self, game_id: str) -> str | None:
-        """Fetch remote build ID."""
+        """GET the content-system endpoint, return the latest build_id.
+
+        Response shape:
+        ``{items: [{build_id: ..., ...}, ...]}``.
+        First entry is the latest build (GOG
+        sorts most-recent-first).
+
+        Returns ``None`` on any failure (no token,
+        non-200, malformed response). Caller
+        treats ``None`` as "can't check, assume
+        up-to-date" to avoid spamming users.
+
+        Args:
+            game_id: product id.
+
+        Returns:
+            Remote buildId or ``None``.
+        """
         access = self._tokens.access_token
         if not access:
             return None
@@ -178,7 +274,23 @@ class GOGUpdatesChecker:
         return str(build_id)
 
     async def check_for_updates(self) -> list[str]:
-        """Check for updates."""
+        """Bulk update check across all installed GOG games.
+
+        Iterates the installed list, calling
+        ``check_for_game_update`` for each.
+        Returns just the ids that have updates;
+        ``None`` results (couldn't check) are
+        treated as "no update" for the purposes
+        of this list — UI will refresh on next
+        check.
+
+        Logs a summary at INFO so we can see
+        update-check pressure in logs.
+
+        Returns:
+            List of game ids with available
+            updates.
+        """
         installed_ids = self._get_installed()
         if not installed_ids:
             return []
@@ -196,12 +308,32 @@ class GOGUpdatesChecker:
         )
         return updates
 
-    async def update_game(
-        self,
-        game_id: str,
-        install_path: str | None = None,
-    ) -> Result:
-        """Update game."""
+    async def update_game(self, game_id: str, install_path: str | None = None) -> Result:
+        """Run ``gogdl update`` for a game.
+
+        Pipeline:
+
+        1. Verify gogdl bin exists;
+        2. Resolve the install path (caller-
+           provided or from
+           ``_resolve_info``);
+        3. Refresh tokens;
+        4. Spawn gogdl update;
+        5. Drain stdout for diagnostics;
+        6. Finalize: check return code,
+           return Result.
+
+        Always uses ``--platform windows`` —
+        GOG's update flow for non-native games
+        is more stable on the windows track.
+
+        Args:
+            game_id: product id.
+            install_path: optional override.
+
+        Returns:
+            ``Result``.
+        """
         gogdl_exists = await asyncio.to_thread(
             Path(self._gogdl_bin).is_file,
         )
@@ -239,7 +371,19 @@ class GOGUpdatesChecker:
         return await self._update_finalize(proc, game_id)
 
     def _update_resolve_path(self, game_id: str, install_path: str | None) -> tuple:
-        """Update resolve path."""
+        """Resolve install path — explicit arg wins over library lookup.
+
+        Returns ``(path, None)`` on success or
+        ``(None, failure_result)`` on
+        unresolvable.
+
+        Args:
+            game_id: product id.
+            install_path: optional override.
+
+        Returns:
+            ``(path_or_None, result_or_None)``.
+        """
         if install_path:
             return install_path, None
         info = self._resolve_info(game_id)
@@ -251,7 +395,22 @@ class GOGUpdatesChecker:
         )
 
     async def _update_spawn_gogdl(self, game_id: str, install_path: str) -> Any | None:
-        """Update spawn GOGDL."""
+        """Spawn the gogdl update subprocess + attach cleanup hook.
+
+        Same pattern as the install spawn —
+        ``_unifideck_gogdl_cleanup`` attribute
+        attached to the proc so the drain loop's
+        finally can release it.
+
+        OSError on spawn → log + return None.
+
+        Args:
+            game_id: product id.
+            install_path: install root.
+
+        Returns:
+            ``Process`` or ``None``.
+        """
         cmd = [
             self._gogdl_bin,
             "--auth-config-path",
@@ -282,7 +441,15 @@ class GOGUpdatesChecker:
 
     @staticmethod
     async def _update_drain_output(proc: Any) -> None:
-        """Update drain output."""
+        """Read all stdout lines from the update subprocess at INFO log level.
+
+        No stall timeout (updates can legitimately
+        sit idle while gogdl re-uses cached
+        chunks). Done when stdout EOFs.
+
+        Args:
+            proc: subprocess.
+        """
         while True:
             line = await proc.stdout.readline()
             if not line:
@@ -296,7 +463,18 @@ class GOGUpdatesChecker:
 
     @staticmethod
     async def _update_finalize(proc: Any, game_id: str) -> Result:
-        """Update finalize."""
+        """Wait for the update process, check return code, return ``Result``.
+
+        Non-zero exit → return code surfaced in
+        the error string for easier diagnosis.
+
+        Args:
+            proc: subprocess.
+            game_id: product id.
+
+        Returns:
+            ``Result``.
+        """
         await proc.wait()
         if proc.returncode != 0:
             logger.error(

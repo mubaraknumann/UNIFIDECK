@@ -1,25 +1,31 @@
-"""auth.edge_browser.profile — Shared Edge auth profile management.
+"""Edge profile directory manager — migration, cleanup, cookie ops.
 
-Extracted from edge_browser.py to isolate filesystem state concerns
-(profile directory, singleton lock artifacts, cookie database,
-legacy migration) from the browser process lifecycle, installer,
-and CDP client.
+OP-15c4 | py_modules/unifideck/auth/edge_browser/profile.py
 
-The module is imported by ``EdgeBrowser`` which composes an
-``EdgeProfileManager`` as ``self._profile`` and exposes its public
-methods through delegation, preserving the pre-split public API for
-``_migrate_legacy_profile``, ``cleanup_stale_profile_state``,
-``has_xbox_session``, ``clear_cookies``, ``clear_profile_data``.
+The plugin uses an isolated Edge profile for the
+auth flow so it doesn't interfere with the user's
+regular Edge profile (if any). This module handles
+the profile directory lifecycle:
 
-Responsibilities:
- - One-shot migration of the chromium-auth → edge-auth legacy profile
- - Singleton lock artifact detection + cleanup after unclean exits
- - xbox.com session cookie lookup in the Chromium cookie SQLite DB
- - Bulk cookie deletion by domain family (Xbox, MS, Live)
- - Full profile + log file erasure on explicit user request
+* **Legacy migration** — if a previous plugin
+  version left state at an old path, move it to
+  the new one (preserves login state across plugin
+  updates);
+* **Stale singleton cleanup** — Edge crashes can
+  leave behind ``Singleton{Lock,Cookie,Socket}``
+  files pointing at dead processes; removing them
+  is required before a new launch;
+* **Cookie inspection** — query the Cookies SQLite
+  DB to know whether the user is still logged in
+  to Xbox (skip showing the login prompt if so);
+* **Cookie clearing** — selectively delete Xbox /
+  Microsoft cookies (logout) or wipe the whole
+  profile (full reset).
 
-Reference: edge_browser.py pre-split, lines 324-432 + 738-816.
+The cookie DB is queried via a copied tempfile to
+avoid contention with a running Edge process.
 """
+
 from __future__ import annotations
 
 import logging
@@ -33,25 +39,13 @@ logger = logging.getLogger(__name__)
 
 
 class EdgeProfileManager:
-    """Own the shared Edge auth profile directory and its artifacts.
+    """All-in-one manager for the isolated Edge auth profile.
 
-    All paths are passed in at construction rather than hard-coded so
-    that tests can point the manager at a temporary directory. The
-    ``EdgeBrowser`` composes this with the canonical module-level
-    ``PROFILE_DIR`` / ``LOG_FILE`` / ``_LEGACY_*`` constants.
-
-    Usage::
-
-        mgr = EdgeProfileManager(
-            profile_dir=PROFILE_DIR,
-            log_file=LOG_FILE,
-            legacy_profile_dir=_LEGACY_PROFILE_DIR,
-            legacy_log_file=_LEGACY_LOG_FILE,
-            cookie_domain_patterns=_MS_COOKIE_DOMAINS,
-        )
-        mgr.migrate_legacy_profile()
-        if not mgr.has_xbox_session():
-            ...
+    Five public operations: migrate, cleanup,
+    inspect, clear-cookies, clear-everything. The
+    constructor captures every path the manager
+    needs so the per-operation methods stay
+    parameter-free.
     """
 
     def __init__(
@@ -63,16 +57,23 @@ class EdgeProfileManager:
         legacy_log_file: str,
         cookie_domain_patterns: tuple[str, ...],
     ) -> None:
-        """Store path configuration. No I/O performed here.
+        """Capture the profile paths + cookie domain patterns.
+
+        Keyword-only args because the constructor has
+        five strings that look alike — positional
+        confusion would be a real risk.
 
         Args:
-          profile_dir: Current canonical profile directory path.
-          log_file: Current canonical browser log file path.
-          legacy_profile_dir: Pre-rename chromium-auth directory path.
-          legacy_log_file: Pre-rename chromium-auth.log file path.
-          cookie_domain_patterns: SQL LIKE patterns for cookies to
-            clear on logout (e.g. ``('%xbox.com%', ...)``).
-
+            profile_dir: target profile directory.
+            log_file: stderr log file.
+            legacy_profile_dir: previous version's
+                profile path (for migration).
+            legacy_log_file: previous version's log
+                path.
+            cookie_domain_patterns: SQL LIKE patterns
+                for cookie domains to clear on
+                logout (e.g.
+                ``("%xbox.com%", "%microsoft.com%")``).
         """
         self.profile_dir = profile_dir
         self.log_file = log_file
@@ -80,71 +81,64 @@ class EdgeProfileManager:
         self.legacy_log_file = legacy_log_file
         self.cookie_domain_patterns = cookie_domain_patterns
 
-    # ── Legacy migration ─────────────────────────────────────────────
-
     def migrate_legacy_profile(self) -> None:
-        """One-shot rename of chromium-auth → edge-auth profile dir.
+        """Move the legacy profile to the new path if applicable.
 
-        Users upgrading from a version prior to the Edge rename have
-        their OAuth cookies and xCloud session data in
-        ``~/.local/share/unifideck/chromium-auth``. Losing that would
-        force them to sign in again to Microsoft, Epic, GOG, and
-        Amazon all at once.
+        Three guards:
 
-        Detects the legacy directory and, if the new one does not
-        yet exist, atomically renames it. Cross-filesystem cases are
-        handled gracefully via ``shutil.move`` (falls back to copy-
-        then-remove on EXDEV).
+        * Legacy doesn't exist → no-op;
+        * Both legacy AND new exist → skip (don't
+          clobber a fresh profile with an old one);
+        * Otherwise → ``shutil.move`` the directory
+          (atomic on same filesystem).
 
-        Best-effort: any failure is logged as a warning and swallowed.
-        In the worst case the user has a one-time re-auth, which is
-        the same outcome as not migrating.
+        Also moves the legacy log file alongside,
+        same conditions. Failures log at WARN and
+        proceed — the user can re-auth if needed.
         """
         legacy_exists = Path(self.legacy_profile_dir).is_dir()
         new_exists = Path(self.profile_dir).is_dir()
         if not legacy_exists:
-            return  # nothing to migrate
+            return
         if new_exists:
-            # Both exist — the user has used the refactored version
-            # at least once. Leave the legacy dir alone (it's orphaned
-            # but removing it could delete data the user might want
-            # to keep for diagnosis).
             logger.debug(
-                "[EdgeBrowser] both %s and %s exist; skipping "
-                "migration",
-                self.legacy_profile_dir, self.profile_dir,
+                "[EdgeBrowser] both %s and %s exist; skipping migration",
+                self.legacy_profile_dir,
+                self.profile_dir,
             )
             return
         try:
-            # shutil.move handles EXDEV gracefully (XDG data split
-            # across two filesystems), unlike os.rename.
             shutil.move(self.legacy_profile_dir, self.profile_dir)
             logger.info(
                 "[EdgeBrowser] migrated legacy profile %s → %s",
-                self.legacy_profile_dir, self.profile_dir,
+                self.legacy_profile_dir,
+                self.profile_dir,
             )
         except OSError as e:
             logger.warning(
                 "[EdgeBrowser] legacy profile migration failed "
                 "(%s → %s): %s — users may need to re-auth",
-                self.legacy_profile_dir, self.profile_dir, e,
+                self.legacy_profile_dir,
+                self.profile_dir,
+                e,
             )
-        # Same dance for the log file. Failure is silent since losing
-        # the old log has no user-visible consequence.
-        if (
-            Path(self.legacy_log_file).is_file()
-            and not Path(self.log_file).is_file()
-        ):
+        if Path(self.legacy_log_file).is_file() and not Path(self.log_file).is_file():
             try:
                 shutil.move(self.legacy_log_file, self.log_file)
             except OSError:
-                # filesystem op failed (perm/race); skip — legacy file tolerated
                 pass
 
-    # ── Singleton lock artifacts ─────────────────────────────────────
-
     def _singleton_paths(self) -> list[str]:
-        """Return singleton artifact paths for the shared auth profile."""
+        """Return the three Singleton* artifact paths in the profile.
+
+        Chromium uses these three files to enforce
+        one-process-per-profile. When the previous
+        Edge died ungracefully they're left behind
+        pointing at dead pids.
+
+        Returns:
+            Three-element list of full paths.
+        """
         profile = Path(self.profile_dir)
         return [
             str(profile / "SingletonLock"),
@@ -153,7 +147,21 @@ class EdgeProfileManager:
         ]
 
     def _has_stale_singleton_socket(self) -> bool:
-        """True when the profile points at a missing singleton socket."""
+        """Detect a stale ``SingletonSocket`` symlink pointing at a dead target.
+
+        Chromium creates ``SingletonSocket`` as a
+        symlink whose target encodes the live pid.
+        When the process dies the symlink remains
+        but the target file doesn't — that's the
+        stale state we detect here.
+
+        Returns False on non-symlink (no
+        ``SingletonSocket``, or it's a real file
+        from a different Chromium version).
+
+        Returns:
+            True if cleanup is needed.
+        """
         socket_path = Path(self.profile_dir) / "SingletonSocket"
         if not socket_path.is_symlink():
             return False
@@ -164,13 +172,19 @@ class EdgeProfileManager:
         return not Path(target).exists()
 
     def cleanup_stale_state(self) -> None:
-        """Remove stale singleton artifacts after an unclean browser exit.
+        """Remove the three Singleton* files if a stale singleton is detected.
 
-        Edge leaves ``Singleton*`` symlinks in the shared profile. If
-        the socket target is already gone, relaunching with the same
-        profile becomes unreliable and users end up deleting
-        ``~/.local/share/unifideck``. Only remove these files when the
-        singleton socket is clearly broken.
+        Two-step:
+
+        1. ``_has_stale_singleton_socket`` decides
+           whether cleanup is needed (skip if not);
+        2. Try unlinking each of the three paths;
+           ``FileNotFoundError`` is expected (skip);
+           other ``OSError`` logs at WARN.
+
+        Successful removals are logged at INFO with
+        the file names so operators see the
+        cleanup happened.
         """
         if not self._has_stale_singleton_socket():
             return
@@ -183,8 +197,9 @@ class EdgeProfileManager:
                 continue
             except OSError as e:
                 logger.warning(
-                    "[Edge] Failed to remove stale profile "
-                    "artifact %s: %s", path, e,
+                    "[Edge] Failed to remove stale profile artifact %s: %s",
+                    path,
+                    e,
                 )
         if removed:
             logger.info(
@@ -192,13 +207,26 @@ class EdgeProfileManager:
                 ", ".join(sorted(removed)),
             )
 
-    # ── Cookie inspection and clearing ───────────────────────────────
-
     def has_xbox_session(self) -> bool:
-        """True if xbox.com cookies exist in the shared browser profile.
+        """Inspect the Cookies SQLite DB for any ``%xbox.com%`` entry.
 
-        Returns True on error (assume logged in).
-        Returns True if profile does not exist yet (no logout detected).
+        Five-step:
+
+        1. No Cookies file → return True (no
+           previous session means we can attempt
+           login without forcing a clear);
+        2. Copy the DB to a tempfile (avoids
+           contention with running Edge);
+        3. SQLite COUNT(*) on the copy;
+        4. Return True iff count > 0;
+        5. Cleanup the tempfile in ``finally``.
+
+        Any failure → return True (conservative; an
+        unreadable DB is treated as "session
+        might exist, don't force re-login").
+
+        Returns:
+            True if cookies suggest active session.
         """
         cookie_db = Path(self.profile_dir) / "Default" / "Cookies"
         if not cookie_db.exists():
@@ -206,21 +234,21 @@ class EdgeProfileManager:
         tmp_path = None
         try:
             with tempfile.NamedTemporaryFile(
-                suffix=".db", delete=False,
+                suffix=".db",
+                delete=False,
             ) as tmp:
                 tmp_path = tmp.name
             shutil.copy2(str(cookie_db), tmp_path)
             conn = sqlite3.connect(tmp_path, timeout=5)
             try:
                 cursor = conn.execute(
-                    "SELECT COUNT(*) FROM cookies "
-                    "WHERE host_key LIKE '%xbox.com%'",
+                    "SELECT COUNT(*) FROM cookies WHERE host_key LIKE '%xbox.com%'",
                 )
                 count = cursor.fetchone()[0]
                 return cast("bool", count > 0)
             finally:
                 conn.close()
-        except Exception as e:  # noqa: BLE001 — defensive read
+        except Exception as e:
             logger.debug("[Edge] Could not read cookie DB: %s", e)
             return True
         finally:
@@ -228,7 +256,20 @@ class EdgeProfileManager:
                 Path(tmp_path).unlink()
 
     def clear_cookies(self) -> None:
-        """Delete Xbox / Microsoft cookies from the shared profile."""
+        """Delete Xbox / Microsoft cookies from the live DB (logout).
+
+        Iterates ``cookie_domain_patterns`` and runs
+        a ``DELETE FROM cookies WHERE host_key
+        LIKE ?`` for each. Rollback on any exception
+        inside the transaction.
+
+        Edge must be stopped before this (we're
+        writing the live DB, not a copy). Caller
+        ensures that via ``graceful_kill``.
+
+        Failures log at DEBUG only — clearing
+        cookies is a "best effort logout" feature.
+        """
         cookie_db = Path(self.profile_dir) / "Default" / "Cookies"
         if not cookie_db.exists():
             return
@@ -242,23 +283,33 @@ class EdgeProfileManager:
                     )
                 conn.commit()
                 logger.info(
-                    "[Edge] Cleared Xbox/MS cookies from shared "
-                    "browser profile",
+                    "[Edge] Cleared Xbox/MS cookies from shared browser profile",
                 )
             except Exception:
                 conn.rollback()
                 raise
             finally:
                 conn.close()
-        except Exception as e:  # noqa: BLE001 — defensive write
+        except Exception as e:
             logger.debug(
-                "[Edge] Could not clear shared browser cookies: %s", e,
+                "[Edge] Could not clear shared browser cookies: %s",
+                e,
             )
 
-    # ── Full profile wipe ────────────────────────────────────────────
-
     def clear_profile_data(self) -> None:
-        """Delete the shared Edge auth profile and log files."""
+        """Delete the entire profile directory + log file (full reset).
+
+        Stronger than ``clear_cookies`` — drops
+        ``localStorage``, ``IndexedDB``, cached
+        media, everything. Used when the user
+        explicitly requests "Forget account" or
+        when corruption is detected.
+
+        Skips symlinks (defensive against weird
+        manual setups). Removal failures log at
+        WARN. Successful removals are logged at
+        INFO.
+        """
         removed: list[str] = []
         for path in (self.profile_dir, self.log_file):
             path_obj = Path(path)
@@ -270,10 +321,11 @@ class EdgeProfileManager:
                 else:
                     path_obj.unlink()
                 removed.append(path_obj.name)
-            except Exception as e:  # noqa: BLE001 — best-effort wipe
+            except Exception as e:
                 logger.warning(
                     "[Edge] Could not clear auth profile path %s: %s",
-                    path, e,
+                    path,
+                    e,
                 )
         if removed:
             logger.info(

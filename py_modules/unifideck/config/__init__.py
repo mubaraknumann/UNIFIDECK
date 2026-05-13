@@ -1,72 +1,30 @@
-"""py_modules/unifideck/config/ — Configuration subpackage.
+"""Config layer — defaults + user override + schema validation.
 
-Consolidated. This subpackage now owns the ENTIRE
-config-related public API of Unifideck's backend:
+OP-10 | py_modules/unifideck/config/__init__.py
 
-  - ConfigManager : 3-layer runtime config (defaults, user,
-                           fallback) with dot-notation lookup and
-                           typed getters (was core/config_manager.py)
+The plugin reads configuration from two JSON files:
 
-  - load_json_layer : tolerant JSON loader used for both the
-                           shipped defaults and user overrides (was
-                           core/config_persistence.py)
+* ``defaults/config.json`` — bundled with the plugin,
+  documents every supported key + default;
+* ``~/.config/unifideck/config.json`` (user override) —
+  user-customised values, merged over the defaults.
 
-  - atomic_write_json : write-to-temp-then-rename helper that
-                           guarantees config.json is never left
-                           truncated on a crash (same source file)
+Public surface:
 
-  - validate_i18n_schema : i18n section validator that cross-checks
-                           the locale identifiers against the
-                           scripts/locale_config catalogue (was
-                           core/config_schema.py, renamed to
-                           i18n_schema.py to dispel the name clash
-                           with config/schema.json)
+* ``ConfigManager`` — merge-aware reader with dotted-key
+  lookup;
+* ``load_json_layer`` / ``atomic_write_json`` —
+  persistence primitives;
+* ``validate_i18n_schema`` — strict validation of the
+  i18n section (delegated to ``scripts/locale_config``);
+* ``ConfigValidator`` + ``ValidationResult`` —
+  general-purpose schema validation against
+  ``schema.json``.
 
-  - ConfigSchemaError : exception raised by validate_i18n_schema
-
-  - ConfigValidator : JSON Schema Draft-07 validator for the
-                           whole config.json shape, emits
-                           CONFIG_VALIDATION_* events (,
-                           already in this package)
-
-  - ValidationResult : dataclass holding the outcome of a
-                           ConfigValidator run
-
-  - ValidationError : one entry inside a ValidationResult
-                           describing a single violation
-
-  - schema.json : formal JSON Schema (Draft-07) describing
-                           the full shape of config.json
-
-Legacy entry points at unifideck.core.config_manager,
-unifideck.core.config_persistence and unifideck.core.config_schema
-are preserved as deprecated shims for backward compatibility with
-code written before v0.7.1. They emit a DeprecationWarning on
-import and will be removed in v0.9.0.
-
-Typical usage from main.py::
-
-    from unifideck.config import (
-        ConfigManager,
-        ConfigValidator,
-        ValidationResult,
-    )
-
-    # 1. Validate the files on disk first
-    validator = ConfigValidator(bus=self.bus)
-    result = await validator.validate_config(
-        defaults_path="defaults/config.json",
-        user_path="~/.config/unifideck/config.json",
-    )
-
-    # 2. Then load into a ConfigManager. If validation failed,
-    # degraded mode ignores user overrides and keeps only the
-    # shipped defaults.
-    config = ConfigManager(
-        defaults_path="defaults/config.json",
-        user_path=None if not result.success else "~/.config/unifideck/config.json",
-    )
+``startup.py`` (not re-exported here) glues these
+together at boot — see ``unifideck.bootstrap.boot``.
 """
+
 from .config_manager import ConfigManager
 from .config_persistence import (
     atomic_write_json,
@@ -83,15 +41,11 @@ from .validator import (
 )
 
 __all__ = [
-    # Runtime config
     "ConfigManager",
-    # Persistence helpers
     "load_json_layer",
     "atomic_write_json",
-    # i18n schema validation
     "validate_i18n_schema",
     "ConfigSchemaError",
-    # JSON Schema validator
     "ConfigValidator",
     "ValidationResult",
     "ValidationError",

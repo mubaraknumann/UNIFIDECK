@@ -1,45 +1,26 @@
-"""auth.edge_browser.edge — EdgeBrowser façade class.
+"""``EdgeBrowser`` facade — single entry point for the whole edge_browser package.
 
-Microsoft Edge lifecycle for auth + xCloud. Shared infrastructure
-for Unifideck's browser-based OAuth flows (Epic, GOG, Amazon,
-Microsoft all launch the same Edge instance to sign in) and for
-Microsoft's xCloud game streaming.
+OP-15c8 | py_modules/unifideck/auth/edge_browser/edge.py
 
-Three internal helpers are composed at construction time:
+Combines installer + profile manager + CDP client +
+process ops + launch flows into one object. Most
+methods are thin pass-throughs to the underlying
+components — the facade exists so callers
+(``MicrosoftStore.auth``, xCloud launcher) have a
+stable, single-import API.
 
-  - ``EdgeInstaller``       : flatpak install + detection + udev
-  - ``EdgeCDPClient``       : /json/list, navigate, close targets
-  - ``EdgeProfileManager``  : profile dir, singleton, cookies
+Module-level constants:
 
-Plus two sibling modules used as function collections:
-
-  - ``env.clean_env()``              : scrubbed subprocess env
-  - ``launch.launch_auth/xcloud``    : subprocess spawn helpers
-
-Historically this file was named microsoft_chromium.py and its
-class was ChromiumBrowser because earlier versions targeted a
-generic Chromium-based browser. The current implementation is
-100% Edge-specific (it's the only browser with native Steam Deck
-controller support in xCloud), so the names have been updated
-for truthfulness.
-
-Because this file is shared across all OAuth stores, not just
-Microsoft, it lives under auth/ rather than stores/microsoft/.
-The shell launcher's _generic_auth_handler, its Microsoft auth
-branch, and its xCloud kiosk branch all point at the same
-edge-auth profile directory managed by this module.
-
-Usage::
-
-    from unifideck.auth.edge_browser import EdgeBrowser
-    browser = EdgeBrowser(cdp_port=9222, locale_fn=get_locale)
-    if not browser.is_installed:
-        await browser.install()
-    browser.launch_auth(oauth_url)
-
-Reference: Technical Document v1.0 — Section 3.1.5
-(Infrastructure services) and Section 8 (Security).
+* ``PROFILE_DIR`` /  ``LOG_FILE`` — current paths
+  under ``~/.local/share/unifideck``;
+* ``_LEGACY_*`` — pre-rename paths used by
+  ``EdgeProfileManager.migrate_legacy_profile``;
+* ``_MS_COOKIE_DOMAINS`` — SQL LIKE patterns for
+  logout cookie scrubbing;
+* ``_BASE_FLAGS`` — Chrome flags shared by every
+  Edge launch.
 """
+
 from __future__ import annotations
 
 import logging
@@ -56,36 +37,32 @@ from .profile import EdgeProfileManager
 
 logger = logging.getLogger(__name__)
 
-# ── Profile paths ───────────────────────────────────────────────────────
-# New canonical locations. The module renames the legacy
-# chromium-auth directory on first construction if it finds it,
-# so existing users don't lose their OAuth cookies during the
-# rename migration.
-PROFILE_DIR = str(Path(
-    "~/.local/share/unifideck/edge-auth",
-).expanduser())
-LOG_FILE = str(Path(
-    "~/.local/share/unifideck/edge-auth.log",
-).expanduser())
-
-# Legacy paths, used only for the one-shot migration. The
-# _migrate_legacy_profile() call moves the old directory into the
-# new name at first use and logs the action. After migration
-# these constants serve no purpose and are only kept as a
-# reference for the next few release cycles.
-_LEGACY_PROFILE_DIR = str(Path(
-    "~/.local/share/unifideck/chromium-auth",
-).expanduser())
-_LEGACY_LOG_FILE = str(Path(
-    "~/.local/share/unifideck/chromium-auth.log",
-).expanduser())
-
-# Domains whose cookies are cleared on logout
-_MS_COOKIE_DOMAINS = (
-    "%xbox.com%", "%microsoft.com%", "%live.com%", "%microsoftonline.com%",
+PROFILE_DIR = str(
+    Path(
+        "~/.local/share/unifideck/edge-auth",
+    ).expanduser()
 )
-
-# Edge flags shared between auth and game launch
+LOG_FILE = str(
+    Path(
+        "~/.local/share/unifideck/edge-auth.log",
+    ).expanduser()
+)
+_LEGACY_PROFILE_DIR = str(
+    Path(
+        "~/.local/share/unifideck/chromium-auth",
+    ).expanduser()
+)
+_LEGACY_LOG_FILE = str(
+    Path(
+        "~/.local/share/unifideck/chromium-auth.log",
+    ).expanduser()
+)
+_MS_COOKIE_DOMAINS = (
+    "%xbox.com%",
+    "%microsoft.com%",
+    "%live.com%",
+    "%microsoftonline.com%",
+)
 _BASE_FLAGS = [
     "--no-first-run",
     "--disable-translate",
@@ -99,12 +76,14 @@ _BASE_FLAGS = [
 
 
 def _make_profile_manager() -> EdgeProfileManager:
-    """Build an EdgeProfileManager bound to the canonical path constants.
+    """Build an ``EdgeProfileManager`` with the module-level paths.
 
-    Used by EdgeBrowser's @staticmethod delegations (has_xbox_session,
-    clear_cookies, clear_profile_data) which have no access to a
-    self._profile instance. The factory wires the module-level path
-    constants into a freshly built EdgeProfileManager.
+    Factory function (used in places where the
+    facade can't pre-create one — e.g. static
+    methods that don't have ``self``).
+
+    Returns:
+        Fresh ``EdgeProfileManager``.
     """
     return EdgeProfileManager(
         profile_dir=PROFILE_DIR,
@@ -116,209 +95,332 @@ def _make_profile_manager() -> EdgeProfileManager:
 
 
 class EdgeBrowser:
-    """Manages the Microsoft Edge browser for auth and xCloud.
+    """One-stop facade combining installer, profile, CDP, launch, kill."""
 
-    One instance per plugin — the store coordinator (any of the four
-    OAuth stores) injects a shared reference. The class is 100%
-    Edge-specific: the flatpak app id, the native binary names, and
-    the browser flags are all Edge's.
-
-    Attributes:
-      cdp_port: CDP remote debugging port. Auth flows use 9222;
-        xCloud kiosk mode uses 9223 via port+1.
-      locale_fn: Callable returning the BCP-47 locale string.
-        Used to pass --lang to the browser.
-      process: The subprocess.Popen handle, or None when the browser
-        isn't running.
-
-    """
-
-    def __init__(  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(
         self,
         cdp_port: int = 9222,
         locale_fn: Callable[[], str] | None = None,
     ):
+        """Wire up sub-components and run legacy-profile migration.
+
+        Three internal components built in
+        constructor (installer, CDP client,
+        profile manager). Legacy migration runs
+        immediately so subsequent operations see
+        the fresh paths.
+
+        Args:
+            cdp_port: ``--remote-debugging-port`` for
+                auth launches (xCloud uses
+                ``port+1``).
+            locale_fn: callable returning the active
+                locale tag; default returns
+                ``"en-US"``.
+        """
         self.cdp_port = cdp_port
         self.locale_fn = locale_fn or (lambda: "en-US")
         self.process: subprocess.Popen | None = None
-        # Composed installer — owns detection + flatpak install
-        # + default-browser snapshot + controller permissions.
-        # Extracted from this class to keep each concern cohesive.
         self._installer = EdgeInstaller(clean_env_fn=clean_env)
-        # Composed CDP client — owns /json/version, /json/list,
-        # navigation and target-close traffic over the debugging port.
         self._cdp = EdgeCDPClient(cdp_port=cdp_port)
-        # Composed profile manager — owns legacy migration,
-        # singleton lock cleanup, cookie inspection, and profile wipe.
         self._profile = _make_profile_manager()
-        # Run the one-shot profile directory migration on first
-        # instantiation. Cheap (stat + maybe one rename) and
-        # idempotent — subsequent constructions are no-ops.
         self._migrate_legacy_profile()
 
-    # ── Profile (delegated to EdgeProfileManager) ────────────────────
-
     def _migrate_legacy_profile(self) -> None:
-        """Delegate to EdgeProfileManager."""
+        """Forward to ``EdgeProfileManager.migrate_legacy_profile``.
+
+        Runs once at construction. Idempotent.
+        """
         self._profile.migrate_legacy_profile()
 
     def is_running(self) -> bool:
-        """Return True when the auth browser instance is still alive."""
+        """Two-source liveness check — own process + CDP probe.
+
+        We may inherit a running Edge from a prior
+        plugin reload (where the process handle was
+        lost but the browser is still alive).
+        ``_get_browser_ws_url`` catches that case via
+        the CDP health endpoint.
+
+        Returns:
+            True if Edge is alive.
+        """
         if self.process is not None and self.process.poll() is None:
             return True
         return self._get_browser_ws_url() is not None
 
     def _singleton_paths(self) -> list[str]:
-        """Delegate to EdgeProfileManager."""
+        """Forward to ``EdgeProfileManager._singleton_paths``.
+
+        Returns:
+            Three-element list of Singleton* paths.
+        """
         return self._profile._singleton_paths()
 
     def _has_stale_singleton_socket(self) -> bool:
-        """Delegate to EdgeProfileManager."""
+        """Forward to ``EdgeProfileManager._has_stale_singleton_socket``.
+
+        Returns:
+            True if cleanup is needed.
+        """
         return self._profile._has_stale_singleton_socket()
 
     def cleanup_stale_profile_state(self) -> None:
-        """Delegate to EdgeProfileManager."""
+        """Forward to ``EdgeProfileManager.cleanup_stale_state``.
+
+        Removes Singleton* artifacts left behind by
+        an ungracefully-killed Edge so the next
+        launch isn't refused with "Chromium already
+        running".
+        """
         self._profile.cleanup_stale_state()
 
-    # ── CDP (delegated to EdgeCDPClient) ─────────────────────────────
-
     def _get_browser_ws_url(self) -> str | None:
-        """Delegate to EdgeCDPClient."""
+        """Forward to ``EdgeCDPClient.get_browser_ws_url``.
+
+        Returns:
+            WS URL or ``None``.
+        """
         return self._cdp.get_browser_ws_url()
 
     def _list_cdp_targets(self) -> list[dict[str, Any]]:
-        """Delegate to EdgeCDPClient."""
+        """Forward to ``EdgeCDPClient.list_targets``.
+
+        Returns:
+            List of target dicts.
+        """
         return self._cdp.list_targets()
 
     async def navigate_tab(
         self,
         url: str,
-        timeout: float = 15.0,  # noqa: ASYNC109 — delegated deadline
+        timeout: float = 15.0,
     ) -> bool:
-        """Delegate to EdgeCDPClient."""
+        """Forward to ``EdgeCDPClient.navigate_tab``.
+
+        Args:
+            url: target URL.
+            timeout: load timeout.
+
+        Returns:
+            True on successful navigation.
+        """
         return await self._cdp.navigate_tab(url, timeout=timeout)
 
     async def _close_all_cdp_targets(
-        self, *, log_prefix: str,
+        self,
+        *,
+        log_prefix: str,
     ) -> bool:
-        """Delegate to EdgeCDPClient."""
+        """Forward to ``EdgeCDPClient.close_all_targets``.
+
+        Args:
+            log_prefix: log context tag.
+
+        Returns:
+            True if anything was closed.
+        """
         return await self._cdp.close_all_targets(log_prefix=log_prefix)
 
     async def prepare_auth_launch(self) -> None:
-        """Close any lingering CDP auth browser and clear broken lock files."""
+        """Close any leftover CDP targets and clean stale singletons.
+
+        Called before each new auth launch to ensure
+        we don't reuse a half-dead Edge from a prior
+        attempt.
+        """
         await self._close_all_cdp_targets(log_prefix="lingering auth")
         self.cleanup_stale_profile_state()
 
     async def close_auth_browser(self) -> bool:
-        """Close the live Microsoft auth browser after OAuth succeeds."""
+        """Close all CDP targets + cleanup singletons; report whether anything closed.
+
+        Returns:
+            True if any tabs were closed.
+        """
         closed = await self._close_all_cdp_targets(log_prefix="auth")
         if closed:
             self.cleanup_stale_profile_state()
         return closed
 
-    # ── Controller permissions ───────────────────────────────────────
-
     @staticmethod
     def ensure_controller_permissions() -> bool:
-        """Delegate to EdgeInstaller.ensure_controller_permissions.
+        """Static wrapper around ``EdgeInstaller.ensure_controller_permissions``.
 
-        Kept as a @staticmethod for API compatibility: callers that
-        invoke this without an EdgeBrowser instance still work by
-        instantiating a one-shot installer here.
+        Static so callers without a live facade
+        (e.g. one-off scripts) can still apply the
+        override.
+
+        Returns:
+            True on success or already-applied.
         """
         return EdgeInstaller(
             clean_env_fn=clean_env,
         ).ensure_controller_permissions()
 
-    # ── Detection & install (delegated to EdgeInstaller) ─────────────
-
     def _flatpak_remote_names(self, scope: str) -> set[str]:
-        """Delegate to EdgeInstaller."""
+        """Forward to ``EdgeInstaller._flatpak_remote_names``.
+
+        Args:
+            scope: ``"--user"`` or ``"--system"``.
+
+        Returns:
+            Set of remote names.
+        """
         return self._installer._flatpak_remote_names(scope)
 
     async def _ensure_user_flathub_remote(self) -> bool:
-        """Delegate to EdgeInstaller."""
+        """Forward to ``EdgeInstaller._ensure_user_flathub_remote``.
+
+        Returns:
+            True on success.
+        """
         return await self._installer._ensure_user_flathub_remote()
 
     def find_cmd(self) -> list[str] | None:
-        """Delegate to EdgeInstaller."""
+        """Forward to ``EdgeInstaller.find_cmd``.
+
+        Returns:
+            Argv prefix or ``None``.
+        """
         return self._installer.find_cmd()
 
     @property
     def is_installed(self) -> bool:
-        """Delegate to EdgeInstaller."""
+        """Forward to ``EdgeInstaller.is_installed``.
+
+        Returns:
+            True if Edge is on disk.
+        """
         return self._installer.is_installed
 
     @staticmethod
     def _get_default_browser() -> str | None:
-        """Delegate to EdgeInstaller (instantiates one-shot installer)."""
+        """Static wrapper around ``EdgeInstaller._get_default_browser``.
+
+        Returns:
+            Browser id string or ``None``.
+        """
         return EdgeInstaller(clean_env_fn=clean_env)._get_default_browser()
 
     @staticmethod
     def _restore_default_browser(original: str | None) -> None:
-        """Delegate to EdgeInstaller (instantiates one-shot installer)."""
+        """Static wrapper around ``EdgeInstaller._restore_default_browser``.
+
+        Args:
+            original: previous default browser id.
+        """
         EdgeInstaller(
             clean_env_fn=clean_env,
         )._restore_default_browser(original)
 
     async def install(self) -> dict[str, Any]:
-        """Delegate to EdgeInstaller."""
+        """Forward to ``EdgeInstaller.install``.
+
+        Returns:
+            Typed result dict.
+        """
         return await self._installer.install()
 
-    # ── Launch / kill ────────────────────────────────────────────────
-
     def launch_auth(self, auth_url: str) -> bool:
-        """Launch the auth browser for OAuth — delegate to launch module."""
+        """Launch Edge in auth (windowed fullscreen) mode.
+
+        Forwards to ``launch.launch_auth`` with
+        ``self`` as the browser arg — the launch
+        function reads our ``cdp_port``,
+        ``locale_fn``, and stamps ``self.process``
+        with the spawned ``Popen``.
+
+        Args:
+            auth_url: OAuth start URL.
+
+        Returns:
+            True on successful spawn.
+        """
         return _launch.launch_auth(self, auth_url)
 
     def launch_xcloud(self, xcloud_url: str) -> bool:
-        """Launch Edge in kiosk mode — delegate to launch module."""
+        """Launch Edge in xCloud kiosk mode.
+
+        Same pattern as ``launch_auth`` but with
+        kiosk flags + ``port+1`` for CDP.
+
+        Args:
+            xcloud_url: deep-link URL.
+
+        Returns:
+            True on successful spawn.
+        """
         return _launch.launch_xcloud(self, xcloud_url)
 
     def kill(self) -> None:
-        """Gracefully terminate the auth browser process.
+        """Gracefully kill the running Edge, then cleanup state.
 
-        Thin forward to ``process_ops.graceful_kill``; the
-        lifecycle logic lives in its own module for testability.
-        After the kill returns, the process handle is cleared
-        and any stale profile state is cleaned up so the next
-        launch starts from a known-good baseline.
+        Two-step:
+
+        1. ``process_ops.graceful_kill`` (SIGTERM
+           with cookie-flush grace);
+        2. ``cleanup_stale_profile_state`` — drop
+           any Singleton* left behind.
+
+        Always clears ``self.process`` regardless of
+        kill success (so subsequent ``is_running``
+        checks don't reference the dead handle).
         """
         process_ops.graceful_kill(self.process)
         self.process = None
         self.cleanup_stale_profile_state()
 
-    # ── Cookie management (static, via one-shot profile manager) ─────
-
     @staticmethod
     def has_xbox_session() -> bool:
-        """Delegate to EdgeProfileManager (one-shot instance)."""
+        """Static check whether the profile has Xbox cookies (skip-login signal).
+
+        Returns:
+            True if cookies present.
+        """
         return _make_profile_manager().has_xbox_session()
 
     @staticmethod
     def clear_cookies() -> None:
-        """Delegate to EdgeProfileManager (one-shot instance)."""
+        """Static wrapper to delete Xbox/Microsoft cookies (logout).
+
+        Used by the "Sign out" UI action. Requires
+        Edge to be stopped first; callers ensure that
+        via ``kill()`` before invoking. Wipes only
+        the four documented cookie domains (xbox.com,
+        microsoft.com, live.com, microsoftonline.com)
+        — keeps unrelated browsing state intact.
+        """
         _make_profile_manager().clear_cookies()
 
     @staticmethod
     def clear_profile_data() -> None:
-        """Delegate to EdgeProfileManager (one-shot instance)."""
+        """Static wrapper to delete the entire auth profile directory.
+
+        Stronger than ``clear_cookies`` — drops the
+        profile dir + log file entirely. Used by
+        "Forget account" UI action and when the
+        plugin detects corruption (DB schema
+        mismatch after Edge upgrade).
+        """
         _make_profile_manager().clear_profile_data()
 
-    # ── CDP helpers ──────────────────────────────────────────────────
-
     async def wait_and_check_crash(self) -> bool:
-        """Wait for the auth browser to start, return False if it crashed.
+        """Watch for early Edge crash by polling proc + CDP.
 
-        Thin forward to ``process_ops.wait_and_check_crash``; the
-        polling logic lives in its own module for testability.
-        Injects ``self._cdp.probe_cdp`` as the readiness probe
-        so the shared helper stays CDP-client-agnostic. Clears
-        ``self.process`` on a detected crash so subsequent
-        methods see the browser as stopped.
+        Forwards to ``process_ops.wait_and_check_crash``
+        with our process and CDP probe. On a
+        detected crash, clears ``self.process`` so
+        subsequent ``is_running`` reflects the
+        dead state.
+
+        Returns:
+            False on detected crash, True otherwise.
         """
         result = await process_ops.wait_and_check_crash(
-            self.process, self._cdp.probe_cdp, LOG_FILE,
+            self.process,
+            self._cdp.probe_cdp,
+            LOG_FILE,
         )
         if not result:
             self.process = None

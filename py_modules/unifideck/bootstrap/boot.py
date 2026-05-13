@@ -1,34 +1,34 @@
-"""bootstrap.boot — full plugin cold-start orchestration.
+"""Plugin boot orchestrator — wires the 5-layer architecture.
 
-Runs exactly once when Decky Loader loads Unifideck. The
-ordering below is load-bearing:
+OP-23b | py_modules/unifideck/bootstrap/boot.py
 
-  Layer 2 (core) → Layer 4 (stores) → Layer 5 (services)
+``boot_plugin`` is the entry point called by ``main.py``
+at plugin load. It walks the architecture's five layers
+in dependency order:
 
-Services subscribe to the EventBus in their ``__init__``, so the
-event topology is only live after the bootstrap step.
+* **Layer 2 — Core** (``_boot_layer2_core``)
+  Event bus + pipeline + cache manager + default cache
+  registrations.
 
-Boot sequence (each step must complete before the next):
+* **Layer 3 — Config** (``_boot_config_and_validate``)
+  ``ConfigManager`` with defaults + user override paths,
+  plus the startup config-validation pass.
 
-  1. ``EventBus`` instantiation — empty, no pipeline yet
-  2. Pipeline construction — watchdog + latency + replay +
-     batcher + dispatcher, with dispatcher.start() awaited
-  3. ``CacheManager`` instantiation pointing at the data dir
-  4. Cache name registration (``register_default_caches``) —
-     MUST happen before stores are discovered because store
-     constructors may call ``is_available()`` which reads
-     from the cache
-  5. ``ConfigManager`` with 3-layer merge (defaults + user + code)
-  6. Config validation — marks plugin as degraded on failure but
-     never prevents boot
-  7. ``StoreRegistry`` + ``SyncService`` instantiation
-  8. Store auto-discovery — scans ``stores/`` for connectors
-  9. Layer-5 services bootstrap via ``ServiceContainer``
-  10. ``start_async_services`` — kicks off long-lived service
-      workers (cloudsave, download queue, etc.)
+* **Layer 4 — Stores** (``_boot_layer4_stores``)
+  ``StoreRegistry`` + ``SyncService``, with auto-
+  discovery of bundled stores under ``stores/``.
 
-Mutates the plugin in place. Never raises.
+* **Layer 5 — Services** (``_boot_layer5_services``)
+  ``ServiceContainer`` with every Layer-5 service
+  (shortcut, artwork, cloudsave, …), plus
+  ``start_async_services`` to kick off the long-running
+  ones.
+
+Each layer attaches its objects directly onto the
+``plugin`` instance so RPC handlers can find them by
+attribute name.
 """
+
 from __future__ import annotations
 
 import logging
@@ -57,29 +57,26 @@ async def boot_plugin(
     decky_plugin_dir: str,
     user_config_path_resolver: Any,
 ) -> None:
-    """Cold-start ``plugin`` in place.
+    """Run the four boot layers + log readiness.
+
+    Keyword-only callable args (``user_config_path_resolver``)
+    keep the contract explicit — it's a callable, not a
+    path, because the user-config location depends on
+    Decky runtime state that isn't available until after
+    boot starts.
 
     Args:
-        plugin: The ``Plugin`` instance. Will have its attributes
-            populated in place — the method exists to preserve
-            the subtle ordering of ``self.*`` assignments that
-            services depend on (each new service may subscribe
-            to events emitted by attributes set earlier).
-        decky_plugin_dir: The absolute path passed by Decky Loader
-            as the plugin root. Used to resolve ``defaults/``,
-            ``data/``, and ``py_modules/unifideck/stores/``.
-        user_config_path_resolver: Zero-arg callable that returns
-            the user overrides JSON path. Injected so tests can
-            stub out the XDG/env resolution without monkey-patching.
-
-    Never raises: validation failures flag degraded mode and
-    continue booting; service bootstrap failures are logged by
-    the ServiceContainer itself and leave the failed service
-    entry as ``None`` for the mixin guards to handle.
+        plugin: the Decky plugin instance to populate
+            with attributes.
+        decky_plugin_dir: absolute plugin directory.
+        user_config_path_resolver: callable returning the
+            user-config file path.
     """
     pipeline = await _boot_layer2_core(plugin, decky_plugin_dir)
     await _boot_config_and_validate(
-        plugin, decky_plugin_dir, user_config_path_resolver,
+        plugin,
+        decky_plugin_dir,
+        user_config_path_resolver,
     )
     _boot_layer4_stores(plugin, decky_plugin_dir)
     await _boot_layer5_services(plugin, pipeline)
@@ -87,10 +84,18 @@ async def boot_plugin(
 
 
 async def _boot_layer2_core(plugin: Any, decky_plugin_dir: str) -> Any:
-    """Layer 2 — EventBus + pipeline + cache.
+    """Wire the bus, the bus pipeline, the cache, and register caches.
 
-    Returns the ``BusPipeline`` so ``boot_plugin`` can forward it
-    to ``bootstrap_services``.
+    Order matters: the bus must exist before the
+    pipeline (which subscribes to it); the cache must
+    exist before ``register_default_caches`` is called.
+
+    Args:
+        plugin: instance receiving the attributes.
+        decky_plugin_dir: plugin root path.
+
+    Returns:
+        The built pipeline (passed through to layer 5).
     """
     plugin.bus = EventBus()
     pipeline = await build_eventbus_pipeline(plugin)
@@ -106,25 +111,29 @@ async def _boot_config_and_validate(
     decky_plugin_dir: str,
     user_config_path_resolver: Any,
 ) -> None:
-    """Layer 3 — ConfigManager + startup validation.
+    """Build ``ConfigManager`` and run the startup validation pass.
 
-    Validates the config at boot BEFORE stores are instantiated.
-    Failures log a warning, flag the plugin as "degraded", emit
-    CONFIG_VALIDATION_FAILED on the bus for SecurityService, and
-    continue booting anyway so the user can still see the
-    DiagnosticsPanel and fix their config. Validation covers
-    user overrides as well.
+    The validation pass produces two outputs stamped on
+    the plugin:
 
-    ConfigManager merges defaults/config.json + user overrides
-    from the XDG location (~/.config/unifideck/config.json by
-    default, overridable via UNIFIDECK_USER_CONFIG /
-    XDG_CONFIG_HOME). The user file is allowed to be missing at
-    first run: the manager skips the user layer and falls back
-    to defaults + hardcoded values.
+    * ``_config_validation_result`` — typed result with
+      per-error details, surfaced to the frontend via
+      ``UIHandlers.get_config_validation_status``;
+    * ``_config_degraded`` — bool quick-check used by
+      services to decide whether to opt into safer
+      defaults.
+
+    Args:
+        plugin: instance receiving the attributes.
+        decky_plugin_dir: plugin root.
+        user_config_path_resolver: callable returning
+            user-config path.
     """
     plugin._user_config_path = user_config_path_resolver()
     defaults_path = os.path.join(
-        decky_plugin_dir, "defaults", "config.json",
+        decky_plugin_dir,
+        "defaults",
+        "config.json",
     )
     plugin.config = ConfigManager(
         defaults_path=defaults_path,
@@ -142,11 +151,25 @@ async def _boot_config_and_validate(
 
 
 def _boot_layer4_stores(plugin: Any, decky_plugin_dir: str) -> None:
-    """Layer 4 — StoreRegistry + SyncService + auto-discovery."""
+    """Build store registry + sync service and auto-discover stores.
+
+    Auto-discovery walks ``stores_dir`` and registers
+    every store class it finds — see
+    ``StoreRegistry.auto_discover`` for the discovery
+    rules.
+
+    Args:
+        plugin: instance receiving the attributes.
+        decky_plugin_dir: plugin root (used to derive
+            the stores directory).
+    """
     plugin.registry = StoreRegistry(plugin.bus)
     plugin.sync_service = SyncService(plugin.bus, plugin.registry)
     stores_dir = os.path.join(
-        decky_plugin_dir, "py_modules", "unifideck", "stores",
+        decky_plugin_dir,
+        "py_modules",
+        "unifideck",
+        "stores",
     )
     plugin.registry.auto_discover(
         stores_dir,
@@ -156,9 +179,25 @@ def _boot_layer4_stores(plugin: Any, decky_plugin_dir: str) -> None:
 
 
 async def _boot_layer5_services(plugin: Any, pipeline: Any) -> None:
-    """Layer 5 — infrastructure services + async workers."""
+    """Construct the service container and start the async services.
+
+    ``bootstrap_services`` returns the typed
+    ``ServiceContainer`` with every Layer-5 service
+    wired (shortcut, artwork, cloudsave, …).
+    ``start_async_services`` then kicks off the
+    long-running ones (subscribers, background tasks).
+
+    Args:
+        plugin: instance receiving the ``services``
+            attribute.
+        pipeline: the bus pipeline from
+            ``_boot_layer2_core``.
+    """
     plugin.services = bootstrap_services(
-        plugin.bus, plugin.registry, plugin.cache, plugin.config,
+        plugin.bus,
+        plugin.registry,
+        plugin.cache,
+        plugin.config,
         pipeline,
     )
     await start_async_services(plugin.services)

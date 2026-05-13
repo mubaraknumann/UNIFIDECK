@@ -1,22 +1,40 @@
-"""Locate the launchable .exe for an installed GOG game.
+"""Locate the launchable executable in a GOG install (multi-strategy).
 
-OP-50e | py_modules/unifideck/stores/gog/exe_resolver.py
+OP-22-gog-exe-resolver | py_modules/unifideck/stores/gog/exe_resolver.py
 
-GOG installers often produce nested directory structures with several
-.exe files (the game, side tools, redistributables); ``GOGExeResolver``
-implements the heuristics to pick the right one to launch:
+GOG installs are inconsistent — Windows games via
+Wine/Proton, native Linux games via shell scripts,
+DOSBox/ScummVM-wrapped classics with batch
+launchers. This module picks the right entry
+point.
 
-1. ``goggame-<id>.info`` manifest — read the ``playTasks`` field;
-2. ``game/`` sub-directory check — common GOG layout;
-3. .exe size filter — exclude obvious tools (≤ 1 MiB);
-4. naming heuristic — prefer "game-name.exe" over "uninstall.exe" etc.
+Resolution strategy (in order):
 
-Module-level helpers (``parse_size_string``,
-``get_game_id_from_goggame_filename``) are pure utilities shared with
-``install/marker.py`` and ``install/planner.py``.
+1. **goggame info** — parse
+   ``goggame-<id>.info`` for the ``isPrimary``
+   playTask; this is the authoritative source
+   gogdl uses;
+2. **Wrapper batch** — if the playTask points at
+   a DOSBox/ScummVM wrapper, check for
+   ``run-game.bat`` and prefer that;
+3. **Workdir override** — if data files like
+   ``.arch05`` / ``.forge`` are in the install
+   root, override the playTask workdir to point
+   there (some GOG releases ship data in unusual
+   locations);
+4. **start.sh** — for native Linux installs;
+5. **Largest exe** — last resort: scan *.exe,
+   skip installers/redists/crash handlers, pick
+   the largest remaining.
+
+The ``_SKIP_EXE_PATTERNS`` list filters out
+uninstall/setup/crash-handler exes that would
+otherwise win the size race. ``_WRAPPER_EXE_NAMES``
+identifies DOSBox/ScummVM wrappers.
 """
 
 from __future__ import annotations
+
 import glob
 import json
 import logging
@@ -25,6 +43,7 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
 _SKIP_EXE_PATTERNS = (
     "unins",
     "setup",
@@ -43,15 +62,45 @@ _WRAPPER_EXE_NAMES = {"dosbox.exe", "scummvm.exe"}
 
 
 class GOGExeResolver:
-    """Gogexe resolver."""
+    """Find the launchable exe for a GOG install — multi-strategy resolver.
+
+    Stateless — every method is either static or
+    operates on its arguments only. Callers
+    instantiate once and reuse.
+    """
 
     def find(self, install_path: str) -> str | None:
-        """Find."""
+        """Convenience wrapper — return just the exe path (drop workdir).
+
+        Used when the caller doesn't care about
+        the workdir (e.g. just checking if an
+        exe exists for verification).
+
+        Args:
+            install_path: install root.
+
+        Returns:
+            Exe path or ``None``.
+        """
         result = self.find_with_workdir(install_path)
         return result[0] if result else None
 
     def find_with_workdir(self, install_path: str) -> tuple[str, str] | None:
-        """Find with workdir."""
+        """Full resolver — return (exe, workdir) tuple or ``None``.
+
+        Catches any unexpected exception (the
+        multi-strategy code is complex enough
+        that a corrupt info file could throw in
+        a path we haven't anticipated). Errors
+        log + return ``None`` so launch fails
+        cleanly rather than corrupting state.
+
+        Args:
+            install_path: install root.
+
+        Returns:
+            ``(exe, workdir)`` or ``None``.
+        """
         try:
             return self._resolve(install_path)
         except Exception as e:
@@ -63,7 +112,24 @@ class GOGExeResolver:
             return None
 
     def _resolve(self, install_path: str) -> tuple[str, str] | None:
-        """Resolve."""
+        """Try each strategy in priority order; return the first match.
+
+        Strategies tried:
+
+        1. goggame info playTask;
+        2. start.sh (native Linux);
+        3. Largest exe (fallback).
+
+        Returns ``None`` only if all three fail
+        — that's a real failure (install
+        corrupted or unrecognised game layout).
+
+        Args:
+            install_path: install root.
+
+        Returns:
+            ``(exe, workdir)`` or ``None``.
+        """
         search_dirs = self._build_search_dirs(install_path)
         info_result = self._resolve_via_goggame_info(
             install_path,
@@ -87,7 +153,20 @@ class GOGExeResolver:
 
     @staticmethod
     def _build_search_dirs(install_path: str) -> list[str]:
-        """Build search dirs."""
+        """Compute the ordered list of dirs to search for executables.
+
+        Order matters: try ``install_path/game/``
+        first (the common GOG layout), then
+        ``install_path/`` itself. If
+        ``game/`` doesn't exist, just the root
+        is searched.
+
+        Args:
+            install_path: install root.
+
+        Returns:
+            List of directory paths.
+        """
         search_dirs: list[str] = []
         game_subdir = str(Path(install_path) / "game")
         if Path(game_subdir).is_dir():
@@ -95,12 +174,26 @@ class GOGExeResolver:
         search_dirs.append(install_path)
         return search_dirs
 
-    def _resolve_via_goggame_info(
-        self,
-        install_path: str,
-        search_dirs: list[str],
-    ) -> tuple[str, str] | None:
-        """Resolve via goggame info."""
+    def _resolve_via_goggame_info(self, install_path: str, search_dirs: list[str]) -> tuple[str, str] | None:
+        """Strategy 1 — read goggame-<id>.info's primary playTask.
+
+        Sub-steps:
+
+        1. Find + load the info file;
+        2. Pull the ``isPrimary`` playTask;
+        3. Check for wrapper override (DOSBox /
+           ScummVM batch launcher);
+        4. Resolve absolute exe + workdir paths;
+        5. Apply the data-files workdir override
+           heuristic.
+
+        Args:
+            install_path: install root.
+            search_dirs: directories to search.
+
+        Returns:
+            ``(exe, workdir)`` or ``None``.
+        """
         primary, root_dir = self._load_primary_play_task(
             search_dirs,
         )
@@ -119,11 +212,26 @@ class GOGExeResolver:
             primary,
         )
 
-    def _load_primary_play_task(
-        self,
-        search_dirs: list[str],
-    ) -> tuple[dict[str, Any] | None, str]:
-        """Load primary play task."""
+    def _load_primary_play_task(self, search_dirs: list[str]) -> tuple[dict[str, Any] | None, str]:
+        """Load the info file and pull out the ``isPrimary`` playTask.
+
+        gogdl's info file has a ``playTasks``
+        array; one or more are marked
+        ``isPrimary: true`` (the main entry
+        point) and others are bonus content
+        (manuals, soundtracks).
+
+        We want the first primary one. Returns
+        ``(None, "")`` if no info file, parse
+        fails, or no primary task.
+
+        Args:
+            search_dirs: where to look for info.
+
+        Returns:
+            ``(primary_task_dict_or_None,
+            root_dir)``.
+        """
         info_file, root_dir = self._find_goggame_info(search_dirs)
         if not info_file:
             return None, ""
@@ -146,13 +254,33 @@ class GOGExeResolver:
         )
         return primary, root_dir
 
-    def _resolve_play_task_paths(
-        self,
-        install_path: str,
-        root_dir: str,
-        primary: dict[str, Any],
-    ) -> tuple[str, str] | None:
-        """Resolve play task paths."""
+    def _resolve_play_task_paths(self, install_path: str, root_dir: str, primary: dict[str, Any]) -> tuple[str, str] | None:
+        """Convert playTask path + workingDir to absolute filesystem paths.
+
+        Both ``path`` and ``workingDir`` in the
+        info file are relative to the goggame
+        info's directory (``root_dir``). Windows
+        paths use backslashes; we normalise to
+        forward slashes for cross-platform
+        consistency.
+
+        Data-files override: if ``.arch05`` /
+        ``.forge`` files exist in
+        ``install_path``, force the workdir to
+        ``install_path`` (some GOG releases ship
+        data files at the install root rather
+        than in the ``game/`` subdir, and the
+        playTask's relative workdir gets it
+        wrong).
+
+        Args:
+            install_path: install root.
+            root_dir: goggame info's directory.
+            primary: playTask dict.
+
+        Returns:
+            ``(exe, workdir)`` or ``None``.
+        """
         exe_rel = primary.get("path", "")
         if not exe_rel:
             return None
@@ -181,7 +309,19 @@ class GOGExeResolver:
 
     @staticmethod
     def _find_goggame_info(search_dirs: list[str]) -> tuple[str | None, str]:
-        """Find goggame info."""
+        """Find the first ``goggame-*.info`` file across the search dirs.
+
+        Returns the directory where it was found
+        as ``root_dir`` — that's where relative
+        paths in the info file should be
+        resolved against.
+
+        Args:
+            search_dirs: dirs to scan.
+
+        Returns:
+            ``(file_path_or_None, root_dir)``.
+        """
         for directory in search_dirs:
             if not Path(directory).is_dir():
                 continue
@@ -196,13 +336,33 @@ class GOGExeResolver:
                 continue
         return (None, search_dirs[0] if search_dirs else "")
 
-    def _check_wrapper_override(
-        self,
-        install_path: str,
-        root_dir: str,
-        primary_task: dict[str, Any],
-    ) -> tuple[str, str] | None:
-        """Check wrapper override."""
+    def _check_wrapper_override(self, install_path: str, root_dir: str, primary_task: dict[str, Any]) -> tuple[str, str] | None:
+        """Prefer ``run-game.bat`` if the playTask points at a DOSBox/ScummVM wrapper.
+
+        Two trigger conditions:
+
+        1. The task's exe basename is in
+           ``_WRAPPER_EXE_NAMES`` (i.e.
+           dosbox.exe / scummvm.exe);
+        2. Or the run-game.bat content
+           references the task exe (case-
+           insensitive) — handles less common
+           wrapper configurations.
+
+        Wrapper batches set up environment and
+        DOS paths that the raw exe needs. Using
+        them is more reliable than running the
+        bare wrapper exe.
+
+        Args:
+            install_path: install root.
+            root_dir: info file dir.
+            primary_task: playTask dict.
+
+        Returns:
+            ``(wrapper_path, candidate_root)``
+            or ``None``.
+        """
         task_path = primary_task.get("path", "")
         if not task_path:
             return None
@@ -237,7 +397,21 @@ class GOGExeResolver:
 
     @staticmethod
     def _has_root_data_files(install_path: str) -> bool:
-        """Has root data files."""
+        """Detect data files at install root — triggers workdir override.
+
+        Looks for files ending in
+        ``.arch05`` / ``.forge`` — Anvil-engine
+        game data containers (Assassin's Creed
+        series and similar). If present, the
+        game expects to run with ``install_path``
+        as workdir.
+
+        Args:
+            install_path: install root.
+
+        Returns:
+            True iff a root data file exists.
+        """
         try:
             for name in os.listdir(install_path):
                 full = Path(install_path) / name
@@ -251,7 +425,18 @@ class GOGExeResolver:
 
     @staticmethod
     def _resolve_via_start_sh(search_dirs: list[str]) -> tuple[str, str] | None:
-        """Resolve via start sh."""
+        """Strategy 2 — native Linux ``start.sh`` script.
+
+        GOG's native Linux installs always include
+        a ``start.sh`` at the root. Workdir =
+        same directory.
+
+        Args:
+            search_dirs: dirs to scan.
+
+        Returns:
+            ``(script_path, dir)`` or ``None``.
+        """
         for directory in search_dirs:
             if not Path(directory).is_dir():
                 continue
@@ -266,7 +451,25 @@ class GOGExeResolver:
 
     @staticmethod
     def _resolve_via_largest_exe(search_dirs: list[str]) -> tuple[str, str] | None:
-        """Resolve via largest exe."""
+        """Strategy 3 (fallback) — pick the largest non-installer ``.exe``.
+
+        Recursive glob via ``**/*.exe`` plus
+        top-level ``*.exe``. Filters out
+        installers / redists / crash handlers
+        via ``_SKIP_EXE_PATTERNS``. Picks the
+        largest remaining — game exes are
+        typically tens of MB, helpers are KB-
+        range, so size is a decent heuristic.
+
+        Returns ``(exe, dir)`` for the first
+        search dir that yields any candidates.
+
+        Args:
+            search_dirs: dirs to scan.
+
+        Returns:
+            ``(exe, workdir)`` or ``None``.
+        """
         for directory in search_dirs:
             if not Path(directory).is_dir():
                 continue
@@ -302,7 +505,22 @@ class GOGExeResolver:
 
 
 def parse_size_string(size_str: str) -> int:
-    """Parse size string."""
+    """Parse a "N.N XB" string (GB/MB/KB) into bytes.
+
+    GOG's API sometimes returns sizes as
+    human-readable strings ("4.2 GB") rather
+    than byte counts. This util normalises.
+
+    Returns 0 on any parse failure (malformed
+    input, unrecognised unit). Callers should
+    treat 0 as "unknown" rather than empty.
+
+    Args:
+        size_str: human-readable size.
+
+    Returns:
+        Size in bytes, or 0.
+    """
     if not size_str:
         return 0
     try:
@@ -323,7 +541,21 @@ def parse_size_string(size_str: str) -> int:
 
 
 def get_game_id_from_goggame_filename(filename: str) -> str | None:
-    """Get game ID from goggame filename."""
+    """Extract the GOG product id from a ``goggame-<id>.info`` filename.
+
+    Returns ``None`` on:
+
+    * Empty input;
+    * Doesn't start with ``goggame-`` or doesn't
+      end with ``.info``;
+    * Empty id after stripping prefix/suffix.
+
+    Args:
+        filename: filename (basename, not path).
+
+    Returns:
+        Product id string, or ``None``.
+    """
     if not filename:
         return None
     name = filename.strip()

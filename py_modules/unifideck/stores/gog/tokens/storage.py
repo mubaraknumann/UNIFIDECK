@@ -1,34 +1,37 @@
-"""Encrypted token persistence — load, persist, clear.
+"""On-disk encrypted GOG token storage with legacy plaintext migration.
 
-OP-52b | py_modules/unifideck/stores/gog/tokens/storage.py
+OP-22-gog-tokens-storage | py_modules/unifideck/stores/gog/tokens/storage.py
 
-``_TokenStorage`` is responsible for the on-disk representation of GOG
-tokens. The file lives at ``GOGConfig.token_file_expanded`` and is
-encrypted via ``SecureTokenStore`` — refusing to fall back to plaintext
-if encryption is unavailable (we'd rather lose the session than leak
-the refresh token).
+The token file is a single JSON blob with
+``access_token``, ``refresh_token``, ``username``,
+``user_id`` — encrypted at rest via
+``SecureTokenStore`` (Sprint 18 security pass).
 
-Atomic write: tokens are written through ``os.open`` + ``os.fdopen``
-+ ``os.replace`` with ``mode=0o600`` set at creation time. This is
-deliberately kept verbose because ``Path.open`` doesn't support the
-UNIX permission mode argument and ``Path.rename`` isn't atomic across
-all filesystems.
+Backwards-compat: a legacy plaintext JSON file is
+*read* on first load (with an audit event
+emitted), then re-saved encrypted on the next
+write. This lets users upgrading from pre-18
+plugins keep their session without re-authing.
 
-Migrates legacy plaintext token files on the fly: reads them
-unencrypted (emits ``legacy_plaintext_detected``), and re-encrypts at
-the next ``persist`` call.
-
-Also cleans up the stale gogdl plaintext mirror that gogdl writes to
-its config dir after every subprocess invocation (security hardening).
+Atomic writes (tempfile + ``os.replace`` with
+mode 0600) protect against partial files on
+crash. The companion gogdl-credentials mirror
+file (legacy artifact, used to be written
+alongside the token file) is now actively cleaned
+up on every save — it's been superseded by the
+``gogdl_credentials.write`` flow in the token
+manager.
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import os
 import time
 from typing import TYPE_CHECKING, Any, cast
+
 from ....security import (
     SecureTokenStore,
     SecureTokenStoreError,
@@ -40,11 +43,20 @@ from .user_info import GOGUserInfo
 
 if TYPE_CHECKING:
     from ..config import GOGConfig
+
 logger = logging.getLogger(__name__)
 
 
 class _TokenStorage:
-    """Token storage."""
+    """Encapsulates GOG token persistence — load, save, clear.
+
+    Internal class (underscore prefix) — consumers
+    use ``GOGTokenManager`` which owns one of
+    these instances.
+
+    Dependencies (config, bus, secure_store)
+    injected via keyword-only constructor.
+    """
 
     def __init__(
         self,
@@ -53,19 +65,54 @@ class _TokenStorage:
         bus: Any,
         secure_store: SecureTokenStore,
     ) -> None:
-        """Initialize the instance."""
+        """Stash injected dependencies.
+
+        Args:
+            config: ``GOGConfig`` for the
+                token file path + gogdl dir.
+            bus: event bus for security audit
+                events.
+            secure_store: ``SecureTokenStore``
+                for at-rest encryption.
+        """
         self._config = config
         self._bus = bus
         self._secure_store = secure_store
 
-    async def load(self) -> tuple[str, str, GOGUserInfo] | None:
-        """Load."""
+    async def load(
+        self,
+    ) -> tuple[str, str, GOGUserInfo] | None:
+        """Read tokens from disk, decrypting or migrating plaintext as needed.
+
+        Pipeline:
+
+        1. Check the file exists; missing → return
+           ``None`` (no error logged — empty disk
+           is the normal first-launch case);
+        2. Read raw bytes in a worker thread;
+        3. Parse via ``_parse_token_blob`` which
+           handles encrypted + plaintext-legacy
+           cases;
+        4. Validate ``access_token`` +
+           ``refresh_token`` both present + truthy;
+        5. Build a ``GOGUserInfo`` from the
+           ``username`` + ``user_id`` fields.
+
+        Returns:
+            ``(access_token, refresh_token,
+            user_info)`` triple, or ``None``.
+        """
         path = os.path.expanduser(self._config.token_file)
         if not os.path.isfile(path):
             return None
 
         def _read_sync() -> bytes | None:
-            """Read sync."""
+            """Read the token file as raw bytes — blocking I/O.
+
+            Returns:
+                File contents, or ``None`` on
+                read error.
+            """
             try:
                 with open(path, "rb") as f:
                     return f.read()
@@ -99,7 +146,30 @@ class _TokenStorage:
         refresh_token: str,
         user_info: GOGUserInfo,
     ) -> bool:
-        """Persist."""
+        """Encrypt + atomically write tokens to the configured token file.
+
+        Pipeline:
+
+        1. Encrypt the payload via
+           ``SecureTokenStore``; encryption failure
+           is fatal — we never fall back to
+           plaintext (Sprint 18 policy);
+        2. Atomic write via tempfile +
+           ``os.replace`` (mode 0600);
+        3. Clean up any stale gogdl-credentials
+           mirror file from the legacy layout;
+        4. Emit a ``permissions_check`` audit
+           event so the security log shows the
+           file mode is what we expect.
+
+        Args:
+            access_token: bearer.
+            refresh_token: refresh.
+            user_info: ``GOGUserInfo``.
+
+        Returns:
+            True on successful write.
+        """
         path = os.path.expanduser(self._config.token_file)
         payload = {
             "access_token": access_token,
@@ -129,7 +199,12 @@ class _TokenStorage:
         return True
 
     async def clear_files(self) -> None:
-        """Clear files."""
+        """Remove the token file + the legacy gogdl-credentials mirror.
+
+        Best-effort: missing files are skipped,
+        permission errors logged at WARN but don't
+        propagate. Called from logout.
+        """
         paths_to_remove = [
             os.path.expanduser(self._config.token_file),
             os.path.join(
@@ -141,7 +216,12 @@ class _TokenStorage:
         ]
 
         def _remove_sync() -> None:
-            """Remove sync."""
+            """Iterate the paths + unlink each; log + skip missing files.
+
+            Runs in a worker thread (called via
+            ``asyncio.to_thread``). Errors are
+            logged at WARN but don't propagate.
+            """
             for path in paths_to_remove:
                 if not os.path.isfile(path):
                     continue
@@ -162,7 +242,21 @@ class _TokenStorage:
 
     @staticmethod
     def _write_token_file_atomic(path: str, blob: bytes) -> bool:
-        """Write token file atomic."""
+        """Tempfile + ``os.replace`` write with strict 0600 mode.
+
+        Uses ``os.open`` with explicit flags +
+        mode (rather than ``open(path, "wb")``)
+        so the tempfile starts at 0600 from
+        creation — no window where another user
+        could read the in-progress file.
+
+        Args:
+            path: final destination.
+            blob: encrypted bytes.
+
+        Returns:
+            True on success.
+        """
         try:
             parent = os.path.dirname(path)
             if parent:
@@ -185,10 +279,24 @@ class _TokenStorage:
         return True
 
     async def _emit_post_save_security(self, path: str) -> None:
-        """Emit post save security."""
+        """Stat the saved file and emit a ``permissions_check`` audit event.
+
+        The security audit consumer cross-checks
+        the mode against the expected 0600. We
+        emit even if the mode is correct so the
+        audit log shows the file *was* checked.
+
+        Args:
+            path: token file path.
+        """
 
         def _stat_mode() -> int | None:
-            """Stat mode."""
+            """Read st_mode bits — blocking.
+
+            Returns:
+                12-bit mode (perms + sticky),
+                or ``None`` on stat error.
+            """
             try:
                 st = os.stat(path)
                 return st.st_mode & 0o7777
@@ -204,8 +312,36 @@ class _TokenStorage:
                 mode,
             )
 
-    def _parse_token_blob(self, blob: bytes, path: str) -> dict[str, Any] | None:
-        """Parse token blob."""
+    def _parse_token_blob(
+        self,
+        blob: bytes,
+        path: str,
+    ) -> dict[str, Any] | None:
+        """Decode the token blob: encrypted format first, legacy plaintext fallback.
+
+        Three paths:
+
+        1. ``is_encrypted(blob)`` → decrypt via
+           secure store; failure → log + return
+           ``None``;
+        2. Not encrypted → emit
+           ``legacy_plaintext_detected`` audit
+           event, parse as JSON;
+        3. JSON parse error → log + return ``None``.
+
+        The audit event in case 2 lets ops see
+        which users still have legacy plaintext
+        tokens (those files get re-encrypted on
+        next save).
+
+        Args:
+            blob: raw file bytes.
+            path: file path (for log/event
+                context).
+
+        Returns:
+            Parsed dict, or ``None``.
+        """
         if self._secure_store.is_encrypted(blob):
             try:
                 return self._secure_store.decrypt_payload(blob)
@@ -235,14 +371,30 @@ class _TokenStorage:
             return None
 
     async def _remove_stale_gogdl_mirror(self) -> None:
-        """Remove stale GOGDL mirror."""
+        """Delete the legacy ``gog_credentials.json`` mirror; emit migration event.
+
+        Old versions of the plugin wrote a second
+        copy of the tokens to the gogdl config
+        dir. The new flow writes a freshly-built
+        gogdl-credentials file at install time
+        instead. This call removes the legacy
+        mirror so old + new files don't disagree.
+
+        Emits ``token_file_migrated`` so the
+        audit trail shows the cleanup.
+        """
         stale = os.path.join(
             os.path.expanduser(self._config.gogdl_config_dir),
             "gog_credentials.json",
         )
 
         def _remove() -> bool:
-            """Remove."""
+            """Blocking unlink + log; returns whether anything was removed.
+
+            Returns:
+                True iff a stale file existed and
+                was successfully removed.
+            """
             if not os.path.isfile(stale):
                 return False
             try:

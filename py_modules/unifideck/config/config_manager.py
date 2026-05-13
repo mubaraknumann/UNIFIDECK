@@ -1,35 +1,41 @@
-"""config/config_manager.py — Centralized configuration service.
+"""ConfigManager — merge defaults + user JSON with dotted-key access.
 
-Moved from core/ to the new unifideck.config subpackage as
-part of the config consolidation. A shim at core/config_manager.py
-preserves backward compatibility for any caller still importing from
-the old path.
+OP-10d | py_modules/unifideck/config/config_manager.py
 
-Replaces 49 scattered constants and hardcoded paths in main.py with a
-single ConfigManager instance exposing typed, dot-notated access.
-Three layers merged on read (highest priority first):
-1. User overrides loaded from ~/.config/unifideck/config.json
-2. Shipped defaults from defaults/config.json
-3. Hardcoded fallback dict (`_FALLBACK`) in this module
-Features:
-- Dot-notation keys: config.get("stores.gog.client_secret")
-- Hot-reload via reload()
-- Typed getters: get_str / get_int / get_bool
-- Atomic user-config writes
-- Backward-compatible dict-like access via __getitem__ / __contains__
-- Derived paths (data_dir/prefixes/, tokens/, sessions/) via helper
- properties
-Reference: Technical Document v1.0 — Section 3.9 (Configuration
-service), Figure 30.
+The plugin's central config interface. Internally:
+
+* Loads ``defaults/config.json`` (bundled) and the
+  user override file (``~/.config/unifideck/config.json``);
+* Deep-merges them over a hard-coded ``_FALLBACK``
+  skeleton (so basic keys always exist even without a
+  defaults file);
+* Validates the ``i18n`` section against
+  ``scripts/locale_config.py`` if reachable.
+
+Public API:
+
+* ``get(key, default)`` — dotted lookup with safe
+  fallback;
+* ``get_str`` / ``get_int`` / ``get_bool`` — typed
+  accessors with coercion;
+* ``set(key, value)`` — write to memory + persist to
+  user file atomically;
+* ``data_dir`` / ``cache_dir`` / ``path(*parts)`` —
+  resolved filesystem paths;
+* ``__getitem__`` / ``__contains__`` — pythonic dict
+  interface.
+
+``_FALLBACK`` is the minimum viable config — keys here
+exist even when no file is found.
 """
+
 import json
 import logging
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
-# Hardcoded last-resort fallback. Every key must have a value here so
-# that the plugin boots even if no config files are present.
+
 _FALLBACK: dict[str, Any] = {
     "data_dir": "~/.local/share/unifideck",
     "ui": {
@@ -54,9 +60,25 @@ _FALLBACK: dict[str, Any] = {
 }
 
 
-def _deep_merge(base: dict[str, Any],
-                override: dict[str, Any]) -> dict[str, Any]:
-    """Recursively merge override into a copy of base. Override wins."""
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge ``override`` over ``base``, preferring override on conflicts.
+
+    Per-key dispatch:
+
+    * Both sides are dicts → recurse;
+    * Otherwise → override wins (replaces ``base[k]``).
+
+    Non-mutating: returns a new dict. Used by
+    ``reload`` to layer defaults → user without
+    aliasing.
+
+    Args:
+        base: lower-priority dict.
+        override: higher-priority dict.
+
+    Returns:
+        Merged dict.
+    """
     result = dict(base)
     for k, v in override.items():
         if k in result and isinstance(result[k], dict) and isinstance(v, dict):
@@ -67,7 +89,24 @@ def _deep_merge(base: dict[str, Any],
 
 
 def _get_by_path(d: dict[str, Any], dotted: str) -> Any:
-    """Walk a nested dict with a dot-separated key. Raises KeyError."""
+    """Walk ``d`` along ``dotted``, raising ``KeyError`` on any missing segment.
+
+    Plain ``a.b.c`` traversal. Strict: any non-dict
+    intermediate or missing key raises the same
+    ``KeyError(dotted)``, simplifying the caller's
+    error handling.
+
+    Args:
+        d: root dict.
+        dotted: ``"a.b.c"``-style key.
+
+    Returns:
+        Resolved value.
+
+    Raises:
+        KeyError: on any miss; carries the full dotted
+            key for context.
+    """
     node: Any = d
     for part in dotted.split("."):
         if not isinstance(node, dict) or part not in node:
@@ -77,7 +116,17 @@ def _get_by_path(d: dict[str, Any], dotted: str) -> Any:
 
 
 def _set_by_path(d: dict[str, Any], dotted: str, value: Any) -> None:
-    """Set a nested dict value using a dot-separated key (creating path)."""
+    """Mutate ``d`` so that ``dotted`` resolves to ``value``, creating intermediates.
+
+    Auto-creates missing intermediate dicts.
+    Overwrites non-dict intermediates with fresh
+    dicts (last write wins for the structure).
+
+    Args:
+        d: root dict (mutated).
+        dotted: ``"a.b.c"``-style key.
+        value: value to store at the leaf.
+    """
     parts = dotted.split(".")
     node = d
     for part in parts[:-1]:
@@ -88,39 +137,43 @@ def _set_by_path(d: dict[str, Any], dotted: str, value: Any) -> None:
 
 
 class ConfigManager:
-    """3-layer configuration manager.
-    Usage:
-    config = ConfigManager(
-    defaults_path="/path/to/defaults/config.json",
-    user_path="/home/deck/.config/unifideck/config.json",
-    )
-    lang = config.get("ui.language", default="en-US")
-    config.set("ui.language", "fr-FR") # persisted.
-    """
+    """Three-layer config reader (fallback + defaults + user) with dotted access."""
 
     def __init__(
         self,
         defaults_path: str | None = None,
         user_path: str | None = None,
     ) -> None:
-        """Initialize with 3-layer merge.
+        """Store the paths and trigger an initial load.
+
+        Both paths are optional — passing ``None`` for
+        defaults means "fallback only" (rare; useful
+        in tests). Passing ``None`` for user means
+        "read-only config" (``set`` won't persist).
 
         Args:
-        defaults_path: Path to shipped defaults/config.json.
-        If None, only _FALLBACK is used as base.
-        user_path: Path to user override file. Created on first
-        successful set() call if missing.
-
+            defaults_path: bundled defaults file path
+                or ``None``.
+            user_path: user override file path or
+                ``None``.
         """
         self._defaults_path = Path(defaults_path) if defaults_path else None
         self._user_path = Path(user_path) if user_path else None
         self._merged: dict[str, Any] = {}
         self.reload()
-        # -------- loading --------
 
     def reload(self) -> None:
-        """Re-read defaults + user overrides from disk and rebuild the
-        merged view. Safe to call at runtime for hot-reload.
+        """Rebuild the merged config from fallback → defaults → user file.
+
+        Tolerates read failures at both file layers
+        (logs at WARN + skips). Stripping
+        underscore-prefixed top-level keys from
+        defaults is the in-file comment convention.
+
+        After merge, runs ``_validate_i18n_schema``
+        which may raise on a malformed i18n section
+        (the only blocker — other config errors are
+        non-fatal).
         """
         merged = dict(_FALLBACK)
         if self._defaults_path and self._defaults_path.exists():
@@ -130,16 +183,13 @@ class ConfigManager:
                         encoding="utf-8",
                     ),
                 )
-                # Drop meta keys (comments, schema, …)
-                data = {
-                    k: v for k, v in data.items()
-                    if not k.startswith("_")
-                }
+                data = {k: v for k, v in data.items() if not k.startswith("_")}
                 merged = _deep_merge(merged, data)
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning(
-                    "[ConfigManager] defaults unreadable "
-                    "(%s): %s", type(e).__name__, e,
+                    "[ConfigManager] defaults unreadable (%s): %s",
+                    type(e).__name__,
+                    e,
                 )
         if self._user_path and self._user_path.exists():
             try:
@@ -151,53 +201,40 @@ class ConfigManager:
                 merged = _deep_merge(merged, data)
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning(
-                    "[ConfigManager] user config unreadable "
-                    "(%s): %s", type(e).__name__, e,
+                    "[ConfigManager] user config unreadable (%s): %s",
+                    type(e).__name__,
+                    e,
                 )
         self._merged = merged
-        # Validate the i18n section if present. A malformed
-        # i18n block means the build-time translator and the
-        # frontend locale catalog are out of sync, which
-        # produces cryptic runtime errors in the UI. Failing
-        # loudly at plugin startup is much friendlier than
-        # discovering the problem later when a user can't
-        # switch languages.
-        #
-        # The scripts/ directory sits outside the unifideck
-        # package, so we temporarily inject it into sys.path
-        # to import the shared locale_config module. This
-        # keeps the validation logic in ONE place.
         self._validate_i18n_schema()
 
     def _validate_i18n_schema(self) -> None:
-        """Validate the i18n section of the merged config using
-        the shared locale_config module. Logs a warning and
-        proceeds if the section is absent (for legacy configs
-        that pre-date the i18n feature), but raises on any
-        actual schema violation so the plugin fails loudly at
-        startup rather than silently at runtime.
-        The validation is delegated to scripts/locale_config.py
-        to avoid duplicating the schema definition. The scripts
-        directory is discovered relative to the defaults file
-        location: if defaults_path is defaults/config.json, then
-        scripts/ is a sibling directory.
+        """Delegate i18n validation to ``scripts/locale_config.py`` if available.
+
+        Locates the locale_config script relative to
+        the defaults path (sibling ``scripts/``
+        directory). Skips validation silently when
+        the script isn't reachable (e.g. running from
+        an ad-hoc checkout without the build
+        scripts).
+
+        Manipulates ``sys.path`` to import the script
+        without altering the global path permanently
+        — the inserted entry is removed in the
+        ``finally`` block.
+
+        Raises:
+            LocaleConfigError: when the i18n section
+                fails schema validation. This is the
+                only fatal config error (everything
+                else is warning + degraded mode).
         """
         if "i18n" not in self._merged:
-            # Legacy config without i18n — tolerable, the frontend
-            # will fall back to whatever locales are actually in
-            # src/i18n/locales.generated.ts
             return
-        # Discover the scripts/ directory. In a normal install
-        # the layout is <repo>/defaults/config.json and
-        # <repo>/scripts/locale_config.py, so scripts/ sits at
-        # defaults_path.parent.parent / "scripts".
         if not self._defaults_path:
             return
         scripts_dir = self._defaults_path.parent.parent / "scripts"
         if not (scripts_dir / "locale_config.py").is_file():
-            # Scripts not shipped with this install — skip
-            # validation rather than fail. This can happen in
-            # development checkouts where the layout differs.
             logger.debug(
                 "[ConfigManager] locale_config.py not found at %s — "
                 "skipping i18n schema validation",
@@ -205,9 +242,7 @@ class ConfigManager:
             )
             return
         import sys
-        # Temporarily add scripts/ to sys.path so we can import
-        # locale_config. Use a try/finally to always restore the
-        # original path even if import or validation raises.
+
         scripts_str = str(scripts_dir)
         added = False
         if scripts_str not in sys.path:
@@ -218,56 +253,134 @@ class ConfigManager:
                 LocaleConfigError,
                 load_from_dict,
             )
+
             try:
                 load_from_dict(self._merged)
             except LocaleConfigError as e:
                 logger.error(
-                    "[ConfigManager] i18n schema validation failed: %s", e,
+                    "[ConfigManager] i18n schema validation failed: %s",
+                    e,
                 )
                 raise
         finally:
             if added:
                 sys.path.remove(scripts_str)
 
-    # -------- typed access --------
-
     def get(self, key: str, default: Any = None) -> Any:
-        """Return value at dotted key, or default if missing."""
+        """Read a dotted key with a fallback default.
+
+        The workhorse for every config read in the
+        plugin. Missing keys (any intermediate or the
+        leaf) return ``default`` rather than raising.
+
+        Args:
+            key: dotted key (``"sync.interval_seconds"``).
+            default: fallback value.
+
+        Returns:
+            Resolved value or ``default``.
+        """
         try:
             return _get_by_path(self._merged, key)
         except KeyError:
             return default
 
-    def get_str(self, key: str, default: str = "") -> str:  # noqa: D102 — documentation pending (Sprint D)
+    def get_str(self, key: str, default: str = "") -> str:
+        """Read a key as a string, coercing via ``str()``.
+
+        ``None`` falls back to ``default`` (not
+        ``"None"``); other types get stringified.
+
+        Args:
+            key: dotted key.
+            default: fallback string.
+
+        Returns:
+            String value.
+        """
         v = self.get(key, default)
         return str(v) if v is not None else default
 
-    def get_int(self, key: str, default: int = 0) -> int:  # noqa: D102 — documentation pending (Sprint D)
+    def get_int(self, key: str, default: int = 0) -> int:
+        """Read a key as an int, coercing via ``int()`` with safe fallback.
+
+        Catches ``TypeError`` + ``ValueError`` →
+        ``default``. Handles the common cases:
+
+        * Numeric string (``"30"``) → int OK;
+        * Float (``30.5``) → 30;
+        * Non-numeric (``"abc"``) → default;
+        * ``None`` → default.
+
+        Args:
+            key: dotted key.
+            default: fallback int.
+
+        Returns:
+            Integer value.
+        """
         v = self.get(key, default)
         try:
             return int(v)
         except (TypeError, ValueError):
             return default
 
-    def get_bool(self, key: str, default: bool = False) -> bool:  # noqa: D102 — documentation pending (Sprint D)
+    def get_bool(self, key: str, default: bool = False) -> bool:
+        """Read a key as a bool, accepting common truthy strings.
+
+        Three-arm coercion:
+
+        * Already bool → as-is;
+        * String → True iff lowercased value matches
+          one of ``"true"``, ``"1"``, ``"yes"``,
+          ``"on"``;
+        * Other → ``bool(v)`` (Python's standard
+          truthiness).
+
+        Args:
+            key: dotted key.
+            default: fallback bool.
+
+        Returns:
+            Boolean value.
+        """
         v = self.get(key, default)
         if isinstance(v, bool):
             return v
         if isinstance(v, str):
             return v.strip().lower() in (
-                "true", "1", "yes", "on",
+                "true",
+                "1",
+                "yes",
+                "on",
             )
         return bool(v)
 
     def set(self, key: str, value: Any) -> None:
-        """Update in-memory config AND persist to user_path atomically.
-        Only the user layer is written — defaults and fallback are
-        never touched.
+        """Write a key to memory + persist to the user file atomically.
+
+        Two-step:
+
+        1. Update the in-memory merged dict via
+           ``_set_by_path`` (immediate effect for
+           subsequent ``get`` calls);
+        2. Re-read the user file, apply the same
+           ``_set_by_path``, atomically write back
+           with tmp + replace.
+
+        Read-failure on the user file is treated as
+        empty (start fresh). Write failure is logged
+        at ERROR + tmp cleanup; the in-memory update
+        is preserved (best effort: at least the live
+        session has the new value).
+
+        Args:
+            key: dotted key.
+            value: any JSON-serialisable value.
         """
         _set_by_path(self._merged, key, value)
         if not self._user_path:
             return
-        # Load existing user file to preserve other overrides
         user_data: dict[str, Any] = {}
         if self._user_path.exists():
             try:
@@ -278,7 +391,8 @@ class ConfigManager:
                 user_data = {}
         _set_by_path(user_data, key, value)
         self._user_path.parent.mkdir(
-            parents=True, exist_ok=True,
+            parents=True,
+            exist_ok=True,
         )
         tmp = self._user_path.with_suffix(
             self._user_path.suffix + ".tmp",
@@ -296,34 +410,39 @@ class ConfigManager:
         except OSError as e:
             logger.error(
                 "[ConfigManager] failed to persist %s: %s",
-                key, e,
+                key,
+                e,
             )
             if tmp.exists():
                 try:
                     tmp.unlink()
                 except OSError:
-                    # best-effort cleanup; file may already be gone or locked
                     pass
-                                # -------- derived paths --------
 
     @property
     def data_dir(self) -> str:
-        """Base data directory (with ~ expansion).
-        Reads `paths.data_dir` first (the v1.0 audit-correct
-        location), falling back to the legacy top-level
-        `data_dir` key for backward compatibility with old user
-        configs.
+        """Return the plugin data directory (expanded absolute path).
+
+        Reads ``paths.data_dir`` first (preferred new
+        key); falls back to ``data_dir`` at root
+        (legacy key kept for backward compatibility).
+        Always expands ``~``.
+
+        Returns:
+            Absolute path string.
         """
         raw = self.get("paths.data_dir") or self.get_str(
-            "data_dir", "~/.local/share/unifideck",
+            "data_dir",
+            "~/.local/share/unifideck",
         )
         return str(Path(raw).expanduser())
 
     @property
     def cache_dir(self) -> str:
-        """Base cache directory (with ~ expansion).
-        Reads `paths.cache_dir` from the audit-correct location.
-        Falls back to `<data_dir>/cache` if unset.
+        """Return the cache directory, defaulting to ``<data_dir>/cache``.
+
+        Returns:
+            Absolute path string.
         """
         raw = self.get("paths.cache_dir")
         if raw:
@@ -331,21 +450,54 @@ class ConfigManager:
         return str(Path(self.data_dir) / "cache")
 
     def path(self, *parts: str) -> str:
-        """Return data_dir/<parts> as absolute path.
-        Special-cased: `path("cache")` returns the cache_dir
-        property so the CacheManager honors `paths.cache_dir`.
+        """Compose a subpath under ``data_dir`` (special-case ``"cache"``).
+
+        The cache special-case mirrors the
+        ``cache_dir`` property — callers expecting
+        ``cm.path("cache")`` get the cache_dir
+        resolution (which may diverge from
+        ``data_dir/cache`` via ``paths.cache_dir``).
+
+        Args:
+            *parts: path segments under data_dir.
+
+        Returns:
+            Joined absolute path string.
         """
         if len(parts) == 1 and parts[0] == "cache":
             return self.cache_dir
         return str(Path(self.data_dir).joinpath(*parts))
 
-    # -------- dict-like backward compat --------
-
     def __getitem__(self, key: str) -> Any:
+        """Dict-style access — like ``get`` but raises on missing keys.
+
+        Args:
+            key: dotted key.
+
+        Returns:
+            Resolved value.
+
+        Raises:
+            KeyError: if not found (mirroring dict
+                semantics).
+        """
         val = self.get(key)
         if val is None:
             raise KeyError(key)
         return val
 
     def __contains__(self, key: str) -> bool:
+        """Dict-style membership test — ``"a.b" in config``.
+
+        Truthy when the key resolves to anything
+        non-``None``. Note: a key explicitly set to
+        ``None`` reports as missing — a fine
+        approximation for the typical use.
+
+        Args:
+            key: dotted key.
+
+        Returns:
+            True if present and non-``None``.
+        """
         return self.get(key) is not None

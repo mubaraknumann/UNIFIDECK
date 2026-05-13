@@ -1,25 +1,20 @@
 """config/key_presence.py — Verify every code-referenced config key resolves.
-
 Complements ``ConfigValidator`` (which checks shape + types against the
 JSON Schema). This module answers a different question: after the
 3-layer merge (``_FALLBACK`` → ``defaults/config.json`` → user overrides),
 does **every key actually read by the backend code** resolve to a
 non-``None`` value?
-
 Why this matters
 ----------------
 The ConfigValidator is permissive about optional keys — only 9 out of
 105 schema nodes are ``required``. Without this extra check, a key that
 is:
-
     * read by code at runtime (e.g. ``config.get("cloud.enabled")``)
     * declared in the schema but not marked required
     * accidentally omitted from ``defaults/config.json``
-
 …would silently return ``None`` and crash the feature that relied on it.
 This check makes that class of bug fail at boot with a clear error
 rather than surface as an obscure ``AttributeError`` on ``None`` later.
-
 Design
 ------
 The list of required-at-runtime keys is **declared in code** (the
@@ -29,34 +24,28 @@ wouldn't update the scraped list, and the presence check would still
 pass against the old name. An explicit list forces the developer to
 update it alongside the call site, which is exactly what we want: a
 machine-readable contract that code and config stay in sync.
-
 Updating RUNTIME_REQUIRED_KEYS
 ------------------------------
 When adding a new ``config.get("some.key", default)`` or
 ``_cfg(config, "some.key", default)`` call anywhere in ``py_modules/``:
-
     1. Add ``"some.key"`` to ``RUNTIME_REQUIRED_KEYS`` below.
     2. Add the key to ``defaults/config.json`` with a sensible value.
     3. Add the key to ``py_modules/unifideck/config/schema.json`` under
        the right section so typos in user overrides are caught.
     4. Remove the hardcoded ``default`` arg from the call site — it
        is now redundant and merely obscures a missing declaration.
-
 The pre-commit hook (``scripts/check_config_keys.py``) enforces that
 every key string literal passed to ``config.get`` or ``_cfg`` appears
 in this tuple, so step 1 cannot be forgotten in practice.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .config_manager import ConfigManager
-
 logger = logging.getLogger(__name__)
-
-
 # Every key the backend code reads via ``config.get`` or ``_cfg``.
 # Sorted alphabetically for grep-friendliness; duplicates removed.
 # Organised by top-level section so the reader can spot gaps per domain.
@@ -136,20 +125,17 @@ class KeyPresenceError(RuntimeError):
 
 def assert_all_keys_resolve(config: ConfigManager) -> None:
     """Verify every key in ``RUNTIME_REQUIRED_KEYS`` returns non-None.
-
     Raises:
         KeyPresenceError: If any required key is missing. The error
             message lists every missing path at once so operators can
             fix their ``defaults/config.json`` in a single edit rather
             than iterating through N reboots.
-
     This runs once at plugin boot, right after
     ``ConfigValidator.validate_config`` succeeds but before any service
     instantiates. A failure here is fatal — it means the plugin code
     depends on a value that isn't declared anywhere, which is a
     developer error (either RUNTIME_REQUIRED_KEYS or defaults/config.json
     is out of sync with the call sites).
-
     """
     missing: list[str] = []
     for key in RUNTIME_REQUIRED_KEYS:
@@ -176,7 +162,6 @@ def assert_all_keys_resolve(config: ConfigManager) -> None:
 
 def collect_missing_keys(config: ConfigManager) -> list[str]:
     """Return the list of missing keys without raising.
-
     Useful for diagnostics paths where the caller wants to report what
     went wrong rather than abort. The main boot path uses the stricter
     ``assert_all_keys_resolve`` variant.

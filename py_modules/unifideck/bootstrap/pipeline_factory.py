@@ -1,25 +1,32 @@
-"""bootstrap.pipeline_factory — construct the EventBus pipeline.
+"""Bus pipeline assembly — wires watchdog + latency + replay + dispatcher.
 
-Builds the five pipeline primitives and bundles them into a
-``BusPipeline`` namedtuple:
+OP-23c | py_modules/unifideck/bootstrap/pipeline_factory.py
 
-  - ``HandlerWatchdog``           — quarantines misbehaving handlers
-  - ``HandlerLatencyCollector``   — measures per-handler latency
-  - ``EventReplayBuffer``         — retains recent events for replay
-  - ``BatchDispatcher``           — batches low-priority events
-  - ``PriorityDispatcher``        — queues + routes to handlers
+Builds the full bus observability + supervision pipeline
+in one place. The pipeline has five collaborators:
 
-Each primitive is also assigned to the plugin as a ``self.*``
-attribute so ``get_bus_health`` (exposed via ``ObservabilityRPCMixin``)
-can read their metrics at runtime.
+* ``HandlerWatchdog``        — per-handler timeout
+  detection + quarantine;
+* ``HandlerLatencyCollector`` — p50/p95/top-N latency
+  stats;
+* ``EventReplayBuffer``      — bounded ring of recent
+  events (diagnostics);
+* ``BatchDispatcher``        — handler coalescing for
+  high-volume bursts;
+* ``PriorityDispatcher``     — main per-event scheduler
+  that ties all of the above together.
 
-Service instantiation that historically lived in
-``_build_eventbus_pipeline`` (``feature_flags``, ``probe_reaction``,
-``security``) has been migrated into ``ServiceContainer`` —
-those services now go through the same wiring + lifecycle path
-as every other Layer-5 service, so this factory does exactly
-what its name claims: builds the bus pipeline, nothing more.
+Each instance is stamped onto the plugin so the
+observability RPC and other consumers can reach them by
+attribute. The returned ``BusPipeline`` is a typed
+container with the same references — convenient for
+testing where the pipeline is passed around as one object.
+
+Imports are deferred to function body so the bootstrap
+module load is cheap (these submodules import heavy
+dependencies of their own).
 """
+
 from __future__ import annotations
 
 import logging
@@ -34,21 +41,27 @@ logger = logging.getLogger(__name__)
 
 
 async def build_eventbus_pipeline(plugin: Any) -> BusPipeline:
-    """Build + start the EventBus pipeline, assigning to ``plugin``.
+    """Construct every pipeline collaborator + start the dispatcher.
+
+    Pipeline assembly order:
+
+    1. Construct the four passive collaborators
+       (watchdog, latency, replay, batcher) — cheap, no
+       running tasks.
+    2. Build the ``PriorityDispatcher`` with them all
+       injected.
+    3. ``await dispatcher.start()`` — this kicks off the
+       background per-priority workers.
+
+    All collaborators get attached to the plugin instance
+    for downstream attribute-based lookup by the
+    observability RPC.
 
     Args:
-        plugin: The ``Plugin`` instance. Must have ``plugin.bus``
-            already initialised. This function mutates plugin by
-            setting ``plugin.watchdog``, ``plugin.latency``,
-            ``plugin.replay``, ``plugin.batcher``, ``plugin.dispatcher``.
+        plugin: plugin instance receiving the attributes.
 
     Returns:
-        A ``BusPipeline`` namedtuple containing the same five
-        primitives. The dispatcher is already started before
-        return — the caller can forward the pipeline to
-        ``bootstrap_services`` for any service that needs to
-        attach to a specific component (e.g. ``ProbeReactionService``
-        consuming ``watchdog`` for handler quarantine reactions).
+        ``BusPipeline`` typed container.
     """
     from unifideck.event_bus.bus_pipeline import BusPipeline
     from unifideck.event_bus.event_bus_scaling import BatchDispatcher

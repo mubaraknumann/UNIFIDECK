@@ -1,26 +1,32 @@
-"""Embedded-browser OAuth flow for GOG.
+"""Browser-based GOG OAuth flow.
 
-OP-50h | py_modules/unifideck/stores/gog/auth.py
+OP-22-gog-auth | py_modules/unifideck/stores/gog/auth.py
 
-GOG's OAuth flow requires the user to authenticate against the
-GOG.com login page in a real browser. ``GOGBrowserAuth`` orchestrates
-the embedded CDP browser:
+GOG uses a fairly standard OAuth2 authorization-
+code flow. The user is shown the GOG login page in
+a browser; the browser monitor catches the
+``code=`` parameter on redirect; we exchange it
+for tokens.
 
-* opens the GOG OAuth URL in the browser overlay;
-* injects a small script to capture the redirect URL containing the
-  authorization code;
-* hands the code off to ``tokens/oauth.py`` (OP-52c) for exchange
-  against access/refresh tokens.
+GOG-specifics:
 
-Failure modes (user cancels, network drops, CDP disconnect) are
-reported back to the auth facade as ``AuthResult`` envelopes with
-explicit error codes.
+* ``layout=client2`` query parameter — selects the
+  Galaxy client login layout (compact form, no
+  ads). Without it the user sees the full
+  web-store layout.
+* Logout requires explicit cookie wipe — GOG's
+  session cookie persists across browser
+  instances; not wiping it means the next
+  ``start_auth`` silently re-uses the previous
+  session.
 """
 
 from __future__ import annotations
+
 import logging
 import urllib.parse
 from typing import Any
+
 from ...auth.orchestrator import AuthOrchestrator
 from ...core.types import AuthResult, Events, Result
 from ...event_bus.event_bus import EventBus
@@ -29,11 +35,17 @@ from .config import GOG_AUTH_URL_FILE, GOGConfig
 from .tokens import GOGTokenManager
 
 logger = logging.getLogger(__name__)
+
 _GOG_COOKIE_DOMAIN = "gog.com"
 
 
 class GOGBrowserAuth:
-    """Gogbrowser auth."""
+    """Wraps ``AuthOrchestrator`` with GOG-specific URL + code exchange.
+
+    Dependencies (bus + orch + tokens + config)
+    are injected at construction. Same pattern as
+    every other store's auth class.
+    """
 
     def __init__(
         self,
@@ -42,7 +54,15 @@ class GOGBrowserAuth:
         tokens: GOGTokenManager,
         config: GOGConfig,
     ) -> None:
-        """Initialize the instance."""
+        """Stash injected services.
+
+        Args:
+            bus: event bus (for STORE_LOGOUT).
+            orchestrator: ``AuthOrchestrator``.
+            tokens: ``GOGTokenManager`` for
+                code exchange + clear.
+            config: parsed ``GOGConfig``.
+        """
         self._bus = bus
         self._orch = orchestrator
         self._tokens = tokens
@@ -50,7 +70,16 @@ class GOGBrowserAuth:
 
     @audit_auth_flow(store="gog", method="oauth_browser")
     async def start_auth(self) -> AuthResult:
-        """Start auth."""
+        """Begin the OAuth flow through the orchestrator.
+
+        Pre-validates config; missing fields →
+        ``config_invalid``. Writes the auth URL to
+        a file so the launcher dispatcher can pick
+        it up if Steam restarts mid-flow.
+
+        Returns:
+            ``AuthResult``.
+        """
         if not self._config.is_valid():
             return AuthResult(
                 success=False,
@@ -68,7 +97,17 @@ class GOGBrowserAuth:
         )
 
     async def _build_auth_url(self) -> str:
-        """Build auth URL."""
+        """Construct the GOG authorize URL.
+
+        Adds ``layout=client2`` so users get the
+        compact Galaxy login form, not the full
+        web-store layout. ``safe="/: "`` keeps
+        slashes and spaces unescaped per GOG's
+        requirements.
+
+        Returns:
+            Full OAuth URL string.
+        """
         params = {
             "client_id": self._config.client_id,
             "redirect_uri": self._config.redirect_uri,
@@ -81,7 +120,15 @@ class GOGBrowserAuth:
         return url
 
     async def _exchange_code(self, code: str) -> AuthResult:
-        """Exchange code."""
+        """Hand the captured OAuth code to the token manager.
+
+        Args:
+            code: authorization code from the
+                redirect URI.
+
+        Returns:
+            Success or ``token_exchange_failed``.
+        """
         ok = await self._tokens.exchange_code(code)
         if ok:
             logger.info(
@@ -95,7 +142,27 @@ class GOGBrowserAuth:
         )
 
     async def logout(self, browser_monitor: Any | None = None) -> Result:
-        """Logout."""
+        """Cancel any pending auth, wipe tokens, clear GOG cookies, emit STORE_LOGOUT.
+
+        Cookie wipe is necessary because GOG's
+        session cookie outlives the browser
+        instance — without it, the next
+        ``start_auth`` silently re-uses the
+        old session.
+
+        If ``browser_monitor`` is ``None`` the
+        cookie wipe is skipped (still emits
+        STORE_LOGOUT so the rest of the plugin
+        sees the logout).
+
+        Args:
+            browser_monitor: optional
+                ``OAuthBrowserMonitor`` for cookie
+                wipe.
+
+        Returns:
+            ``Result(success=True)``.
+        """
         self._orch.cancel_background()
         await self._tokens.clear()
         if browser_monitor is not None:

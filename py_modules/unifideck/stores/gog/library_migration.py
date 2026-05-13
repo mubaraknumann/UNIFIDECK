@@ -1,21 +1,38 @@
-"""Upgrade legacy ``.unifideck-id`` markers to the canonical JSON format.
+"""One-shot migration of legacy GOG install marker files to the new JSON format.
 
-OP-50d | py_modules/unifideck/stores/gog/library_migration.py
+OP-22-gog-library-migration
+File: py_modules/unifideck/stores/gog/library_migration.py
 
-Pre-v6 versions of Unifideck wrote install markers in two non-canonical
-forms (raw integer id, ``{"id": ...}`` dict). This module sweeps the
-download directory at library boot time and rewrites every legacy
-marker into the canonical ``{"game_id": ..., "name": ..., ...}`` form,
-enriched with metadata from the in-game ``goggame-<id>.info`` file
-when present.
+Pre-Sprint-12, the ``.unifideck-id`` marker was a
+plain text file containing just the GOG product
+id (e.g. ``"1207658891"``). Sprint 12 introduced
+the JSON-with-goggame-info format. This module
+upgrades old markers in place at library-scan
+time.
 
-``_MarkerMigration`` exposes ``migrate_old_markers()`` which returns a
-counter dict ``{"migrated": N, "skipped": M}``. Individual marker
-failures are tolerated (counted as ``skipped``) so a single corrupted
-marker doesn't block the whole library load.
+Migration is opportunistic: scans the download
+dir, finds markers, decides if they're already in
+the new format (skip), and migrates if not. Errors
+during a single migration log + skip — they
+don't abort the whole scan.
+
+Three sources for the legacy id:
+
+* Pure-string content (most common — older
+  versions wrote the raw id);
+* JSON number (an interim version wrapped it as
+  a JSON int);
+* JSON object containing ``game_id`` (already new
+  format — skip).
+
+The migration enriches the new format by loading
+the install's ``goggame-<id>.info`` if available,
+so the upgraded marker has all the metadata the
+launcher expects.
 """
 
 from __future__ import annotations
+
 import glob
 import json
 import logging
@@ -24,19 +41,52 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .library import GOGLibrary
+
 logger = logging.getLogger(__name__)
+
 _INSTALL_MARKER = ".unifideck-id"
 
 
 class _MarkerMigration:
-    """Marker migration."""
+    """Per-library one-shot marker migration helper.
+
+    Held by ``GOGLibrary`` and invoked from
+    ``get_library`` on the first scan. Safe to
+    re-run — already-migrated markers are
+    detected and skipped.
+    """
 
     def __init__(self, parent: GOGLibrary) -> None:
-        """Initialize the instance."""
+        """Stash parent reference (for config access).
+
+        Args:
+            parent: ``GOGLibrary`` instance.
+        """
         self._parent = parent
 
     def migrate_old_markers(self) -> dict[str, int]:
-        """Migrate old markers."""
+        """Scan the download dir + upgrade any pre-Sprint-12 markers.
+
+        Returns counts in a dict — useful for
+        post-scan logging + telemetry.
+
+        Pipeline:
+
+        1. Resolve the download dir; doesn't
+           exist → return zeros;
+        2. For each top-level subdir, check for
+           a marker file;
+        3. Migrate each marker via
+           ``_migrate_one_marker`` (returns
+           ``"migrated"`` / ``"skipped"`` /
+           ``"failed"``).
+
+        OSError on scan → log + abort scan
+        (return whatever counts we had).
+
+        Returns:
+            ``{"migrated": int, "skipped": int}``.
+        """
         migrated = 0
         skipped = 0
         download_dir = os.path.expanduser(
@@ -76,7 +126,25 @@ class _MarkerMigration:
         return {"migrated": migrated, "skipped": skipped}
 
     def _migrate_one_marker(self, game_dir: str, marker_path: str) -> str:
-        """Migrate one marker."""
+        """Migrate one marker file. Returns ``"migrated"``/``"skipped"``/``"failed"``.
+
+        Pipeline:
+
+        1. Read content; OSError → failed;
+        2. Already new format → skipped;
+        3. Extract legacy id; missing →
+           skipped (corrupt marker);
+        4. Build new payload (enriched with
+           goggame info if available);
+        5. Write new payload atomically.
+
+        Args:
+            game_dir: dir containing the marker.
+            marker_path: marker file path.
+
+        Returns:
+            Outcome string.
+        """
         content = self._read_marker_content(marker_path)
         if content is None:
             return "failed"
@@ -97,7 +165,18 @@ class _MarkerMigration:
 
     @staticmethod
     def _read_marker_content(marker_path: str) -> str | None:
-        """Read marker content."""
+        """Read the marker file's content as a stripped UTF-8 string.
+
+        OSError → ``None``. Stripping handles
+        legacy markers that had trailing
+        newlines.
+
+        Args:
+            marker_path: file path.
+
+        Returns:
+            Content or ``None``.
+        """
         try:
             with open(marker_path, encoding="utf-8") as f:
                 return f.read().strip()
@@ -106,7 +185,22 @@ class _MarkerMigration:
 
     @staticmethod
     def _marker_is_new_format(content: str) -> bool:
-        """Marker is new format."""
+        """Quick check: is this content already the new JSON-dict format?
+
+        Two conditions both required:
+
+        * Parses as JSON;
+        * Parsed value is a dict with ``game_id``.
+
+        A bare JSON number (legacy interim) is
+        NOT in the new format.
+
+        Args:
+            content: marker text.
+
+        Returns:
+            True iff new format.
+        """
         try:
             data = json.loads(content)
         except json.JSONDecodeError:
@@ -115,7 +209,22 @@ class _MarkerMigration:
 
     @staticmethod
     def _extract_legacy_id(content: str) -> str | None:
-        """Extract legacy ID."""
+        """Pull the game id out of legacy marker content (string or JSON number).
+
+        Tries three patterns:
+
+        1. JSON parse → int or str → ``str(value)``;
+        2. Raw text not starting with ``{`` (so
+           not malformed JSON) → return as-is;
+        3. None of the above → ``None`` (caller
+           skips this marker).
+
+        Args:
+            content: marker text.
+
+        Returns:
+            Legacy id, or ``None``.
+        """
         try:
             data = json.loads(content)
         except json.JSONDecodeError:
@@ -127,7 +236,28 @@ class _MarkerMigration:
         return None
 
     def _build_new_marker_payload(self, game_dir: str, old_id: str) -> dict[str, Any]:
-        """Build new marker payload."""
+        """Build the new-format payload, enriching with goggame-<id>.info if found.
+
+        Pipeline:
+
+        1. Start with ``{"game_id": old_id}``;
+        2. Search both ``game_dir/`` and
+           ``game_dir/game/`` for goggame info
+           files;
+        3. First match → load JSON, force
+           ``game_id`` key to the legacy id (so
+           we know it's the same game), break.
+
+        Falls back to the bare ``{"game_id"}``
+        if no info file found or all loads fail.
+
+        Args:
+            game_dir: install dir.
+            old_id: legacy id.
+
+        Returns:
+            Enriched payload dict.
+        """
         new_data: dict[str, Any] = {"game_id": old_id}
         for candidate in (
             game_dir,
@@ -148,12 +278,23 @@ class _MarkerMigration:
         return new_data
 
     @staticmethod
-    def _write_new_marker(
-        marker_path: str,
-        new_data: dict[str, Any],
-        game_dir: str,
-    ) -> str:
-        """Write new marker."""
+    def _write_new_marker(marker_path: str, new_data: dict[str, Any], game_dir: str) -> str:
+        """Overwrite the marker file with the new payload. Returns outcome string.
+
+        Not atomic — we just open + write. The
+        operation is idempotent enough that a
+        partial write on power loss would just
+        leave a corrupted marker for the next
+        scan to re-attempt.
+
+        Args:
+            marker_path: target file.
+            new_data: payload.
+            game_dir: dir (for error logging).
+
+        Returns:
+            ``"migrated"`` or ``"failed"``.
+        """
         try:
             with open(marker_path, "w", encoding="utf-8") as f:
                 json.dump(new_data, f, indent=2)
@@ -168,8 +309,20 @@ class _MarkerMigration:
 
     @staticmethod
     def _find_first_goggame_info(directory: str) -> str | None:
-        """Find first goggame info."""
-        candidates = sorted(
-            glob.glob(os.path.join(directory, "goggame-*.info")),
-        )
+        """Glob-find the alphabetically-first ``goggame-*.info`` in ``directory``.
+
+        Sorts to be deterministic — without
+        sort, the order depends on filesystem
+        and could pick a DLC info file over the
+        main game's. Sorted, ``goggame-<id>.info``
+        for the lowest id wins, which is
+        consistent run-to-run.
+
+        Args:
+            directory: search directory.
+
+        Returns:
+            First matching path, or ``None``.
+        """
+        candidates = sorted(glob.glob(os.path.join(directory, "goggame-*.info")))
         return candidates[0] if candidates else None

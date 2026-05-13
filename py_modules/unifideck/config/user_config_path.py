@@ -1,37 +1,35 @@
-"""user_config_path — resolve the user overrides JSON path.
+"""User config file path resolver — env-var + XDG fallback.
 
-Centralised XDG-compliant resolver so every caller (ConfigManager
-bootstrap, ConfigValidator, debug tooling) lands on the same file.
-The file may not exist on first run; callers must handle that
-gracefully (ConfigManager merges nothing, ConfigValidator reports
-no error — missing overrides are by design not an error, see
-TC-VAL-08).
+OP-10a | py_modules/unifideck/config/user_config_path.py
 
-Resolution precedence:
+Three-step resolution (first match wins):
 
-  1. ``UNIFIDECK_USER_CONFIG`` environment variable — useful for
-     tests and alternate deployments (dev sandbox, multi-profile
-     setups). Expanded for ``~`` so ``~/my-overrides.json`` works.
-  2. ``$XDG_CONFIG_HOME/unifideck/config.json`` if
-     ``XDG_CONFIG_HOME`` is set in the environment.
-  3. ``~/.config/unifideck/config.json`` — the canonical location
-     on Steam Deck (SteamOS honours the XDG Base Directory spec).
+1. ``$UNIFIDECK_USER_CONFIG`` env var — explicit
+   override, expanded with ``~`` resolution;
+2. ``$XDG_CONFIG_HOME/unifideck/config.json`` — XDG
+   standard;
+3. ``~/.config/unifideck/config.json`` — conventional
+   fallback.
 
-Separated from ``main.py`` so the boot orchestrator in
-``bootstrap/boot.py`` can import it directly and tests can stub
-the resolver without monkey-patching module globals on ``main``.
+The file itself may not exist yet (first run) — callers
+treat that as "no user overrides".
 """
+
 from __future__ import annotations
 
 import os
 
 
 def resolve_user_config_path() -> str:
-    """Return the absolute path to the user overrides config file.
+    """Return the resolved path of the user config file (may not exist yet).
 
-    See module docstring for the resolution precedence. This is
-    a pure function — it only reads environment variables and
-    resolves ``~``; no disk I/O, no mutation.
+    Implements the three-step fallback chain
+    described in the module docstring. Always returns
+    a string — never ``None`` — even when none of the
+    sources exist on disk.
+
+    Returns:
+        Absolute path string (file may not exist).
     """
     env = os.environ.get("UNIFIDECK_USER_CONFIG")
     if env:

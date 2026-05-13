@@ -1,10 +1,24 @@
-"""auth/browser.py — OAuth code capture via CDP page monitoring.
+"""OAuth redirect-capture via CDP target polling.
 
-While the user logs in to a store via the in-Steam embedded
-browser, this module watches the browser's tab list (via CDP)
-and captures the authorization code from the redirect URL the
-moment it appears.
+OP-15a | py_modules/unifideck/auth/browser.py
+
+Polls the CDP target list looking for a tab whose URL
+matches one of the registered OAuth callback URIs.
+When a match is found, extracts the query +
+fragment params (handles both the standard
+``?code=...`` flow and the implicit fragment flow).
+
+Also provides:
+
+* ``close_oauth_tab`` — close the captured tab after
+  extraction;
+* ``clear_store_cookies`` — wipe cookies for a given
+  domain (used to force fresh login).
+
+``CDPOAuthMonitor`` is kept as a backward-compat alias
+for the renamed ``OAuthBrowserMonitor``.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,21 +36,28 @@ if TYPE_CHECKING:
     from ..cdp.cdp_client import CDPClient
     from ..config import ConfigManager
 
-
 logger = logging.getLogger(__name__)
 
-DEFAULT_POLL_INTERVAL = 0.5  # seconds between tab list checks
-DEFAULT_OAUTH_TIMEOUT = 300  # seconds
-
-
-# ══════════════════════════════════════════════════════════════════
-# Result types
-# ══════════════════════════════════════════════════════════════════
+DEFAULT_POLL_INTERVAL = 0.5
+DEFAULT_OAUTH_TIMEOUT = 300
 
 
 @dataclass
 class AuthCaptureResult:
-    """Outcome of an OAuth redirect capture attempt."""
+    """Typed result of a redirect-capture wait.
+
+    Attributes:
+        success: True iff a matching redirect was
+            seen before timeout.
+        redirect_url: full matched URL (None on
+            timeout).
+        params: extracted query + fragment params
+            flattened to ``{k: v}``.
+        elapsed_seconds: wall-clock time spent
+            waiting.
+        error: free-form error code (``"timeout"``
+            on the typical failure).
+    """
 
     success: bool
     redirect_url: str | None = None
@@ -46,15 +67,30 @@ class AuthCaptureResult:
 
     @property
     def code(self) -> str | None:
-        """Convenience: return the `code` query parameter if any."""
+        """Convenience accessor for the standard ``code`` OAuth param.
+
+        Returns:
+            The OAuth authorization code, or ``None``
+            when absent.
+        """
         return self.params.get("code")
 
     @property
     def state(self) -> str | None:
-        """Convenience: return the `state` query parameter if any."""
+        """Convenience accessor for the standard ``state`` OAuth param.
+
+        Returns:
+            The OAuth state token, or ``None`` when
+            absent.
+        """
         return self.params.get("state")
 
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102 — documentation pending (Sprint D)
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise to a JSON-friendly dict for RPC payloads.
+
+        Returns:
+            Five-key dict.
+        """
         return {
             "success": self.success,
             "redirect_url": self.redirect_url,
@@ -64,27 +100,32 @@ class AuthCaptureResult:
         }
 
 
-# ══════════════════════════════════════════════════════════════════
-# Pure helpers
-# ══════════════════════════════════════════════════════════════════
-
-
 def extract_oauth_params(url: str) -> dict[str, str]:
-    """Parse `url` and return its query string as a flat dict.
+    """Extract OAuth params from a URL's query string and fragment.
 
-    Pure function — no I/O. Multi-value parameters are flattened
-    to their first value (OAuth spec only has one of each).
-    Fragment-encoded params (implicit flow) are also extracted.
+    Two passes:
+
+    1. ``parse_qs`` on the query string;
+    2. ``parse_qs`` on the fragment (implicit flow);
+       fragment entries don't overwrite query
+       entries with the same name.
+
+    For each param, only the first value is kept
+    (OAuth params are single-valued).
+
+    Args:
+        url: the redirect URL.
+
+    Returns:
+        Flat dict of param name → first value.
     """
     if not url:
         return {}
     parsed = urlparse(url)
     out: dict[str, str] = {}
-    # Query string
     for key, values in parse_qs(parsed.query).items():
         if values:
             out[key] = values[0]
-    # Fragment (implicit flow)
     if parsed.fragment:
         for key, values in parse_qs(parsed.fragment).items():
             if values and key not in out:
@@ -93,36 +134,52 @@ def extract_oauth_params(url: str) -> dict[str, str]:
 
 
 def match_redirect(
-    url: str, allowed_uris: Iterable[str],
+    url: str,
+    allowed_uris: Iterable[str],
 ) -> bool:
-    """Return True if `url` matches an allowed redirect URI.
+    """Test whether ``url`` matches one of ``allowed_uris`` (prefix match).
 
-    Strict matching: scheme must be https (or http://localhost
-    for local OAuth callback servers). The scheme+netloc+path
-    must start with one of the allowed prefixes.
+    Scheme + host validation rules:
+
+    * ``https://...`` always allowed;
+    * ``http://localhost`` (or ``127.0.0.1`` or
+      ``[::1]``) allowed — for desktop apps using
+      local-loopback callbacks;
+    * Anything else rejected (prevents phishing
+      redirects).
+
+    The match itself is a startswith on the
+    ``scheme://netloc/path`` prefix (ignoring query +
+    fragment, since those carry the OAuth payload).
+
+    Args:
+        url: candidate URL.
+        allowed_uris: iterable of allowed prefix
+            URLs.
+
+    Returns:
+        True on match.
     """
     if not url:
         return False
     parsed = urlparse(url)
-    # Allow https everywhere; allow http only for localhost
-    # callbacks.
     if parsed.scheme != "https" and not (
         parsed.scheme == "http"
-        and parsed.hostname in (
-            "localhost", "127.0.0.1", "[::1]",
+        and parsed.hostname
+        in (
+            "localhost",
+            "127.0.0.1",
+            "[::1]",
         )
     ):
         return False
-    base = (
-        f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-    )
+    base = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
     for prefix in allowed_uris:
         if not prefix:
             continue
         prefix_parsed = urlparse(prefix)
         prefix_base = (
-            f"{prefix_parsed.scheme}://"
-            f"{prefix_parsed.netloc}{prefix_parsed.path}"
+            f"{prefix_parsed.scheme}://{prefix_parsed.netloc}{prefix_parsed.path}"
         )
         if base.startswith(prefix_base):
             return True
@@ -130,67 +187,98 @@ def match_redirect(
 
 
 def _cfg(config: ConfigManager | None, key: str, default: Any) -> Any:
-    """Legacy alias for backward compatibility. Delegates to `get_cfg`."""
+    """Thin wrapper around ``get_cfg`` — local convention.
+
+    Args:
+        config: optional ``ConfigManager``.
+        key: dotted key.
+        default: fallback.
+
+    Returns:
+        Config value or default.
+    """
     return get_cfg(config, key, default)
 
 
-# ══════════════════════════════════════════════════════════════════
-# Monitor class
-# ══════════════════════════════════════════════════════════════════
-
-
 class OAuthBrowserMonitor:
-    """Watches Steam's embedded browser for an OAuth redirect.
+    """CDP-based OAuth redirect monitor."""
 
-    Uses the shared CDPClient to list browser targets and waits
-    until one of them lands on a URL matching the allowed
-    redirect list. Bounded by a timeout so the user can abandon
-    the auth flow without leaving the plugin hanging.
-    """
-
-    def __init__(  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(
         self,
         cdp_client: CDPClient,
         config: ConfigManager | None = None,
     ) -> None:
+        """Bind the CDP client + resolve poll/timeout overrides.
+
+        Two config keys read at construction:
+
+        * ``auth.browser_poll_interval_seconds``
+          (default 0.5) — how often to poll CDP
+          targets;
+        * ``auth.browser_oauth_timeout_seconds``
+          (default 300) — overall OAuth timeout.
+
+        Args:
+            cdp_client: live ``CDPClient``.
+            config: optional ``ConfigManager``.
+        """
         self._cdp = cdp_client
         self._config = config
-        self._poll_interval = float(get_cfg(
-            config, "auth.browser_poll_interval_seconds",
-            DEFAULT_POLL_INTERVAL,
-        ))
-        self._default_timeout = float(get_cfg(
-            config, "auth.browser_oauth_timeout_seconds",
-            DEFAULT_OAUTH_TIMEOUT,
-        ))
-
-    # ── Public API ─────────────────────────────────────────────
+        self._poll_interval = float(
+            get_cfg(
+                config,
+                "auth.browser_poll_interval_seconds",
+                DEFAULT_POLL_INTERVAL,
+            )
+        )
+        self._default_timeout = float(
+            get_cfg(
+                config,
+                "auth.browser_oauth_timeout_seconds",
+                DEFAULT_OAUTH_TIMEOUT,
+            )
+        )
 
     async def wait_for_redirect(
         self,
         allowed_uris: list[str],
-        timeout: float | None = None,  # noqa: ASYNC109 — internal polling deadline
+        timeout: float | None = None,
     ) -> AuthCaptureResult:
-        """Block until a browser tab navigates to an allowed URI.
+        """Poll CDP targets until one matches an allowed redirect or timeout.
 
-        Returns as soon as any tab in Steam's CEF process
-        matches one of the prefixes in `allowed_uris`. If the
-        timeout elapses first, returns a failure result.
+        Loop:
+
+        * List CDP targets (errors → DEBUG log + sleep);
+        * For each target, test ``match_redirect``;
+        * On match: extract params + return success;
+        * Otherwise sleep ``poll_interval`` and
+          retry.
+
+        On timeout returns a result with
+        ``error="timeout"`` and the elapsed time
+        (useful for diagnostics — slow OAuth providers
+        sometimes time out the user, not us).
+
+        Args:
+            allowed_uris: list of allowed redirect URI
+                prefixes (must include scheme).
+            timeout: override the default timeout;
+                ``None`` uses the constructor default.
+
+        Returns:
+            ``AuthCaptureResult``.
         """
         deadline = time.monotonic() + (
-            timeout if timeout is not None
-            else self._default_timeout
+            timeout if timeout is not None else self._default_timeout
         )
         start = time.monotonic()
         while time.monotonic() < deadline:
             try:
                 targets = await self._list_targets()
-            except Exception as e:  # noqa: BLE001
-                # Intentional: a transient CDP error must not
-                # abort the whole capture — we just wait and
-                # retry on the next poll.
+            except Exception as e:
                 logger.debug(
-                    "[auth/browser] target list: %s", e,
+                    "[auth/browser] target list: %s",
+                    e,
                 )
                 await asyncio.sleep(self._poll_interval)
                 continue
@@ -200,8 +288,8 @@ class OAuthBrowserMonitor:
                     elapsed = time.monotonic() - start
                     params = extract_oauth_params(url)
                     logger.info(
-                        "[auth/browser] captured redirect "
-                        "after %.1fs", elapsed,
+                        "[auth/browser] captured redirect after %.1fs",
+                        elapsed,
                     )
                     return AuthCaptureResult(
                         success=True,
@@ -217,12 +305,26 @@ class OAuthBrowserMonitor:
         )
 
     async def close_oauth_tab(
-        self, url_substring: str,
+        self,
+        url_substring: str,
     ) -> bool:
-        """Close the first tab whose URL contains `url_substring`."""
+        """Find a CDP target whose URL contains ``url_substring`` and close it.
+
+        Used after the auth flow to clean up the
+        leftover browser tab. Returns False on miss
+        (no matching tab) or any CDP error (logged at
+        DEBUG).
+
+        Args:
+            url_substring: distinguishing fragment of
+                the tab's URL.
+
+        Returns:
+            True if a tab was found and closed.
+        """
         try:
             targets = await self._list_targets()
-        except Exception:  # noqa: BLE001
+        except Exception:
             return False
         for target in targets:
             if url_substring in target.get("url", ""):
@@ -232,10 +334,7 @@ class OAuthBrowserMonitor:
                 try:
                     await self._cdp.close_target(target_id)
                     return True
-                except Exception as e:  # noqa: BLE001
-                    # Intentional: close failures are
-                    # logged but not fatal — the capture
-                    # already succeeded.
+                except Exception as e:
                     logger.debug(
                         "[auth/browser] close failed: %s",
                         e,
@@ -244,19 +343,34 @@ class OAuthBrowserMonitor:
         return False
 
     async def clear_store_cookies(self, domain: str) -> bool:
-        """Clear all cookies for `domain` via injected JavaScript.
+        """Evict every cookie for ``domain`` via JS document.cookie expiry.
 
-        SECURITY: `domain` is validated against a strict regex
-        before being interpolated into the JS template. Without
-        this check, a malicious caller could inject arbitrary
-        JavaScript into Steam's CEF process.
+        Validates the domain against a strict regex
+        before injecting it into JS (defence-in-depth
+        against JS injection). On a non-conforming
+        domain, rejects with a WARN log + False
+        return.
+
+        The eviction technique: enumerate every
+        ``document.cookie`` entry and overwrite each
+        with an expired timestamp + the target
+        domain. Browsers respect this and drop the
+        cookies.
+
+        Args:
+            domain: cookie domain (e.g.
+                ``"epicgames.com"``).
+
+        Returns:
+            True if the JS eval succeeded.
         """
         if not re.match(
-            r"^[a-zA-Z0-9][a-zA-Z0-9.\-]*$", domain,
+            r"^[a-zA-Z0-9][a-zA-Z0-9.\-]*$",
+            domain,
         ):
             logger.warning(
-                "[auth/browser] rejected invalid cookie "
-                "domain: %r", domain,
+                "[auth/browser] rejected invalid cookie domain: %r",
+                domain,
             )
             return False
         try:
@@ -268,22 +382,31 @@ class OAuthBrowserMonitor:
                 f"path=/;domain={domain}'));",
             )
             return True
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug(
-                "[auth/browser] cookie clear failed: %s", e,
+                "[auth/browser] cookie clear failed: %s",
+                e,
             )
             return False
 
     async def _list_targets(self) -> list[dict[str, Any]]:
-        """Wrapper around the CDP client's public target listing."""
+        """Forward to ``CDPClient.list_targets``, returning ``[]`` on error.
+
+        Wraps the throw → empty list conversion so the
+        polling loop in ``wait_for_redirect`` has
+        simpler error handling.
+
+        Returns:
+            List of CDP target dicts (or empty).
+        """
         try:
             return await self._cdp.list_targets()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug(
-                "[auth/browser] list_targets failed: %s", e,
+                "[auth/browser] list_targets failed: %s",
+                e,
             )
             return []
 
 
-# ── Legacy compatibility aliases ─────────────────────────────────
 CDPOAuthMonitor = OAuthBrowserMonitor

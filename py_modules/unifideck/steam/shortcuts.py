@@ -12,13 +12,13 @@ save_shortcuts_vdf, write_shortcuts).
 Thin wrapper around the external `vdf` library with safer
 I/O semantics:
 - Atomic write-then-rename so Steam never reads a half-written
-  file
+    file
 - Automatic `.backup` before overwriting (for rollback)
 - Write validation: re-parse the file after writing and compare
-  shortcut counts; restore the backup if validation fails
+    shortcut counts; restore the backup if validation fails
 - Structured logging instead of `print` statements
 - Functions are synchronous — callers should wrap them in
-  `asyncio.to_thread()` (done by ShortcutService via AsyncFileOps)
+    `asyncio.to_thread()` (done by ShortcutService via AsyncFileOps)
 The legacy module used `print()` for errors and didn't do atomic
 writes, which created a small window where `shortcuts.vdf` could
 be read by Steam mid-write and corrupt the library. This version
@@ -26,6 +26,7 @@ eliminates that race condition.
 Reference: Technical Document v1.0 — Section 3.6.2 (shortcuts.vdf
 format), Figure 23.
 """
+
 from __future__ import annotations
 
 import logging
@@ -37,9 +38,14 @@ try:
     import vdf
 except ImportError:
     vdf = None
-    logger = logging.getLogger(__name__)
+
+logger = logging.getLogger(__name__)
+
+
 class VDFError(Exception):
     """Raised when VDF parsing or writing fails."""
+
+
 def load_shortcuts_vdf(path: str) -> dict[str, Any]:
     """Load and parse a shortcuts.vdf file.
     Returns an empty `{"shortcuts": {}}` structure if the file does
@@ -57,6 +63,7 @@ def load_shortcuts_vdf(path: str) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001
         raise VDFError(f"failed to parse {path}: {e}") from e
 
+
 def read_shortcuts(path: str) -> list[dict[str, Any]]:
     """Convenience: return the list of shortcut entries.
     The raw VDF structure is `{"shortcuts": {"0": {...}, "1": {...}}}`
@@ -69,6 +76,8 @@ def read_shortcuts(path: str) -> list[dict[str, Any]]:
         # Preserve insertion order using the numeric string keys
         return [raw[k] for k in sorted(raw.keys(), key=_sort_key)]
     return []
+
+
 def save_shortcuts_vdf(path: str, data: dict[str, Any]) -> None:
     """Write the full shortcuts.vdf structure atomically.
     Performs a 3-step write: backup → write to ``.tmp`` → rename.
@@ -119,34 +128,87 @@ def save_shortcuts_vdf(path: str, data: dict[str, Any]) -> None:
             f"restored",
         )
     logger.info(
-        "[vdf] wrote %d shortcuts to %s", actual_count, path,
+        "[vdf] wrote %d shortcuts to %s",
+        actual_count,
+        path,
     )
+
+
 def write_shortcuts(path: str, shortcuts: list[dict[str, Any]]) -> None:
     """Convenience: serialize a flat list of shortcut entries.
     Renumbers the entries as string keys ("0", "1", "2", ...) which
     is the format Steam expects. Delegates the actual write to
     `save_shortcuts_vdf()`.
     """
-    data = {"shortcuts": {str(i): entry
-    for i, entry in enumerate(shortcuts)}}
+    data = {"shortcuts": {str(i): entry for i, entry in enumerate(shortcuts)}}
     save_shortcuts_vdf(path, data)
 
     # ── Helpers ─────────────────────────────────────────────────────
+
+
 def _sort_key(k: str) -> int:
-    """Sort key for shortcut dict keys (numeric strings)."""
+    """Numeric-aware sort key for shortcut dict keys.
+
+    Steam's ``shortcuts.vdf`` keys entries by numeric
+    strings (``"0"``, ``"1"``, ``"2"``, …). To preserve
+    insertion order when flattening to a list, sort by
+    integer value rather than lexicographic order
+    (``"10"`` should come after ``"9"``, not after
+    ``"1"``).
+
+    Non-numeric keys (defensive — shouldn't happen in
+    valid files) sort to the end via the large
+    sentinel value.
+
+    Args:
+        k: dict key string.
+
+    Returns:
+        Integer sort key.
+    """
     try:
         return int(k)
     except ValueError:
-        return 999999 # non-numeric keys go to the end
+        return 999999  # non-numeric keys go to the end
+
+
 def _cleanup_tmp(tmp_path: str) -> None:
-    """Remove a leftover .tmp file, ignoring errors."""
+    """Remove a leftover ``.tmp`` file silently on best-effort basis.
+
+    Used in the failure paths of ``save_shortcuts_vdf``
+    to clean up the temporary file when a write fails
+    midway. OSError on the unlink itself (file already
+    gone, permission flipped) is swallowed — the
+    cleanup is opportunistic, not mandatory.
+
+    Args:
+        tmp_path: path to the ``.tmp`` file.
+    """
     try:
         os.remove(tmp_path)
     except OSError:
         # best-effort cleanup; file may already be gone or locked
         pass
+
+
 def _restore_backup(backup_path: str, path: str) -> None:
-    """Restore the backup file over the target (best-effort)."""
+    """Restore the ``.backup`` file over ``path`` (best-effort).
+
+    Called by ``save_shortcuts_vdf`` when post-write
+    validation fails. Uses ``copy2`` rather than
+    ``rename`` so the backup file itself is preserved
+    (a successful next write will overwrite it).
+
+    Logs at WARN on success (clear signal in plugin
+    logs that a rollback happened) and at ERROR on
+    restore failure (which means the user's
+    shortcuts.vdf is now in an indeterminate state and
+    manual recovery may be needed).
+
+    Args:
+        backup_path: path to the ``.backup`` file.
+        path: target shortcuts.vdf path.
+    """
     if os.path.isfile(backup_path):
         try:
             shutil.copy2(backup_path, path)
