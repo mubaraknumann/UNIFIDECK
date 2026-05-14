@@ -132,7 +132,7 @@ def find_game_executable(
 def looks_like_game_install(path: str) -> bool:
     """Looks like game install."""
     try:
-        for root, _dirs, files in os.walk(path):
+        for root, _dirs, files in Path(path).walk():
             for f in files:
                 if f.lower().endswith(".exe"):
                     return True
@@ -140,7 +140,7 @@ def looks_like_game_install(path: str) -> bool:
             if depth >= 2:
                 break
         total = 0
-        for root, _dirs, files in os.walk(path):
+        for root, _dirs, files in Path(path).walk():
             for f in files:
                 try:
                     total += (Path(root) / f).stat().st_size

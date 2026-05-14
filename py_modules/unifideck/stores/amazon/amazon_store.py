@@ -162,11 +162,11 @@ class AmazonStore(StoreBase):
 
     def _check_nile_authenticated(self) -> bool:
         """Check NILE authenticated."""
-        user_json = os.path.expanduser(_NILE_USER_JSON)
-        if not os.path.isfile(user_json):
+        user_json = str(Path(_NILE_USER_JSON).expanduser())
+        if not Path(user_json).is_file():
             return False
         try:
-            with open(user_json, encoding='utf-8') as f:
+            with Path(user_json).open(encoding='utf-8') as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError) as e:
             logger.warning('[AmazonStore] user.json read: %s', e)

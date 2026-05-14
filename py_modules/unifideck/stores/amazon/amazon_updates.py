@@ -133,9 +133,9 @@ class AmazonUpdateChecker:
         path = info.get('path') or info.get('install_path')
         if isinstance(path, str) and path:
             parent = str(Path(path).parent)
-            if os.path.isdir(parent):
+            if Path(parent).is_dir():
                 return parent
-        return os.path.expanduser(self._default_install_root)
+        return str(Path(self._default_install_root).expanduser())
 
 
 _: Any = None

@@ -17,6 +17,7 @@ from __future__ import annotations
 import binascii
 import os
 from typing import NamedTuple
+from pathlib import Path
 
 
 class GameMapEntry(NamedTuple):
@@ -90,7 +91,7 @@ def parse_games_map(content: str) -> dict[str, GameMapEntry]:
             if exe == "xcloud":
                 work_dir = ""
             else:
-                work_dir = os.path.dirname(exe)
+                work_dir = str(Path(exe).parent)
             result[key] = GameMapEntry(exe=exe, work_dir=work_dir)
 
     return result

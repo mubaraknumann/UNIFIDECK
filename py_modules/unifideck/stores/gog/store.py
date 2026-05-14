@@ -48,6 +48,7 @@ from .install import GOGInstaller
 from .library import GOGLibrary
 from .tokens import GOGTokenManager
 from .updates import GOGUpdatesChecker
+from pathlib import Path
 
 if TYPE_CHECKING:
     from ...config import ConfigManager
@@ -189,10 +190,10 @@ class GOGStore(StoreBase):
                 store="gog",
             )
             result = Result(success=True)
-        auth_url_file = os.path.expanduser(GOG_AUTH_URL_FILE)
-        if os.path.isfile(auth_url_file):
+        auth_url_file = str(Path(GOG_AUTH_URL_FILE).expanduser())
+        if Path(auth_url_file).is_file():
             try:
-                os.remove(auth_url_file)
+                Path(auth_url_file).unlink(missing_ok=True)
             except OSError as e:
                 logger.warning(
                     "[GOGStore] could not remove %s: %s",
@@ -307,12 +308,10 @@ class GOGStore(StoreBase):
                 "[GOGStore] no plugin_dir; gogdl path unresolvable",
             )
             return ""
-        path = os.path.join(
+        path = str(Path(
             self._plugin_dir,
-            "bin",
-            "gogdl",
-        )
-        if not os.path.isfile(path):
+        ) / "bin" / "gogdl")
+        if not Path(path).is_file():
             logger.warning(
                 "[GOGStore] gogdl binary not found at %s",
                 path,
@@ -331,14 +330,10 @@ class GOGStore(StoreBase):
                 "[GOGStore] no shortcut_service; skipping auth shortcut creation",
             )
             return
-        launcher = os.path.join(
+        launcher = str(Path(
             self._plugin_dir or "",
-            "py_modules",
-            "unifideck",
-            "launcher",
-            "dispatcher.py",
-        )
-        if not os.path.isfile(launcher):
+        ) / "py_modules" / "unifideck" / "launcher" / "dispatcher.py")
+        if not Path(launcher).is_file():
             logger.warning(
                 "[GOGStore] launcher dispatcher not found at %s",
                 launcher,

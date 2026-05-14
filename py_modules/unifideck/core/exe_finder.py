@@ -103,8 +103,8 @@ class ExeFinder:
         launcher helpers) are filtered here to keep the scorer
         pure.
         """
-        for root, dirs, files in os.walk(install_path):
-            rel = os.path.relpath(root, install_path)
+        for root, dirs, files in Path(install_path).walk():
+            rel = str(Path(root).relative_to(install_path))
             depth = 0 if rel == "." else rel.count(os.sep) + 1
             if depth > 3:
                 dirs.clear()  # stop descending this branch

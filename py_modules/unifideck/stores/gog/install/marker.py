@@ -25,6 +25,7 @@ import os
 import shutil
 from typing import TYPE_CHECKING, Any, cast
 from .primitives import GOGFolderOps
+from pathlib import Path
 
 if TYPE_CHECKING:
     from .installer import GOGInstaller
@@ -42,7 +43,7 @@ class _PostInstallMarker:
     def snapshot_dirs(base_path: str) -> set:
         """Snapshot dirs."""
         try:
-            return set(os.listdir(base_path))
+            return set([e.name for e in Path(base_path).iterdir()])
         except OSError:
             return set()
 
@@ -63,25 +64,25 @@ class _PostInstallMarker:
                 existing_dirs,
             )
         if folder_name:
-            candidate = os.path.join(base_path, folder_name)
-            if os.path.isdir(candidate):
+            candidate = str(Path(base_path) / folder_name)
+            if Path(candidate).is_dir():
                 logger.info(
                     "[GOGInstaller] found at predicted: %s",
                     candidate,
                 )
                 return candidate
         try:
-            current = set(os.listdir(base_path))
+            current = set([e.name for e in Path(base_path).iterdir()])
         except OSError:
             return None
         new_dirs = current - existing_dirs
         for name in new_dirs:
-            item_path = os.path.join(base_path, name)
-            if not os.path.isdir(item_path):
+            item_path = str(Path(base_path) / name)
+            if not Path(item_path).is_dir():
                 continue
             for search_dir in (
                 item_path,
-                os.path.join(item_path, "game"),
+                str(Path(item_path) / "game"),
             ):
                 if GOGFolderOps.has_goggame_info(
                     search_dir,
@@ -98,9 +99,9 @@ class _PostInstallMarker:
     def _find_flat_goggame(base_path: str, game_id: str) -> bool:
         """Find flat goggame."""
         try:
-            for name in os.listdir(base_path):
-                full = os.path.join(base_path, name)
-                if not os.path.isfile(full):
+            for name in [e.name for e in Path(base_path).iterdir()]:
+                full = str(Path(base_path) / name)
+                if not Path(full).is_file():
                     continue
                 if name == f"goggame-{game_id}.info":
                     return True
@@ -117,21 +118,21 @@ class _PostInstallMarker:
     ) -> str:
         """Reorganise flat install."""
         target = folder_name or f"GOG_{game_id}"
-        target_path = os.path.join(base_path, target)
+        target_path = str(Path(base_path) / target)
 
         def _sync_move() -> None:
             """Sync move."""
-            os.makedirs(target_path, exist_ok=True)
+            Path(target_path).mkdir(parents=True, exist_ok=True)
             try:
-                current = set(os.listdir(base_path))
+                current = set([e.name for e in Path(base_path).iterdir()])
             except OSError:
                 return
             new_files = current - existing_dirs
             for item in new_files:
                 if item == target:
                     continue
-                src = os.path.join(base_path, item)
-                dst = os.path.join(target_path, item)
+                src = str(Path(base_path) / item)
+                dst = str(Path(target_path) / item)
                 try:
                     shutil.move(src, dst)
                 except OSError as e:
@@ -155,7 +156,7 @@ class _PostInstallMarker:
         language: str,
     ) -> bool:
         """Write install marker."""
-        marker_path = os.path.join(install_path, ".unifideck-id")
+        marker_path = str(Path(install_path) / ".unifideck-id")
         info_data = self._load_info_data_from_goggame(
             install_path,
             game_id,
@@ -180,9 +181,9 @@ class _PostInstallMarker:
         info_data: dict[str, Any] = {"game_id": game_id}
         for candidate in (
             install_path,
-            os.path.join(install_path, "game"),
+            str(Path(install_path) / "game"),
         ):
-            if not os.path.isdir(candidate):
+            if not Path(candidate).is_dir():
                 continue
             loaded = _PostInstallMarker._try_load_info_in_dir(
                 candidate,
@@ -198,7 +199,7 @@ class _PostInstallMarker:
     def _try_load_info_in_dir(directory: str, game_id: str) -> dict[str, Any] | None:
         """Try load info in dir."""
         try:
-            entries = os.listdir(directory)
+            entries = [e.name for e in Path(directory).iterdir()]
         except OSError:
             return None
         for name in entries:
@@ -207,8 +208,9 @@ class _PostInstallMarker:
             if not name.endswith(".info"):
                 continue
             try:
-                with open(
-                    os.path.join(directory, name),
+                with Path(
+                    str(Path(directory) / name),
+                ).open(
                     encoding="utf-8",
                 ) as f:
                     parsed = json.load(f)
@@ -222,7 +224,7 @@ class _PostInstallMarker:
     def _write_marker_sync(marker_path: str, info_data: dict[str, Any]) -> bool:
         """Write marker sync."""
         try:
-            with open(marker_path, "w", encoding="utf-8") as f:
+            with Path(marker_path).open("w", encoding="utf-8") as f:
                 json.dump(info_data, f, indent=2)
             return True
         except OSError as e:

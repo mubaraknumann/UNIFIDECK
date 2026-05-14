@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...core.types import Result
 from .manifest import read_manifest, write_manifest
+from pathlib import Path
 
 if TYPE_CHECKING:
     from ...event_bus.event_bus import EventBus
@@ -71,9 +72,9 @@ class _SyncMixin:
 
         try:
             local_dir = self.get_local_save_dir(store, game_id)
-            remote_dir = os.path.join(self._cloud_root, store, game_id)
+            remote_dir = str(Path(self._cloud_root) / store / game_id)
 
-            if not os.path.isdir(remote_dir):
+            if not Path(remote_dir).is_dir():
                 # Nothing to sync down
                 if self._bus:
                     self._bus.emit(Events.CLOUD_SYNC_DOWN_COMPLETE, store=store, game_id=game_id, synced=False)
@@ -152,9 +153,9 @@ class _SyncMixin:
 
         try:
             local_dir = self.get_local_save_dir(store, game_id)
-            remote_dir = os.path.join(self._cloud_root, store, game_id)
+            remote_dir = str(Path(self._cloud_root) / store / game_id)
 
-            if not os.path.isdir(local_dir):
+            if not Path(local_dir).is_dir():
                 if self._bus:
                     self._bus.emit(Events.CLOUD_SYNC_UP_COMPLETE, store=store, game_id=game_id, synced=False)
                 return Result(success=True)
@@ -218,7 +219,7 @@ class _SyncMixin:
 
         try:
             local_dir = self.get_local_save_dir(store, game_id)
-            remote_dir = os.path.join(self._cloud_root, store, game_id)
+            remote_dir = str(Path(self._cloud_root) / store / game_id)
 
             if choice == "local":
                 # Push local to remote
@@ -246,19 +247,19 @@ class _SyncMixin:
     async def _is_modified(self, directory: str, manifest: dict[str, float]) -> bool:
         """Check if any file in `directory` differs from `manifest` mtimes."""
         def _check_sync() -> bool:
-            if not os.path.exists(directory):
+            if not Path(directory).exists():
                 return False
 
             current = {}
-            for root, _, files in os.walk(directory):
+            for root, _, files in Path(directory).walk():
                 for f in files:
                     # Ignore the manifest file itself
                     if f == ".unifideck_sync.json":
                         continue
-                    path = os.path.join(root, f)
-                    rel = os.path.relpath(path, directory)
+                    path = str(Path(root) / f)
+                    rel = str(Path(path).relative_to(directory))
                     try:
-                        current[rel] = os.path.getmtime(path)
+                        current[rel] = Path(path).stat().st_mtime
                     except OSError:
                         pass
 
@@ -279,17 +280,17 @@ class _SyncMixin:
         """Build a fresh manifest dict of rel_path -> mtime."""
         def _build_sync() -> dict[str, float]:
             manifest = {}
-            if not os.path.exists(directory):
+            if not Path(directory).exists():
                 return manifest
 
-            for root, _, files in os.walk(directory):
+            for root, _, files in Path(directory).walk():
                 for f in files:
                     if f == ".unifideck_sync.json":
                         continue
-                    path = os.path.join(root, f)
-                    rel = os.path.relpath(path, directory)
+                    path = str(Path(root) / f)
+                    rel = str(Path(path).relative_to(directory))
                     try:
-                        manifest[rel] = os.path.getmtime(path)
+                        manifest[rel] = Path(path).stat().st_mtime
                     except OSError:
                         pass
             return manifest
@@ -299,25 +300,25 @@ class _SyncMixin:
     async def _copy_tree(self, src: str, dst: str) -> None:
         """Copy src directory to dst atomically (via tmp)."""
         def _copy_sync() -> None:
-            if not os.path.exists(src):
+            if not Path(src).exists():
                 return
             
-            parent = os.path.dirname(dst)
+            parent = str(Path(dst).parent)
             if parent:
-                os.makedirs(parent, exist_ok=True)
+                Path(parent).mkdir(parents=True, exist_ok=True)
                 
             tmp_dst = dst + ".tmp"
-            if os.path.exists(tmp_dst):
+            if Path(tmp_dst).exists():
                 shutil.rmtree(tmp_dst)
                 
             shutil.copytree(src, tmp_dst, dirs_exist_ok=True)
             
             # Atomic swap
-            if os.path.exists(dst):
+            if Path(dst).exists():
                 # os.replace requires destination to be empty if it's a directory
                 # But we can just remove the old one first, or move it away.
                 backup_dst = dst + ".bak"
-                if os.path.exists(backup_dst):
+                if Path(backup_dst).exists():
                     shutil.rmtree(backup_dst)
                 os.rename(dst, backup_dst)
                 os.rename(tmp_dst, dst)

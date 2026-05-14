@@ -111,7 +111,7 @@ def _get_prereq_info(game_id: str) -> dict[str, Any] | None:
         )
         return None
     try:
-        with open(installed_json, encoding='utf-8') as f:
+        with Path(installed_json).open(encoding='utf-8') as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         logger.warning(
@@ -247,6 +247,6 @@ def _cleanup_legacy_marker(legacy_marker: Path) -> None:
     if not legacy_marker.is_file():
         return
     try:
-        os.unlink(legacy_marker)
+        Path(legacy_marker).unlink(missing_ok=True)
     except OSError:
         pass

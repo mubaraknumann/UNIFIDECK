@@ -29,12 +29,12 @@ def normalize_title_for_matching(title: str) -> str:
 
 def get_first_char_for_bucket(title: str) -> str:
     """Get first char for bucket."""
-    normal
-            break
-    if not normalized:ized = normalize_title_for_matching(title)
+    normalized = normalize_title_for_matching(title)
     for article in ("the ", "a ", "an "):
         if normalized.startswith(article):
             normalized = normalized[len(article):]
+            break
+    if not normalized:
         return "0_9"
     first = normalized[0]
     if not first.isalpha():

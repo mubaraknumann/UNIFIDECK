@@ -26,17 +26,17 @@ _SKIP_EXE_PATTERNS: tuple[str, ...] = (
 
 def candidate_fuel_dirs(install_path: str) -> list[str]:
     """Candidate fuel dirs."""
-    if not install_path or not os.path.isdir(install_path):
+    if not install_path or not Path(install_path).is_dir():
         return []
     candidates: list[str] = [install_path]
     for sub in ('game', 'Game'):
-        candidate = os.path.join(install_path, sub)
-        if candidate not in candidates and os.path.isdir(candidate):
+        candidate = str(Path(install_path) / sub)
+        if candidate not in candidates and Path(candidate).is_dir():
             candidates.append(candidate)
     try:
-        for entry in os.listdir(install_path):
-            subdir = os.path.join(install_path, entry)
-            if os.path.isdir(subdir) and subdir not in candidates:
+        for entry in [e.name for e in Path(install_path).iterdir()]:
+            subdir = str(Path(install_path) / entry)
+            if Path(subdir).is_dir() and subdir not in candidates:
                 candidates.append(subdir)
     except OSError:
         pass
@@ -78,8 +78,8 @@ def find_exe_from_fuel(install_path: str) -> str | None:
     if not install_path:
         return None
     for directory in candidate_fuel_dirs(install_path):
-        fuel_path = os.path.join(directory, 'fuel.json')
-        if not os.path.isfile(fuel_path):
+        fuel_path = str(Path(directory) / 'fuel.json')
+        if not Path(fuel_path).is_file():
             continue
         try:
             content = Path(fuel_path).read_text(encoding='utf-8', errors='replace')
@@ -92,8 +92,8 @@ def find_exe_from_fuel(install_path: str) -> str | None:
         command = extract_main_command(data)
         if not command:
             continue
-        exe_path = os.path.join(directory, command)
-        if os.path.isfile(exe_path):
+        exe_path = str(Path(directory) / command)
+        if Path(exe_path).is_file():
             logger.info(
                 '[amazon_fuel] resolved exe from %s: %s',
                 fuel_path, exe_path,
@@ -107,18 +107,18 @@ def find_exe_from_fuel(install_path: str) -> str | None:
 
 def _find_largest_exe(install_path: str) -> str | None:
     """Find largest exe fallback."""
-    if not install_path or not os.path.isdir(install_path):
+    if not install_path or not Path(install_path).is_dir():
         return None
     candidates: list[tuple[int, str]] = []
     for pattern in ('*.exe', '**/*.exe'):
         for path in glob.glob(
-            os.path.join(install_path, pattern), recursive=True,
+            str(Path(install_path) / pattern), recursive=True,
         ):
-            basename = os.path.basename(path).lower()
+            basename = Path(path).name.lower()
             if any(skip in basename for skip in _SKIP_EXE_PATTERNS):
                 continue
             try:
-                size = os.path.getsize(path)
+                size = Path(path).stat().st_size
             except OSError:
                 continue
             candidates.append((size, path))

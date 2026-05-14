@@ -33,6 +33,7 @@ from .gogdl_credentials import _GogdlCreds
 from .oauth import _TokenOAuth
 from .storage import _TokenStorage
 from .user_info import GOGUserInfo
+from pathlib import Path
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -93,11 +94,11 @@ class GOGTokenManager:
 
     def get_token_age_seconds(self) -> float:
         """Get token age seconds."""
-        path = os.path.expanduser(self._config.token_file)
-        if not os.path.isfile(path):
+        path = str(Path(self._config.token_file).expanduser())
+        if not Path(path).is_file():
             return float("inf")
         try:
-            return time.time() - os.path.getmtime(path)
+            return time.time() - Path(path).stat().st_mtime
         except OSError:
             return float("inf")
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any
+from pathlib import Path
 logger = logging.getLogger(__name__)
 def inspect_save_folder(
     root: str,
@@ -20,7 +21,7 @@ def inspect_save_folder(
         "truncated_count": 0,
         "truncated_size": 0,
     }
-    if not os.path.isdir(root):
+    if not Path(root).is_dir():
         return result
     result["exists"] = True
     substr = filter_substring.lower() if filter_substring else ""
@@ -38,14 +39,14 @@ def _collect_file_entries(
     """Collect file entries."""
     entries: list[dict[str, Any]] = []
     try:
-        for dirpath, dirnames, filenames in os.walk(root):
-            rel_dir = os.path.relpath(dirpath, root)
+        for dirpath, dirnames, filenames in Path(root).walk():
+            rel_dir = str(Path(dirpath).relative_to(root))
             depth = 0 if rel_dir == "." else rel_dir.count(os.sep) + 1
             if max_depth >= 0 and depth >= max_depth:
                 dirnames[:] = []
             for name in filenames:
-                full = os.path.join(dirpath, name)
-                rel_norm = os.path.relpath(full, root).replace(
+                full = str(Path(dirpath) / name)
+                rel_norm = str(Path(full).relative_to(root)).replace(
                     os.sep, "/",
                 )
                 if substr and substr not in rel_norm.lower():

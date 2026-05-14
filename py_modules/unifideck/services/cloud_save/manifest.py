@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -25,14 +26,14 @@ async def read_manifest(directory: str) -> dict[str, float]:
     manifest" identically (forces a full remote compare).
     Offloaded via ``to_thread`` since read is sync.
     """
-    manifest_path = os.path.join(directory, _MANIFEST_NAME)
+    manifest_path = str(Path(directory) / _MANIFEST_NAME)
 
-    if not os.path.isfile(manifest_path):
+    if not Path(manifest_path).is_file():
         return {}
 
     def _read_sync() -> dict[str, float]:
         try:
-            with open(manifest_path, encoding="utf-8") as f:
+            with Path(manifest_path).open(encoding="utf-8") as f:
                 data = json.load(f)
                 
             if not isinstance(data, dict):
@@ -55,15 +56,15 @@ async def write_manifest(directory: str, manifest: dict[str, float]) -> None:
     never observe a half-written manifest. OSError logged at
     WARNING but not raised.
     """
-    manifest_path = os.path.join(directory, _MANIFEST_NAME)
+    manifest_path = str(Path(directory) / _MANIFEST_NAME)
     tmp_path = manifest_path + ".tmp"
 
     def _write_sync() -> None:
         try:
-            if not os.path.isdir(directory):
-                os.makedirs(directory, exist_ok=True)
+            if not Path(directory).is_dir():
+                Path(directory).mkdir(parents=True, exist_ok=True)
 
-            with open(tmp_path, "w", encoding="utf-8") as f:
+            with Path(tmp_path).open("w", encoding="utf-8") as f:
                 json.dump(manifest, f)
                 f.flush()
                 os.fsync(f.fileno())
@@ -71,9 +72,9 @@ async def write_manifest(directory: str, manifest: dict[str, float]) -> None:
             os.replace(tmp_path, manifest_path)
         except Exception as e:
             logger.warning("[CloudSaveManifest] failed to write %s: %s", manifest_path, e)
-            if os.path.exists(tmp_path):
+            if Path(tmp_path).exists():
                 try:
-                    os.remove(tmp_path)
+                    Path(tmp_path).unlink(missing_ok=True)
                 except OSError:
                     pass
 

@@ -5,6 +5,7 @@ import os
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
+from pathlib import Path
 if TYPE_CHECKING:
     from ...config import ConfigManager
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ def _resolve_cache_path(config: ConfigManager | None) -> str:
             "disk_space.size_cache_path",
             "~/.cache/unifideck/cloud_save_sizes.json",
         )
-    return os.path.expanduser(raw)
+    return str(Path(raw).expanduser())
 def _resolve_ttl_seconds(config: ConfigManager | None) -> int:
     """Resolve TTL seconds."""
     if config is None or not hasattr(config, "get_int"):
@@ -35,10 +36,10 @@ def _resolve_ttl_seconds(config: ConfigManager | None) -> int:
     )
 def _load(path: str) -> dict[str, Any]:
     """Load."""
-    if not os.path.isfile(path):
+    if not Path(path).is_file():
         return {}
     try:
-        with open(path, encoding="utf-8") as fh:
+        with Path(path).open(encoding="utf-8") as fh:
             return cast("dict[str, Any]", json.load(fh))
     except (OSError, json.JSONDecodeError) as err:
         logger.warning(
@@ -49,9 +50,9 @@ def _load(path: str) -> dict[str, Any]:
 def _save(path: str, data: dict[str, Any]) -> None:
     """Save."""
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        Path(str(Path(path).parent)).mkdir(parents=True, exist_ok=True)
         tmp_path = f"{path}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as fh:
+        with Path(tmp_path).open("w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2)
         os.replace(tmp_path, path)
     except OSError as err:
@@ -105,14 +106,14 @@ def record_observed_size(
     _save(path, data)
 def measure_directory_size(directory: str) -> int:
     """Measure directory size."""
-    if not os.path.isdir(directory):
+    if not Path(directory).is_dir():
         return 0
     total = 0
     try:
-        for root, _, files in os.walk(directory):
+        for root, _, files in Path(directory).walk():
             for name in files:
                 try:
-                    total += os.path.getsize(os.path.join(root, name))
+                    total += (Path(root) / name).stat().st_size
                 except OSError:
                     continue
     except OSError as err:

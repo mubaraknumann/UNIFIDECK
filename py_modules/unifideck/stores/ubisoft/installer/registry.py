@@ -196,7 +196,7 @@ def get_directory_size(path: str) -> int:
     """Get directory size."""
     total = 0
     try:
-        for dirpath, _dirs, filenames in os.walk(path):
+        for dirpath, _dirs, filenames in Path(path).walk():
             for f in filenames:
                 try:
                     total += (Path(dirpath) / f).stat().st_size

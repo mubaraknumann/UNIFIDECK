@@ -21,6 +21,7 @@ from ..shared.cli_install_helpers import (
 )
 from .exe_resolver import EpicExeResolver
 from .library import EpicLibraryReader
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 _PROGRESS_RE = re.compile(r'(\d+(?:\.\d+)?)\s*%')
@@ -61,8 +62,8 @@ class EpicInstaller:
                 success=False, store='epic', game_id=game_id,
                 error='legendary_not_found',
             )
-        base = base_path or os.path.expanduser(self._default_install_root)
-        os.makedirs(base, exist_ok=True)
+        base = base_path or str(Path(self._default_install_root).expanduser())
+        Path(base).mkdir(parents=True, exist_ok=True)
         rc = await self._run_install(game_id, base, progress_cb)
         if rc != 0:
             return InstallResult(
@@ -146,12 +147,12 @@ class EpicInstaller:
     ) -> InstallResult:
         """Finalize install."""
         info = await self._exe_resolver.resolve(game_id)
-        install_path = info.get('install_path') or os.path.join(base, game_id)
+        install_path = info.get('install_path') or str(Path(base) / game_id)
         executable = info.get('executable') or ''
         title = info.get('title') or game_id
         if install_path and executable:
             try:
-                rel = os.path.relpath(executable, install_path)
+                rel = str(Path(executable).relative_to(install_path))
                 await write_manifest(
                     install_path=install_path,
                     store='epic',

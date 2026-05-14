@@ -16,6 +16,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from ..core.types.events import Events
+from pathlib import Path
 
 if TYPE_CHECKING:
     from ..config import ConfigManager
@@ -113,12 +114,12 @@ class AccountService:
 
     async def _read_active_user(self) -> str | None:
         """Parse ``loginusers.vdf`` and return the most recent user ID."""
-        if not os.path.exists(self._loginusers_path):
+        if not Path(self._loginusers_path).exists():
             return None
             
         try:
             def read_file() -> str:
-                with open(self._loginusers_path, "r", encoding="utf-8") as f:
+                with Path(self._loginusers_path).open("r", encoding="utf-8") as f:
                     return f.read()
                     
             content = await asyncio.to_thread(read_file)

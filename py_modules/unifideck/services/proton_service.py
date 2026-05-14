@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from ..core.types.events import Events
 from ..core.types.result import Result
 from ..event_bus.event_bus_devex import subscribe
+from pathlib import Path
 
 if TYPE_CHECKING:
     from ..event_bus.event_bus import EventBus
@@ -78,12 +79,12 @@ class ProtonService:
 
     async def set_compat_tool(self, app_id: int, tool: str) -> Result:
         """Write a ``CompatToolMapping`` entry for ``app_id`` = ``tool``."""
-        if not os.path.exists(self._config_vdf_path):
+        if not Path(self._config_vdf_path).exists():
             logger.warning("[ProtonService] config.vdf not found at %s", self._config_vdf_path)
             return Result(success=False, error="vdf_not_found")
             
         try:
-            with open(self._config_vdf_path, "r", encoding="utf-8") as f:
+            with Path(self._config_vdf_path).open("r", encoding="utf-8") as f:
                 content = f.read()
                 
             new_content = self._inject_compat_tool(content, app_id, tool)
@@ -94,7 +95,7 @@ class ProtonService:
                 
             # Write atomically
             tmp_path = f"{self._config_vdf_path}.tmp"
-            with open(tmp_path, "w", encoding="utf-8") as f:
+            with Path(tmp_path).open("w", encoding="utf-8") as f:
                 f.write(new_content)
                 f.flush()
                 os.fsync(f.fileno())

@@ -14,6 +14,7 @@ import os
 from typing import Any
 
 from .models import DownloadItem
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +27,12 @@ async def load_queue(queue_file: str) -> list[DownloadItem]:
     log at WARNING so ops sees corruption. Callers never receive
     partial data — all-or-nothing load keeps the worker sane.
     """
-    if not os.path.isfile(queue_file):
+    if not Path(queue_file).is_file():
         return []
 
     def _read_sync() -> list[DownloadItem]:
         try:
-            with open(queue_file, encoding="utf-8") as f:
+            with Path(queue_file).open(encoding="utf-8") as f:
                 data = json.load(f)
 
             if not isinstance(data, list):
@@ -69,14 +70,14 @@ async def save_queue(
     """
     def _write_sync() -> None:
         try:
-            parent = os.path.dirname(queue_file)
+            parent = str(Path(queue_file).parent)
             if parent:
-                os.makedirs(parent, exist_ok=True)
+                Path(parent).mkdir(parents=True, exist_ok=True)
 
             data = [item.to_dict() for item in queue]
             tmp_path = queue_file + ".tmp"
 
-            with open(tmp_path, "w", encoding="utf-8") as f:
+            with Path(tmp_path).open("w", encoding="utf-8") as f:
                 json.dump(data, f)
                 f.flush()
                 os.fsync(f.fileno())
@@ -86,7 +87,7 @@ async def save_queue(
             logger.warning("[DownloadPersistence] failed to save queue: %s", e)
             if 'tmp_path' in locals() and os.path.exists(tmp_path):
                 try:
-                    os.remove(tmp_path)
+                    Path(tmp_path).unlink(missing_ok=True)
                 except OSError:
                     pass
 

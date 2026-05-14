@@ -12,6 +12,7 @@ import os
 import shutil
 
 from .constants import MANIFEST_FILE
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -24,18 +25,18 @@ def walk_mtimes(root: str) -> dict[str, float]:
     gets a partial map which is still useful for diff.
     """
     mtimes = {}
-    if not os.path.isdir(root):
+    if not Path(root).is_dir():
         return mtimes
 
-    for dirpath, _, files in os.walk(root):
+    for dirpath, _, files in Path(root).walk():
         for f in files:
             if f.startswith(".") or f == MANIFEST_FILE:
                 continue
 
-            path = os.path.join(dirpath, f)
-            rel = os.path.relpath(path, root)
+            path = str(Path(dirpath) / f)
+            rel = str(Path(path).relative_to(root))
             try:
-                mtimes[rel] = os.path.getmtime(path)
+                mtimes[rel] = Path(path).stat().st_mtime
             except OSError:
                 pass
 
@@ -56,16 +57,16 @@ def copy_tree(
     copied forward with stale mtimes. Skips dot-files. Per-file
     OSError logged at DEBUG, copy continues.
     """
-    if not os.path.isdir(src):
+    if not Path(src).is_dir():
         return
 
-    os.makedirs(dst, exist_ok=True)
+    Path(dst).mkdir(parents=True, exist_ok=True)
 
-    for dirpath, dirnames, files in os.walk(src):
-        rel_dir = os.path.relpath(dirpath, src)
-        dst_dir = os.path.join(dst, rel_dir) if rel_dir != "." else dst
+    for dirpath, dirnames, files in Path(src).walk():
+        rel_dir = str(Path(dirpath).relative_to(src))
+        dst_dir = str(Path(dst) / rel_dir) if rel_dir != "." else dst
 
-        os.makedirs(dst_dir, exist_ok=True)
+        Path(dst_dir).mkdir(parents=True, exist_ok=True)
 
         for f in files:
             if f.startswith("."):
@@ -76,8 +77,8 @@ def copy_tree(
                 # We will follow the spec "Skips dot-files".
                 continue
 
-            src_file = os.path.join(dirpath, f)
-            dst_file = os.path.join(dst_dir, f)
+            src_file = str(Path(dirpath) / f)
+            dst_file = str(Path(dst_dir) / f)
 
             try:
                 shutil.copy2(src_file, dst_file)
@@ -87,17 +88,17 @@ def copy_tree(
 
 def read_text(path: str) -> str:
     """Read ``path`` as UTF-8 text. Raises OSError on missing file."""
-    with open(path, encoding="utf-8") as f:
+    with Path(path).open(encoding="utf-8") as f:
         return f.read()
 
 
 def write_text(path: str, content: str) -> None:
     """Write ``content`` to ``path`` as UTF-8 text (overwrite)."""
-    parent = os.path.dirname(path)
+    parent = str(Path(path).parent)
     if parent:
-        os.makedirs(parent, exist_ok=True)
+        Path(parent).mkdir(parents=True, exist_ok=True)
         
-    with open(path, "w", encoding="utf-8") as f:
+    with Path(path).open("w", encoding="utf-8") as f:
         f.write(content)
         f.flush()
         os.fsync(f.fileno())

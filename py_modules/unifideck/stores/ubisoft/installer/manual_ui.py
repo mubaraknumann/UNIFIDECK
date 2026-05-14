@@ -33,6 +33,7 @@ from ..library import UbisoftLibrary
 from ..library.detection_helpers import looks_like_game_install
 from ..session import UbisoftSession
 from . import registry as _reg
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 _MANUAL_INSTALL_TIMEOUT_S = 2 * 60 * 60
@@ -176,10 +177,10 @@ class _ManualUiInstaller:
     ) -> tuple[str, set]:
         """Snapshot install base."""
         install_base = install_path or self._config.default_install_base_expanded
-        os.makedirs(install_base, exist_ok=True)
+        Path(install_base).mkdir(parents=True, exist_ok=True)
         dirs_before: set = set()
         try:
-            dirs_before = set(os.listdir(install_base))
+            dirs_before = set([e.name for e in Path(install_base).iterdir()])
         except OSError:
             pass
         return install_base, dirs_before
@@ -246,22 +247,22 @@ class _ManualUiInstaller:
         prefix_path: str,
     ) -> dict[str, set]:
         """Snapshot UPC game dirs."""
-        upc_games_rel = os.path.join(
-            "drive_c",
-            "Program Files (x86)",
-            "Ubisoft",
-            "Ubisoft Game Launcher",
-            "games",
+        upc_games_rel = str(
+            Path("drive_c")
+            / "Program Files (x86)"
+            / "Ubisoft"
+            / "Ubisoft Game Launcher"
+            / "games"
         )
         candidates = (
-            os.path.join(prefix_path, upc_games_rel),
-            os.path.join(prefix_path, "pfx", upc_games_rel),
+            str(Path(prefix_path) / upc_games_rel),
+            str(Path(prefix_path) / "pfx" / upc_games_rel),
         )
         snapshots: dict[str, set] = {}
         for gdir in candidates:
-            if os.path.isdir(gdir):
+            if Path(gdir).is_dir():
                 try:
-                    snapshots[gdir] = set(os.listdir(gdir))
+                    snapshots[gdir] = set([e.name for e in Path(gdir).iterdir()])
                 except OSError:
                     pass
         return snapshots
@@ -349,13 +350,13 @@ class _ManualUiInstaller:
     ) -> str | None:
         """Check new dirs."""
         try:
-            now = set(os.listdir(base))
+            now = set([e.name for e in Path(base).iterdir()])
         except OSError:
             return None
         new_dirs = now - before
         for d in new_dirs:
-            candidate = os.path.join(base, d)
-            if os.path.isdir(candidate) and looks_like_game_install(candidate):
+            candidate = str(Path(base) / d)
+            if Path(candidate).is_dir() and looks_like_game_install(candidate):
                 return candidate
         return None
 

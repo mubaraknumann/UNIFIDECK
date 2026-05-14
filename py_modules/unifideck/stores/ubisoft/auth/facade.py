@@ -40,6 +40,7 @@ from .direct_signin import _DirectSignIn
 from .session_monitor import _AuthSessionMonitor
 from .shortcut import _AuthShortcut
 from .shortcut_ops import _ShortcutRegistryOps
+from pathlib import Path
 
 if TYPE_CHECKING:
     from ....event_bus.event_bus import EventBus
@@ -168,7 +169,7 @@ class UbisoftAuth:
         """Logout."""
         self._session.clear_session_file()
         auth_dir = self._config.auth_prefix_dir_expanded
-        if os.path.isdir(auth_dir):
+        if Path(auth_dir).is_dir():
             try:
                 shutil.rmtree(auth_dir)
                 logger.info(

@@ -187,7 +187,7 @@ def secure_write_atomic(
             subsequent retry is not blocked by leftover state.
     """
     path_str = os.fspath(path)
-    parent = os.path.dirname(path_str)
+    parent = str(Path(path_str).parent)
     if parent:
         _ensure_parent_dir(parent, dir_mode)
     tmp = path_str + ".tmp"
@@ -256,7 +256,7 @@ def _clear_stale_tmp(tmp: str) -> None:
             f"uid {st.st_uid}; manual cleanup required",
         )
     try:
-        os.unlink(tmp)
+        Path(tmp).unlink(missing_ok=True)
     except OSError as e:
         raise SecureIOError(
             f"cannot unlink stale temp {tmp}: {e.strerror or e}",
@@ -315,7 +315,7 @@ def _best_effort_unlink(path: str) -> None:
     the original failure that triggered the cleanup.
     """
     try:
-        os.unlink(path)
+        Path(path).unlink(missing_ok=True)
     except OSError as e:
         logger.debug(
             "[secure_io] cleanup unlink failed for %s: %s",

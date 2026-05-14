@@ -22,6 +22,7 @@ from ..shared.cli_install_helpers import (
 )
 from . import amazon_fuel
 from .amazon_library import AmazonLibraryReader
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 _PROGRESS_RE = re.compile(r'\[\s*(\d+)\s*%\s*\]')
@@ -62,8 +63,8 @@ class AmazonInstaller:
                 success=False, store='amazon', game_id=game_id,
                 error='nile_not_found',
             )
-        base = base_path or os.path.expanduser(self._default_install_root)
-        os.makedirs(base, exist_ok=True)
+        base = base_path or str(Path(self._default_install_root).expanduser())
+        Path(base).mkdir(parents=True, exist_ok=True)
         rc = await self._run_install(base, game_id, progress_cb)
         if rc != 0:
             return InstallResult(
@@ -86,7 +87,7 @@ class AmazonInstaller:
         title = await self._resolve_title(game_id) or game_id
         if executable:
             try:
-                rel = os.path.relpath(executable, install_path)
+                rel = str(Path(executable).relative_to(install_path))
                 await write_manifest(
                     install_path=install_path,
                     store='amazon',
@@ -177,11 +178,11 @@ class AmazonInstaller:
         info = installed.get(game_id)
         if isinstance(info, dict):
             path = info.get('path') or info.get('install_path')
-            if isinstance(path, str) and os.path.isdir(path):
+            if isinstance(path, str) and Path(path).is_dir():
                 return path
         # Fallback: nile installs under base/<game_id> by default.
-        candidate = os.path.join(base, game_id)
-        if os.path.isdir(candidate):
+        candidate = str(Path(base) / game_id)
+        if Path(candidate).is_dir():
             return candidate
         return None
 
@@ -239,7 +240,7 @@ class AmazonInstaller:
             return Result(
                 success=False, error=f'nile_rc:{proc.returncode}',
             )
-        if isinstance(install_path, str) and os.path.isdir(install_path):
+        if isinstance(install_path, str) and Path(install_path).is_dir():
             try:
                 await asyncio.to_thread(
                     shutil.rmtree, install_path, ignore_errors=True,

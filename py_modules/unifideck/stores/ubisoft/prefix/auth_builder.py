@@ -178,7 +178,7 @@ class _AuthPrefixBuilder:
         if not Path(prefixes_dir).is_dir():
             return (None, "")
         try:
-            entries = sorted(os.listdir(prefixes_dir))
+            entries = sorted([e.name for e in Path(prefixes_dir).iterdir()])
         except OSError:
             return (None, "")
         for entry in entries:
@@ -228,10 +228,10 @@ class _AuthPrefixBuilder:
         """Repair auth prefix if needed."""
         auth_dir = self._config.auth_prefix_dir_expanded
         session_file = self._config.upc_session_file_expanded
-        if os.path.isdir(auth_dir):
+        if Path(auth_dir).is_dir():
             self._helpers.try_inject_auth_state([auth_dir])
             return
-        if not os.path.isfile(session_file):
+        if not Path(session_file).is_file():
             return
         logger.info(
             "[UbisoftPrefixManager] auth prefix "

@@ -29,6 +29,7 @@ from typing import (
     Any,
 )
 from .primitives import GOGFolderOps
+from pathlib import Path
 
 if TYPE_CHECKING:
     from .installer import GOGInstaller
@@ -340,13 +341,13 @@ class _GogdlProgressMonitor:
     ) -> str:
         """Resolve repair path."""
         if folder_name:
-            predicted = os.path.join(base_path, folder_name)
-            if os.path.exists(predicted):
+            predicted = str(Path(base_path) / folder_name)
+            if Path(predicted).exists():
                 return predicted
         try:
-            for name in os.listdir(base_path):
-                candidate = os.path.join(base_path, name)
-                if not os.path.isdir(candidate):
+            for name in [e.name for e in Path(base_path).iterdir()]:
+                candidate = str(Path(base_path) / name)
+                if not Path(candidate).is_dir():
                     continue
                 if GOGFolderOps.has_goggame_info(
                     candidate,

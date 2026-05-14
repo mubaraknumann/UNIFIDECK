@@ -15,6 +15,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .legendary import fetch_info
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 _SKIP_PATTERNS: tuple[str, ...] = (
@@ -106,8 +107,8 @@ class EpicExeResolver:
         manifest = info.get('manifest', {}) if isinstance(info, dict) else {}
         manifest_exe = manifest.get('launch_exe') if isinstance(manifest, dict) else None
         if isinstance(manifest_exe, str) and manifest_exe:
-            full = os.path.join(install_path, manifest_exe.lstrip('/'))
-            if os.path.isfile(full):
+            full = str(Path(install_path) / manifest_exe.lstrip('/'))
+            if Path(full).is_file():
                 return full
         fallback = self._scan_install_path(install_path)
         if fallback:
@@ -122,20 +123,20 @@ class EpicExeResolver:
     @staticmethod
     def _scan_install_path(install_path: str) -> str | None:
         """Scan install path."""
-        if not install_path or not os.path.isdir(install_path):
+        if not install_path or not Path(install_path).is_dir():
             return None
         candidates: list[tuple[int, str]] = []
         for pattern in _EXE_PATTERNS:
-            full_pattern = os.path.join(install_path, pattern)
+            full_pattern = str(Path(install_path) / pattern)
             matches = glob.glob(full_pattern, recursive=('**' in pattern))
             for match in matches:
-                basename = os.path.basename(match).lower()
+                basename = Path(match).name.lower()
                 if any(skip in basename for skip in _SKIP_PATTERNS):
                     continue
                 if any(m in match.lower() for m in _REDIST_PATH_MARKERS):
                     continue
                 try:
-                    size = os.path.getsize(match)
+                    size = Path(match).stat().st_size
                 except OSError:
                     size = 0
                 candidates.append((size, match))

@@ -28,6 +28,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from unifideck.utils.config_helpers import get_cfg
+from pathlib import Path
 
 if TYPE_CHECKING:
     from ...config import ConfigManager
@@ -163,10 +164,9 @@ class GOGConfig:
         """Auth config path."""
         import os
 
-        return os.path.join(
-            os.path.expanduser(self.gogdl_config_dir),
-            "gog_credentials.json",
-        )
+        return str(Path(
+            str(Path(self.gogdl_config_dir).expanduser()),
+        ) / "gog_credentials.json")
 
     def describe(self) -> str:
         """Describe."""

@@ -29,6 +29,7 @@ from ..paths import UbisoftPrefixPaths
 from .detection import _InstallDetector
 from .fetch import _LibraryFetcher
 from .manifest import _VisibleManifestProcessor
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -89,11 +90,10 @@ class UbisoftLibrary:
                 )
             if local_games:
                 template_dir = self._config.template_dir_expanded
-                template_marker = os.path.join(
+                template_marker = str(Path(
                     template_dir,
-                    self._config.bootstrap_marker,
-                )
-                if not os.path.isfile(template_marker):
+                ) / self._config.bootstrap_marker)
+                if not Path(template_marker).is_file():
                     self._queue_template_creation()
             return local_games
         except Exception as e:

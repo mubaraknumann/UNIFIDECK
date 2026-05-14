@@ -32,6 +32,7 @@ import logging
 import os
 import shutil
 from typing import Any, cast
+from pathlib import Path
 
 try:
     import vdf
@@ -49,10 +50,10 @@ def load_shortcuts_vdf(path: str) -> dict[str, Any]:
 
     if vdf is None:
         raise VDFError("vdf library not installed")
-    if not os.path.isfile(path):
+    if not Path(path).is_file():
         return {"shortcuts": {}}
     try:
-        with open(path, "rb") as f:
+        with Path(path).open("rb") as f:
             return cast("dict[str, Any]", vdf.binary_loads(f.read()))
     except Exception as e:  # noqa: BLE001
         raise VDFError(f"failed to parse {path}: {e}") from e
@@ -84,14 +85,14 @@ def save_shortcuts_vdf(path: str, data: dict[str, Any]) -> None:
     tmp_path = f"{path}.tmp"
     backup_path = f"{path}.backup"
     # Step 1: back up the current file (if any)
-    if os.path.isfile(path):
+    if Path(path).is_file():
         try:
             shutil.copy2(path, backup_path)
         except OSError as e:
             raise VDFError(f"backup failed: {e}") from e
     # Step 2: write to a temporary file
     try:
-        with open(tmp_path, "wb") as f:
+        with Path(tmp_path).open("wb") as f:
             f.write(vdf.binary_dumps(data))
             f.flush()
             os.fsync(f.fileno())
@@ -141,13 +142,13 @@ def _sort_key(k: str) -> int:
 def _cleanup_tmp(tmp_path: str) -> None:
     """Remove a leftover .tmp file, ignoring errors."""
     try:
-        os.remove(tmp_path)
+        Path(tmp_path).unlink(missing_ok=True)
     except OSError:
         # best-effort cleanup; file may already be gone or locked
         pass
 def _restore_backup(backup_path: str, path: str) -> None:
     """Restore the backup file over the target (best-effort)."""
-    if os.path.isfile(backup_path):
+    if Path(backup_path).is_file():
         try:
             shutil.copy2(backup_path, path)
             logger.warning("[vdf] restored backup to %s", path)

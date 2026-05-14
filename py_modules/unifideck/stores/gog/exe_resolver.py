@@ -186,7 +186,7 @@ class GOGExeResolver:
             if not Path(directory).is_dir():
                 continue
             try:
-                for item in os.listdir(directory):
+                for item in [e.name for e in Path(directory).iterdir()]:
                     if item.startswith("goggame-") and item.endswith(".info"):
                         return (
                             str(Path(directory) / item),
@@ -239,7 +239,7 @@ class GOGExeResolver:
     def _has_root_data_files(install_path: str) -> bool:
         """Has root data files."""
         try:
-            for name in os.listdir(install_path):
+            for name in [e.name for e in Path(install_path).iterdir()]:
                 full = Path(install_path) / name
                 if not full.is_file():
                     continue

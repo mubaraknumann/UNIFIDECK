@@ -22,7 +22,7 @@ def load_history(path: Path) -> dict[str, Any]:
         return {}
 
     try:
-        with open(path, encoding="utf-8") as f:
+        with Path(path).open(encoding="utf-8") as f:
             data = json.load(f)
             
         if not isinstance(data, dict):
@@ -45,7 +45,7 @@ def save_history(path: Path, data: dict[str, Any]) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         
-        with open(tmp_path, "w", encoding="utf-8") as f:
+        with Path(tmp_path).open("w", encoding="utf-8") as f:
             json.dump(data, f)
             f.flush()
             os.fsync(f.fileno())

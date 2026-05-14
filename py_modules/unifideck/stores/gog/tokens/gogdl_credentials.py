@@ -24,6 +24,7 @@ import os
 import tempfile
 import time
 from typing import TYPE_CHECKING
+from pathlib import Path
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -50,10 +51,9 @@ class _GogdlCreds:
             tempfile.mkdtemp,
             "unifideck-gogdl-",
         )
-        creds_path = os.path.join(
+        creds_path = str(Path(
             tmpdir,
-            "gog_credentials.json",
-        )
+        ) / "gog_credentials.json")
         gogdl_data = self._build_gogdl_data(
             access_token,
             refresh_token,
@@ -111,10 +111,10 @@ class _GogdlCreds:
             def _remove() -> None:
                 """Remove."""
                 try:
-                    if os.path.isfile(creds_path):
-                        os.remove(creds_path)
-                    if os.path.isdir(tmpdir):
-                        os.rmdir(tmpdir)
+                    if Path(creds_path).is_file():
+                        Path(creds_path).unlink(missing_ok=True)
+                    if Path(tmpdir).is_dir():
+                        Path(tmpdir).rmdir()
                 except OSError as e:
                     logger.warning(
                         "[GOGTokens] gogdl temp cleanup failed: %s",

@@ -11,6 +11,7 @@ import logging
 import os
 import stat
 from typing import TYPE_CHECKING
+from pathlib import Path
 
 if TYPE_CHECKING:
     from .container import ServiceContainer
@@ -76,15 +77,15 @@ def _self_heal_executable_bits() -> None:
     try:
         # Get path to the bin directory relative to this file
         # This file is at py_modules/unifideck/services/bootstrap/startup.py
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
-        bin_dir = os.path.join(base_dir, "bin")
+        base_dir = str(Path(__file__).parent.parent.parent.parent.parent)
+        bin_dir = str(Path(base_dir) / "bin")
 
-        if not os.path.isdir(bin_dir):
+        if not Path(bin_dir).is_dir():
             return
 
-        for filename in os.listdir(bin_dir):
-            path = os.path.join(bin_dir, filename)
-            if os.path.isfile(path):
+        for filename in [e.name for e in Path(bin_dir).iterdir()]:
+            path = str(Path(bin_dir) / filename)
+            if Path(path).is_file():
                 st = os.stat(path)
                 # Add executable bit for owner/group/others if not present
                 if not (st.st_mode & stat.S_IXUSR):

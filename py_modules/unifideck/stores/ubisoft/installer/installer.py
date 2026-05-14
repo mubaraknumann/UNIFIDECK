@@ -42,6 +42,7 @@ from .manual_ui import _ManualUiInstaller
 from .registry import _ShortcutRegistry
 from .uninstall import _UninstallPipeline
 from .update_op import _UpdateOperation
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 _UPDATE_TIMEOUT_S = 4 * 60 * 60
@@ -240,7 +241,7 @@ class UbisoftInstaller:
                     e,
                 )
         prefix_path = self._paths.get_prefix_path(game_id)
-        if prefix_path and os.path.isdir(prefix_path):
+        if prefix_path and Path(prefix_path).is_dir():
             await asyncio.sleep(2)
             captured = self._session.capture(prefix_path)
             if captured:

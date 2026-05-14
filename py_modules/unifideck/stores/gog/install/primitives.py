@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +32,12 @@ class GOGFolderOps:
         """Folder size."""
         total = 0
         try:
-            for root, _dirs, files in os.walk(path):
+            for root, _dirs, files in Path(path).walk():
                 for name in files:
                     try:
-                        total += os.path.getsize(
-                            os.path.join(root, name),
-                        )
+                        total += Path(
+                            str(Path(root) / name),
+                        ).stat().st_size
                     except OSError:
                         continue
         except OSError:
@@ -48,7 +49,7 @@ class GOGFolderOps:
         """Count files."""
         count = 0
         try:
-            for _root, _dirs, files in os.walk(path):
+            for _root, _dirs, files in Path(path).walk():
                 count += len(files)
         except OSError:
             pass
@@ -58,7 +59,7 @@ class GOGFolderOps:
     def has_goggame_info(path: str, game_id: str = "") -> bool:
         """Check whether goggame info."""
         try:
-            for name in os.listdir(path):
+            for name in [e.name for e in Path(path).iterdir()]:
                 if not name.startswith("goggame-"):
                     continue
                 if not name.endswith(".info"):
@@ -79,10 +80,10 @@ class GOGFolderOps:
             """Sync cleanup."""
             deleted = 0
             errors = 0
-            for root, dirs, files in os.walk(path, topdown=False):
+            for root, dirs, files in Path(path).walk(top_down=False):
                 for name in files:
                     try:
-                        os.remove(os.path.join(root, name))
+                        Path(str(Path(root) / name)).unlink(missing_ok=True)
                         deleted += 1
                     except OSError as e:
                         logger.debug(
@@ -93,11 +94,11 @@ class GOGFolderOps:
                         errors += 1
                 for name in dirs:
                     try:
-                        os.rmdir(os.path.join(root, name))
+                        Path(str(Path(root) / name)).rmdir()
                     except OSError:
                         pass
             try:
-                os.rmdir(path)
+                Path(path).rmdir()
             except OSError:
                 pass
             logger.info(

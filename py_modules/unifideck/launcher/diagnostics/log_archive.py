@@ -16,7 +16,7 @@ def _resolve_archive_dir(config: ConfigManager | None) -> Path:
             "logs.archive_path",
             "~/.local/share/unifideck/launches",
         )
-    path = Path(os.path.expanduser(raw))
+    path = Path(str(Path(raw).expanduser()))
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError as err:
@@ -140,7 +140,7 @@ def export_launch_logs(
             "error": "source_missing",
             "dest_path": None,
         }
-    dst = Path(os.path.expanduser(dest_path))
+    dst = Path(str(Path(dest_path).expanduser()))
     if not dst.is_absolute():
         dst = Path.home() / dst
     try:

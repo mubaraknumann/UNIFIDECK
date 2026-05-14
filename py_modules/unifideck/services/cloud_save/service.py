@@ -127,4 +127,4 @@ class CloudSaveService(_SyncMixin):
         Returns the absolute path under ``_local_root``.
         """
         import os
-        return os.path.join(self._local_root, store, game_id)
+        return str(Path(self._local_root) / store / game_id)

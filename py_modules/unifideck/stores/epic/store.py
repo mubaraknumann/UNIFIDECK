@@ -33,6 +33,7 @@ from .exe_resolver import EpicExeResolver
 from .install import EpicInstaller, ProgressCallback
 from .library import EpicLibraryReader, merge_install_status
 from .updates import EpicUpdateChecker
+from pathlib import Path
 
 if TYPE_CHECKING:
     from ...config import ConfigManager
@@ -180,11 +181,11 @@ class EpicStore(StoreBase):
 
     def _check_legendary_authenticated(self) -> bool:
         """Check LEGENDARY authenticated."""
-        user_json = os.path.expanduser(_LEGENDARY_USER_JSON)
-        if not os.path.isfile(user_json):
+        user_json = str(Path(_LEGENDARY_USER_JSON).expanduser())
+        if not Path(user_json).is_file():
             return False
         try:
-            with open(user_json, encoding='utf-8') as f:
+            with Path(user_json).open(encoding='utf-8') as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError) as e:
             logger.warning('[EpicStore] user.json read failed: %s', e)

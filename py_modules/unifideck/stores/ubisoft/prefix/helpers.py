@@ -22,6 +22,7 @@ import datetime
 import logging
 import os
 from typing import TYPE_CHECKING
+from pathlib import Path
 
 if TYPE_CHECKING:
     from .manager import UbisoftPrefixManager
@@ -47,7 +48,7 @@ class _PrefixHelpers:
             space_id,
         )
         try:
-            os.makedirs(prefix_path, exist_ok=True)
+            Path(prefix_path).mkdir(parents=True, exist_ok=True)
             ok = await self.rsync_clone(
                 self._parent._config.template_dir_expanded,
                 prefix_path,
@@ -91,7 +92,7 @@ class _PrefixHelpers:
         if not installer_path:
             return False
         try:
-            os.makedirs(prefix_path, exist_ok=True)
+            Path(prefix_path).mkdir(parents=True, exist_ok=True)
             success = await self.run_silent_installer(
                 prefix_dir=prefix_path,
                 installer_path=installer_path,
@@ -136,7 +137,7 @@ class _PrefixHelpers:
             "[UbisoftPrefixManager] creating template from first game prefix",
         )
         try:
-            os.makedirs(template_dir, exist_ok=True)
+            Path(template_dir).mkdir(parents=True, exist_ok=True)
             ok = await self.rsync_clone(
                 game_prefix,
                 template_dir,
@@ -287,15 +288,15 @@ class _PrefixHelpers:
     @staticmethod
     def fix_pfx_symlink(prefix_dir: str) -> None:
         """Fix pfx symlink."""
-        pfx_link = os.path.join(prefix_dir, "pfx")
-        if not os.path.islink(pfx_link):
+        pfx_link = str(Path(prefix_dir) / "pfx")
+        if not Path(pfx_link).is_symlink():
             return
         try:
-            current_target = os.readlink(pfx_link)
+            current_target = str(Path(pfx_link).readlink())
             if current_target in (prefix_dir, "."):
                 return
-            os.remove(pfx_link)
-            os.symlink(prefix_dir, pfx_link)
+            Path(pfx_link).unlink(missing_ok=True)
+            Path(pfx_link).symlink_to(prefix_dir)
             logger.info(
                 "[UbisoftPrefixManager] fixed pfx symlink: %s → %s",
                 current_target,
@@ -314,17 +315,17 @@ class _PrefixHelpers:
         space_id: str | None,
     ) -> None:
         """Write bootstrap marker."""
-        marker_path = os.path.join(
+        marker_path = str(Path(
             prefix_dir,
-            self._parent._config.bootstrap_marker,
-        )
+        ) / self._parent._config.bootstrap_marker)
         created_at = datetime.datetime.now().isoformat()
         lines = [source, f"created={created_at}"]
         if space_id:
             lines.insert(1, f"game={space_id}")
             try:
-                with open(
+                with Path(
                     marker_path,
+                ).open(
                     "w",
                     encoding="utf-8",
                 ) as f:

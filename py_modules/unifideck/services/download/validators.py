@@ -10,6 +10,7 @@ import os
 from typing import TYPE_CHECKING
 
 from ...core.types import Result
+from pathlib import Path
 
 if TYPE_CHECKING:
     from .models import DownloadItem
@@ -46,7 +47,7 @@ def validate_path(path: str) -> Result:
         return Result(success=False, error="empty_path")
 
     try:
-        os.makedirs(path, exist_ok=True)
+        Path(path).mkdir(parents=True, exist_ok=True)
     except OSError:
         return Result(success=False, error="mkdir_failed")
 

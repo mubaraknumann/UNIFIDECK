@@ -25,6 +25,7 @@ import urllib.request
 from typing import Any
 from ....core.net import ssl_ctx_strict
 from ..config import UbisoftConfig
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 _INSTALLER_MIN_SIZE_BYTES = 1000
@@ -44,7 +45,7 @@ class UbisoftInstallerCache:
         """Ensure cached."""
         cache_dir = self._config.installer_cache_dir_expanded
         filename = self._config.installer_filename
-        cached_path = os.path.join(cache_dir, filename)
+        cached_path = str(Path(cache_dir) / filename)
         if self._is_cached_valid(cached_path):
             logger.info(
                 "[UbisoftInstallerCache] using cached installer",
@@ -55,7 +56,7 @@ class UbisoftInstallerCache:
             self._config.installer_url,
         )
         try:
-            os.makedirs(cache_dir, exist_ok=True)
+            Path(cache_dir).mkdir(parents=True, exist_ok=True)
         except OSError as e:
             logger.error(
                 "[UbisoftInstallerCache] cache dir creation failed: %s",
@@ -74,12 +75,12 @@ class UbisoftInstallerCache:
     @staticmethod
     def _is_cached_valid(cached_path: str) -> bool:
         """Is cached valid."""
-        if not os.path.isfile(cached_path):
+        if not Path(cached_path).is_file():
             return False
         try:
-            if os.path.getsize(cached_path) < _INSTALLER_MIN_SIZE_BYTES:
+            if Path(cached_path).stat().st_size < _INSTALLER_MIN_SIZE_BYTES:
                 return False
-            with open(cached_path, "rb") as f:
+            with Path(cached_path).open("rb") as f:
                 header = f.read(2)
             return header == _PE_MAGIC
         except OSError:
@@ -118,9 +119,9 @@ class UbisoftInstallerCache:
                 "[UbisoftInstallerCache] download failed: %s",
                 e,
             )
-            if os.path.isfile(tmp_path):
+            if Path(tmp_path).is_file():
                 try:
-                    os.remove(tmp_path)
+                    Path(tmp_path).unlink(missing_ok=True)
                 except OSError:
                     pass
             return False
@@ -129,7 +130,7 @@ class UbisoftInstallerCache:
 def _stream_to_file(response: Any, path: str) -> int:
     """Stream to file."""
     total = 0
-    with open(path, "wb") as f:
+    with Path(path).open("wb") as f:
         while True:
             chunk = response.read(_DOWNLOAD_CHUNK_SIZE)
             if not chunk:

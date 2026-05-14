@@ -27,7 +27,7 @@ def _pick_first_shortcuts_vdf(userdata_root: str) -> str | None:
     boot so both processes read the same file. Returns None if
     no Steam profiles exist (fresh install, missing SteamOS).
     """
-    pattern = os.path.join(userdata_root, "*", "config", "shortcuts.vdf")
+    pattern = str(Path(userdata_root) / "*" / "config" / "shortcuts.vdf")
     matches = glob.glob(pattern)
     if matches:
         return matches[0]
@@ -56,7 +56,7 @@ def build_standalone() -> LauncherService:
     
     # Standalone paths
     steam_root = os.path.expanduser("~/.steam/root")
-    userdata_root = os.path.join(steam_root, "userdata")
+    userdata_root = str(Path(steam_root) / "userdata")
     plugin_dir = os.path.expanduser("~/homebrew/plugins/unifideck")
     local_saves_root = os.path.expanduser("~/.local/share/unifideck/saves")
     

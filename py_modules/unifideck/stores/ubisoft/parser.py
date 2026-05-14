@@ -32,6 +32,7 @@ from .parser_binary import (
     parse_ownership_record,
     parse_record_size,
 )
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 BLACKLISTED_NAMES = ["gamename", "l1", "l2", "thumbimage", "", "ubisoft game", "name"]
@@ -125,14 +126,14 @@ class GameConfig:
 
 def _read_binary_file(filepath: str) -> bytes | None:
     """Read binary file."""
-    if not os.path.isfile(filepath):
+    if not Path(filepath).is_file():
         logger.warning(
             "[UbiParser] Configurations file not found: %s",
             filepath,
         )
         return None
     try:
-        with open(filepath, "rb") as f:
+        with Path(filepath).open("rb") as f:
             return f.read()
     except Exception as e:
         logger.error(
@@ -307,14 +308,14 @@ def parse_ownership(filepath: str) -> list[int]:
 
 def _read_ownership_file(filepath: str) -> bytes | None:
     """Read ownership file."""
-    if not os.path.isfile(filepath):
+    if not Path(filepath).is_file():
         logger.warning(
             "[UbiParser] Ownership file not found: %s",
             filepath,
         )
         return None
     try:
-        with open(filepath, "rb") as f:
+        with Path(filepath).open("rb") as f:
             return f.read()
     except Exception as e:
         logger.error(
@@ -326,10 +327,10 @@ def _read_ownership_file(filepath: str) -> bytes | None:
 
 def check_install_state(state_file: str) -> bool:
     """Check install state."""
-    if not os.path.isfile(state_file):
+    if not Path(state_file).is_file():
         return False
     try:
-        with open(state_file, "rb") as f:
+        with Path(state_file).open("rb") as f:
             first_byte = f.read(1)
             return first_byte == b"\x0a"
     except Exception:

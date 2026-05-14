@@ -12,6 +12,7 @@ import os
 from typing import TYPE_CHECKING
 
 import aiohttp
+from pathlib import Path
 
 if TYPE_CHECKING:
     from ...config import ConfigManager
@@ -48,9 +49,9 @@ async def has_artwork(grid_dir: str, app_id: int) -> bool:
     async file ops so the check runs off the event loop.
     """
     def _check() -> bool:
-        grid_path = os.path.join(grid_dir, f"{app_id}{_KIND_SUFFIX['grid']}")
-        hero_path = os.path.join(grid_dir, f"{app_id}{_KIND_SUFFIX['hero']}")
-        return os.path.isfile(grid_path) and os.path.isfile(hero_path)
+        grid_path = str(Path(grid_dir) / f"{app_id}{_KIND_SUFFIX['grid']}")
+        hero_path = str(Path(grid_dir) / f"{app_id}{_KIND_SUFFIX['hero']}")
+        return Path(grid_path).is_file() and Path(hero_path).is_file()
 
     return await asyncio.to_thread(_check)
 
@@ -145,14 +146,14 @@ async def download_and_save(
     elif (url.lower().endswith('.jpg') or url.lower().endswith('.jpeg')) and kind == 'logo':
         suffix = suffix.replace('.png', '.jpg')
 
-    target_path = os.path.join(grid_dir, f"{app_id}{suffix}")
+    target_path = str(Path(grid_dir) / f"{app_id}{suffix}")
     tmp_path = target_path + ".tmp"
 
     try:
         # Ensure directory exists
         def _ensure_dir():
-            if not os.path.isdir(grid_dir):
-                os.makedirs(grid_dir, exist_ok=True)
+            if not Path(grid_dir).is_dir():
+                Path(grid_dir).mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(_ensure_dir)
 
         # Download and write
@@ -164,7 +165,7 @@ async def download_and_save(
                     return False
 
                 def _write_file(chunk_iter):
-                    with open(tmp_path, "wb") as f:
+                    with Path(tmp_path).open("wb") as f:
                         for chunk in chunk_iter:
                             f.write(chunk)
                         f.flush()
@@ -185,9 +186,9 @@ async def download_and_save(
     finally:
         # Cleanup tmp if left behind
         def _cleanup():
-            if os.path.exists(tmp_path):
+            if Path(tmp_path).exists():
                 try:
-                    os.remove(tmp_path)
+                    Path(tmp_path).unlink(missing_ok=True)
                 except OSError:
                     pass
         await asyncio.to_thread(_cleanup)

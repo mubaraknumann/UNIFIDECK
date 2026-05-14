@@ -19,6 +19,7 @@ import shutil
 from typing import TYPE_CHECKING
 from ....core.types import Result
 from .primitives import GOGFolderOps
+from pathlib import Path
 
 if TYPE_CHECKING:
     from .installer import GOGInstaller
@@ -39,7 +40,7 @@ class _UninstallPipeline:
         install_path: str | None = None,
     ) -> Result:
         """Uninstall game."""
-        if not install_path or not os.path.exists(install_path):
+        if not install_path or not Path(install_path).exists():
             logger.info(
                 "[GOGInstaller] %s already gone, nothing to do",
                 game_id,
@@ -63,7 +64,7 @@ class _UninstallPipeline:
                     attempt + 1,
                     e,
                 )
-            if not os.path.exists(install_path):
+            if not Path(install_path).exists():
                 logger.info(
                     "[GOGInstaller] uninstalled %s",
                     install_path,
@@ -84,7 +85,7 @@ class _UninstallPipeline:
                 )
         await self._parent._wipe_support_cache(game_id)
         await self._parent._wipe_manifests(game_id)
-        if os.path.exists(install_path):
+        if Path(install_path).exists():
             remaining = GOGFolderOps.count_files(install_path)
             if remaining > 0:
                 return Result(

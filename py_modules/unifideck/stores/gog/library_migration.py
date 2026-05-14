@@ -21,6 +21,7 @@ import json
 import logging
 import os
 from typing import TYPE_CHECKING, Any
+from pathlib import Path
 
 if TYPE_CHECKING:
     from .library import GOGLibrary
@@ -39,21 +40,20 @@ class _MarkerMigration:
         """Migrate old markers."""
         migrated = 0
         skipped = 0
-        download_dir = os.path.expanduser(
+        download_dir = str(Path(
             self._parent._config.download_dir,
-        )
-        if not os.path.isdir(download_dir):
+        ).expanduser())
+        if not Path(download_dir).is_dir():
             return {"migrated": 0, "skipped": 0}
         try:
-            for name in os.listdir(download_dir):
-                game_dir = os.path.join(download_dir, name)
-                if not os.path.isdir(game_dir):
+            for name in [e.name for e in Path(download_dir).iterdir()]:
+                game_dir = str(Path(download_dir) / name)
+                if not Path(game_dir).is_dir():
                     continue
-                marker_path = os.path.join(
+                marker_path = str(Path(
                     game_dir,
-                    _INSTALL_MARKER,
-                )
-                if not os.path.isfile(marker_path):
+                ) / _INSTALL_MARKER)
+                if not Path(marker_path).is_file():
                     continue
                 outcome = self._migrate_one_marker(
                     game_dir,
@@ -99,7 +99,7 @@ class _MarkerMigration:
     def _read_marker_content(marker_path: str) -> str | None:
         """Read marker content."""
         try:
-            with open(marker_path, encoding="utf-8") as f:
+            with Path(marker_path).open(encoding="utf-8") as f:
                 return f.read().strip()
         except OSError:
             return None
@@ -131,15 +131,15 @@ class _MarkerMigration:
         new_data: dict[str, Any] = {"game_id": old_id}
         for candidate in (
             game_dir,
-            os.path.join(game_dir, "game"),
+            str(Path(game_dir) / "game"),
         ):
-            if not os.path.isdir(candidate):
+            if not Path(candidate).is_dir():
                 continue
             info_file = self._find_first_goggame_info(candidate)
             if not info_file:
                 continue
             try:
-                with open(info_file, encoding="utf-8") as f:
+                with Path(info_file).open(encoding="utf-8") as f:
                     new_data = json.load(f)
                 new_data["game_id"] = old_id
             except (OSError, json.JSONDecodeError):
@@ -155,7 +155,7 @@ class _MarkerMigration:
     ) -> str:
         """Write new marker."""
         try:
-            with open(marker_path, "w", encoding="utf-8") as f:
+            with Path(marker_path).open("w", encoding="utf-8") as f:
                 json.dump(new_data, f, indent=2)
                 return "migrated"
         except OSError as e:
@@ -170,6 +170,6 @@ class _MarkerMigration:
     def _find_first_goggame_info(directory: str) -> str | None:
         """Find first goggame info."""
         candidates = sorted(
-            glob.glob(os.path.join(directory, "goggame-*.info")),
+            glob.glob(str(Path(directory) / "goggame-*.info")),
         )
         return candidates[0] if candidates else None

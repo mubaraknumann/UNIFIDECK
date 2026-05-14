@@ -25,6 +25,7 @@ from typing import Any
 from ....core.types import Game
 from ..config import UbisoftConfig
 from ..id_map import UbisoftIdMap
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,7 @@ class _VisibleManifestProcessor:
     def load_manifest(self) -> list[dict[str, Any]]:
         """Load manifest."""
         manifest_file = self._config.visible_games_file_expanded
-        if not os.path.isfile(manifest_file):
+        if not Path(manifest_file).is_file():
             return []
         payload = self._load_json_file_safe(manifest_file)
         if payload is None:

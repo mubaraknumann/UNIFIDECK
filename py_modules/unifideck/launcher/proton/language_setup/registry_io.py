@@ -5,6 +5,7 @@ import re
 import tempfile
 from .matchers import smart_match_locale
 from .resolver import _DEFAULT_LANGUAGE, LOCALE_MAP
+from pathlib import Path
 logger = logging.getLogger(__name__)
 def _resolve_prefix(prefix_path: str) -> str:
     """Resolve prefix."""
@@ -24,7 +25,7 @@ def _atomic_write_text(path: str, content: str) -> None:
         os.replace(tmp_path, path)
     except Exception:
         try:
-            os.unlink(tmp_path)
+            Path(tmp_path).unlink(missing_ok=True)
         except OSError:
             pass
         raise
@@ -35,14 +36,14 @@ def _update_user_reg(
 ) -> bool:
 
     """Update user reg."""
-    user_reg = os.path.join(prefix_path, "user.reg")
-    if not os.path.exists(user_reg):
+    user_reg = str(Path(prefix_path) / "user.reg")
+    if not Path(user_reg).exists():
         logger.warning(
             "[language_setup] user.reg missing at %s — prefix not "
             "initialised yet", user_reg,
         )
         return False
-    with open(user_reg, encoding="utf-8", errors="replace") as fh:
+    with Path(user_reg).open(encoding="utf-8", errors="replace") as fh:
         content = fh.read()
     section_header = "[Control Panel\\\\International]"
     new_values = {
