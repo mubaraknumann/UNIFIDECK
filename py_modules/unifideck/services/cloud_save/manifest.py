@@ -31,6 +31,7 @@ async def read_manifest(directory: str) -> dict[str, float]:
         return {}
 
     def _read_sync() -> dict[str, float]:
+        """Blocking JSON read of the per-game save manifest."""
         try:
             with open(manifest_path, encoding="utf-8") as f:
                 data = json.load(f)
@@ -59,6 +60,7 @@ async def write_manifest(directory: str, manifest: dict[str, float]) -> None:
     tmp_path = manifest_path + ".tmp"
 
     def _write_sync() -> None:
+        """Blocking atomic write (tmp + replace) of the manifest."""
         try:
             if not os.path.isdir(directory):
                 os.makedirs(directory, exist_ok=True)

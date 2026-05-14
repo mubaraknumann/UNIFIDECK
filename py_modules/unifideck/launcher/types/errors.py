@@ -1,3 +1,5 @@
+"""Launcher exception hierarchy — every error carries a stable ExitCode plus structured context for telemetry."""
+
 from __future__ import annotations
 from typing import Any
 from .exit_codes import ExitCode
@@ -14,11 +16,25 @@ class LauncherError(Exception):
         super().__init__(message)
         self.context: dict[str, Any] = dict(context or {})
     def with_context(self, **fields: Any) -> LauncherError:
-        """With context."""
+        """Merge extra fields into the error's context dict (fluent).
+
+        Args:
+            **fields: Key/value pairs to add to ``self.context``
+                (existing keys are overwritten).
+
+        Returns:
+            ``self`` so the call can be chained inline with the
+            raise statement.
+        """
         self.context.update(fields)
         return self
     def to_log_dict(self) -> dict[str, Any]:
-        """To log dict."""
+        """Project the error as a JSON-safe dict for structured logs.
+
+        Returns:
+            Dict ``{type, message, exit_code, context}`` ready for
+            structured logger extras.
+        """
         return {
             "type": type(self).__name__,
             "message": str(self),

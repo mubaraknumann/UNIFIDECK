@@ -33,7 +33,15 @@ def _first_non_empty(
     raw: dict[str, Any],
     keys: tuple[str, ...],
 ) -> str:
-    """First non empty."""
+    """Return the first non-empty, stripped value found under the given keys.
+
+    Args:
+        raw: Source dict.
+        keys: Keys to try in order.
+
+    Returns:
+        Stripped string, or empty string if no key has a value.
+    """
     for key in keys:
         val = raw.get(key)
         if val:
@@ -45,7 +53,14 @@ def _first_non_empty(
 
 @dataclass
 class _VisibleManifestIndex:
-    """Visible manifest index."""
+    """Dual-keyed index over visible-manifest entries (by id + normalized title).
+
+    Attributes:
+        by_norm: Map from normalized title → manifest entry.
+        by_id: Map from game-id → manifest entry.
+        norms: Set of all normalized titles (membership tests).
+        ids: Set of all game-ids (membership tests).
+    """
 
     by_norm: dict[str, dict[str, Any]] = field(default_factory=dict)
     by_id: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -57,16 +72,40 @@ class _VisibleManifestIndex:
         game_id: str,
         norm_title: str,
     ) -> dict[str, Any] | None:
-        """Lookup."""
+        """Look up a manifest entry by game_id first, normalized title as fallback.
+
+        Args:
+            game_id: Game identifier.
+            norm_title: Normalized title.
+
+        Returns:
+            Manifest entry, or ``None``.
+        """
         return self.by_id.get(game_id) or self.by_norm.get(norm_title)
 
     def matches(self, game_id: str, norm_title: str) -> bool:
-        """Matches."""
+        """Check whether a game-id or normalized title is in the index.
+
+        Args:
+            game_id: Game identifier.
+            norm_title: Normalized title.
+
+        Returns:
+            True iff either key is present.
+        """
         return game_id in self.ids or norm_title in self.norms
 
 
 class _VisibleManifestProcessor:
-    """Visible manifest processor."""
+    """Apply the visible-games manifest filter to a base game list.
+
+    The visible manifest is a Unifideck-curated JSON listing the
+    Ubisoft games the user actually owns/wants to see. Games
+    absent from the manifest are dropped; manifest entries
+    without a corresponding base game are *injected* (covers
+    games detected via manifest only). Manifest data is also
+    merged into the id_map for future ID resolution.
+    """
 
     def __init__(
         self,
@@ -74,13 +113,30 @@ class _VisibleManifestProcessor:
         id_map: UbisoftIdMap,
         load_json_file_safe: Callable[[str], Any | None],
     ) -> None:
-        """Initialize the instance."""
+        """Bind the manifest loader to its config + id_map + JSON loader.
+
+        Args:
+            config: Frozen ``UbisoftConfig``.
+            id_map: Space_id ↔ install_id mapping store.
+            load_json_file_safe: JSON file reader that swallows
+                OSError / JSONDecodeError and returns ``None`` on
+                failure (passed in to keep the loader pure and
+                easily testable).
+        """
         self._config = config
         self._id_map = id_map
         self._load_json_file_safe = load_json_file_safe
 
     def load_manifest(self) -> list[dict[str, Any]]:
-        """Load manifest."""
+        """Read + parse the visible-games manifest JSON.
+
+        Handles both shapes: ``{"games": [...]}`` and bare top-
+        level list. Entries without a title are skipped.
+
+        Returns:
+            Normalized manifest entry list (empty on missing /
+            malformed file).
+        """
         manifest_file = self._config.visible_games_file_expanded
         if not os.path.isfile(manifest_file):
             return []
@@ -109,7 +165,20 @@ class _VisibleManifestProcessor:
     def _normalize_entry(
         raw: dict[str, Any],
     ) -> dict[str, Any] | None:
-        """Normalize entry."""
+        """Build a normalized manifest entry from raw JSON fields.
+
+        Accepts several field-name aliases (e.g. ``title`` or
+        ``name``, ``space_id`` or ``spaceId``, …). Defaults
+        ``launch_id`` to ``install_id`` when missing, and
+        ``ownership_type`` to ``"owned"``.
+
+        Args:
+            raw: One entry from the parsed JSON.
+
+        Returns:
+            Normalized entry, or ``None`` if no title can be
+            resolved.
+        """
         title = _first_non_empty(raw, ("title", "name"))
         if not title:
             return None
@@ -137,7 +206,18 @@ class _VisibleManifestProcessor:
 
     @staticmethod
     def _game_id_for(entry: dict[str, Any]) -> str:
-        """Game ID for."""
+        """Compute a stable game-id for one manifest entry.
+
+        Preference order: ``space_id`` → ``ubi-<install_id>`` →
+        synthetic ``ubi-visible-<sha256-prefix>`` derived from the
+        title.
+
+        Args:
+            entry: Normalized manifest entry.
+
+        Returns:
+            Stable game-id.
+        """
         space_id = str(entry.get("space_id") or "").strip()
         if space_id:
             return space_id
@@ -150,7 +230,14 @@ class _VisibleManifestProcessor:
         return f"ubi-visible-{digest}"
 
     def _merge_into_id_map(self, entry: dict[str, Any]) -> bool:
-        """Merge into ID map."""
+        """Merge identifier fields from one manifest entry into the id_map.
+
+        Args:
+            entry: Normalized manifest entry.
+
+        Returns:
+            True iff the id_map actually changed.
+        """
         cache_key = self._game_id_for(entry)
         fields: dict[str, Any] = {
             "name": entry.get("title") or "",
@@ -170,7 +257,14 @@ class _VisibleManifestProcessor:
         self,
         manifest: list[dict[str, Any]],
     ) -> _VisibleManifestIndex:
-        """Build index."""
+        """Build a ``_VisibleManifestIndex`` from a parsed manifest.
+
+        Args:
+            manifest: List of normalized entries.
+
+        Returns:
+            Populated index.
+        """
         index = _VisibleManifestIndex()
         for entry in manifest:
             title = entry.get("title") or ""
@@ -191,7 +285,22 @@ class _VisibleManifestProcessor:
         manifest: list[dict[str, Any]] | None,
         source_label: str,
     ) -> list[Game]:
-        """Apply filter."""
+        """Filter and enrich the base game list using the manifest, then inject missing entries.
+
+        Pipeline: build the index → merge entries into the id_map →
+        filter games to those listed in the manifest (and enrich
+        them with manifest data) → inject manifest entries with
+        no corresponding base game.
+
+        Args:
+            games: Base list (from UPC catalog or detector).
+            installed: Install-state lookup keyed by space_id/game_id.
+            manifest: Parsed manifest (no-op if empty/None).
+            source_label: Free-form label for logs.
+
+        Returns:
+            Filtered + enriched + injected game list.
+        """
         if not manifest:
             return games
         index = self._build_index(manifest)
@@ -230,7 +339,14 @@ class _VisibleManifestProcessor:
         self,
         manifest: list[dict[str, Any]],
     ) -> bool:
-        """Merge manifest into ID map."""
+        """Merge every entry of the manifest into the id_map.
+
+        Args:
+            manifest: Parsed manifest.
+
+        Returns:
+            True iff any entry actually mutated the id_map.
+        """
         return any(self._merge_into_id_map(entry) for entry in manifest)
 
     def _enrich_game_from_entry(
@@ -238,7 +354,12 @@ class _VisibleManifestProcessor:
         game: Game,
         entry: dict[str, Any],
     ) -> None:
-        """Enrich game from entry."""
+        """Copy title / ownership / cover fields from a manifest entry onto a game.
+
+        Args:
+            game: Base ``Game`` record (mutated).
+            entry: Matching manifest entry.
+        """
         if entry.get("title"):
             game.title = entry["title"]
             if entry.get("ownership_type"):
@@ -258,7 +379,18 @@ class _VisibleManifestProcessor:
         index: _VisibleManifestIndex,
         source_label: str,
     ) -> tuple[list[Game], set[str], set[str]]:
-        """Filter and enrich games."""
+        """Walk the base game list, keeping + enriching only those matched in the index.
+
+        Args:
+            games: Base game list.
+            index: Visible-manifest index.
+            source_label: Free-form label for diagnostic logs.
+
+        Returns:
+            Tuple ``(filtered_games, seen_ids, seen_norms)`` —
+            the seen-sets are used to skip already-covered manifest
+            entries during injection.
+        """
         filtered: list[Game] = []
         seen_norms: set[str] = set()
         seen_ids: set[str] = set()
@@ -290,7 +422,24 @@ class _VisibleManifestProcessor:
         seen_norms: set[str],
         source_label: str,
     ) -> int:
-        """Inject unseen manifest entries."""
+        """Append manifest entries that have no matching base game.
+
+        Each injected game carries the manifest's title, cover_image
+        (as both ``icon_url`` and ``metadata.coverUrl``), and
+        ownership_type. ``installed=True`` only when the install
+        map has a matching entry.
+
+        Args:
+            manifest: Parsed manifest.
+            installed: Install-state lookup.
+            filtered: Output list (mutated).
+            seen_ids: Already-covered game-ids (mutated).
+            seen_norms: Already-covered normalized titles (mutated).
+            source_label: Free-form label for logs.
+
+        Returns:
+            Number of entries injected.
+        """
         injected = 0
         for entry in manifest:
             game_id = self._game_id_for(entry)

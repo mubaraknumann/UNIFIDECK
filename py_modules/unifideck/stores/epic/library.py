@@ -23,7 +23,15 @@ DEFAULT_INSTALLED_TTL = 30
 
 
 class EpicLibraryReader:
-    """Epic library reader."""
+    """Read the owned + installed Epic library via the legendary CLI.
+
+    Owned games come from ``legendary list --json`` (cold,
+    called once per sync). Installed games come from
+    ``legendary list-installed --json``; this is hot — called
+    during every library scan and at install/uninstall
+    completion — so results are cached for ``installed_ttl``
+    seconds (30 by default).
+    """
 
     def __init__(
         self,
@@ -31,7 +39,15 @@ class EpicLibraryReader:
         library_timeout: int = 30,
         installed_ttl: int = DEFAULT_INSTALLED_TTL,
     ) -> None:
-        """Initialize the instance."""
+        """Wire dependencies and initialise the installed-games cache.
+
+        Args:
+            cli_path: Path to the ``legendary`` binary.
+            library_timeout: Hard timeout for ``legendary list``
+                and similar listing calls.
+            installed_ttl: TTL (seconds) for the installed-games
+                cache shared across library reads.
+        """
         self._cli_path = cli_path
         self._library_timeout = library_timeout
         self._installed_ttl = installed_ttl
@@ -39,7 +55,16 @@ class EpicLibraryReader:
         self._installed_cache_at: float = 0.0
 
     async def read_owned_games(self) -> list[Game]:
-        """Read owned games."""
+        """Read the owned-games library, filtering UE assets / mods / mobile-only.
+
+        Uses ``should_filter_epic_item`` to drop UE Marketplace
+        assets / plugins / mods / mobile-only games. Cross-references
+        the installed map to fill ``installed`` and ``install_path``
+        on each game.
+
+        Returns:
+            List of owned ``Game`` records (filtered count is logged).
+        """
         if not self._cli_path:
             return []
         data = await self._run_legendary_json(['list', '--json'])
@@ -77,7 +102,14 @@ class EpicLibraryReader:
     async def read_installed_map(
         self, force_refresh: bool = False,
     ) -> dict[str, dict[str, Any]]:
-        """Read installed map."""
+        """Return the installed-games map, refreshed if older than the TTL.
+
+        Args:
+            force_refresh: Bypass the cache and reload from CLI.
+
+        Returns:
+            Dict ``app_name → entry dict``.
+        """
         now = time.time()
         if (
             not force_refresh
@@ -91,7 +123,11 @@ class EpicLibraryReader:
         return loaded
 
     async def _load_installed_from_cli(self) -> dict[str, dict[str, Any]]:
-        """Load installed from CLI."""
+        """Fetch the installed-games map from ``legendary list-installed --json``.
+
+        Returns:
+            Dict ``app_name → entry dict``, empty on any failure.
+        """
         if not self._cli_path:
             return {}
         data = await self._run_legendary_json(
@@ -109,12 +145,24 @@ class EpicLibraryReader:
         return out
 
     def invalidate_installed_cache(self) -> None:
-        """Invalidate installed cache."""
+        """Drop the cached installed-games map.
+
+        Called after install or uninstall so the next read sees
+        the updated state.
+        """
         self._installed_cache = None
         self._installed_cache_at = 0.0
 
     async def _run_legendary_json(self, args: list[str]) -> Any:
-        """Run LEGENDARY JSON."""
+        """Run a legendary subcommand and parse its JSON stdout.
+
+        Args:
+            args: argv tail (everything after the binary).
+
+        Returns:
+            Parsed JSON, or ``None`` on spawn / timeout / non-zero
+            exit / decode error.
+        """
         if not self._cli_path:
             return None
         try:
@@ -156,7 +204,18 @@ class EpicLibraryReader:
 def merge_install_status(
     owned: list[Game], installed: dict[str, dict[str, Any]],
 ) -> list[Game]:
-    """Merge install status."""
+    """Augment owned-game entries with install state from the installed map.
+
+    Sets ``installed=True`` and copies ``install_path`` onto
+    every owned game that also appears in the installed map.
+
+    Args:
+        owned: Owned-games list.
+        installed: Installed-games map.
+
+    Returns:
+        Augmented list (input unchanged when nothing installed).
+    """
     if not installed:
         return owned
     out: list[Game] = []

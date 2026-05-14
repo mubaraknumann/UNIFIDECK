@@ -1,3 +1,5 @@
+"""Native Linux launch flow — runs the game binary directly under the Steam runtime when no Proton prefix is required."""
+
 from __future__ import annotations
 import asyncio
 import logging
@@ -12,14 +14,27 @@ STEAM_RUNTIME_CANDIDATES = [
     "~/.local/share/Steam/ubuntu12_32/steam-runtime/run.sh",
 ]
 def _find_steam_runtime() -> Path | None:
-    """Find steam runtime."""
+    """Locate the Steam Runtime ``run.sh`` under the user's home.
+
+    Returns:
+        Path to ``run.sh``, or ``None`` if no known location
+        holds it.
+    """
     for candidate in STEAM_RUNTIME_CANDIDATES:
         path = Path(candidate).expanduser()
         if path.is_file():
             return path
     return None
 def _restore_steam_env(env: dict[str, str]) -> None:
-    """Restore steam env."""
+    """Copy STEAM_OVERLAY / STEAM_INPUT from ``~/.steam/steam.env``.
+
+    Steam strips these from its environment before invoking
+    non-Steam shortcuts; re-injecting them here lets Steam's
+    overlay and input remap work for our games.
+
+    Args:
+        env: Environment dict to update in-place.
+    """
     steam_env = Path("~/.steam/steam.env").expanduser()
     if not steam_env.is_file():
         return
@@ -38,7 +53,14 @@ def _restore_steam_env(env: dict[str, str]) -> None:
     except OSError:
         pass
 def _is_gog_dosbox_wrapper(ctx: LaunchContext) -> bool:
-    """Is GOG dosbox wrapper."""
+    """Return True iff this context points at a GOG DOSBox ``start.sh``.
+
+    Args:
+        ctx: Launch context.
+
+    Returns:
+        True if the store is GOG and the exe name is ``start.sh``.
+    """
     return (
         ctx.store == "gog"
         and ctx.exe_path.name == "start.sh"
@@ -49,7 +71,24 @@ async def native_launch(
     state: RuntimeState,
 ) -> Result:
 
-    """Native launch."""
+    """Spawn a Linux-native game binary (optionally under the Steam Runtime).
+
+    GOG ``start.sh`` games are routed through the in-tree
+    ``gog_linux_dosbox`` module so we get the bundled DOSBox.
+    Other native games go through ``run.sh`` if it can be
+    located, else direct exec.
+
+    Args:
+        ctx: Launch context.
+        state: Runtime state (wrappers + game args).
+
+    Returns:
+        A ``Result`` on game exit 0.
+
+    Raises:
+        DependencyMissingError: Game exe not found.
+        GameFailedError: Game exited non-zero.
+    """
     exe_path = ctx.exe_path
     if not exe_path.is_file():
         raise DependencyMissingError(
@@ -90,7 +129,18 @@ async def native_launch(
         )
     return Result(success=True, store=ctx.store)
 def _prepare_launch_env(ctx: LaunchContext) -> dict[str, str]:
-    """Prepare launch env."""
+    """Build the environment for the native game subprocess.
+
+    Starts from the current environment, applies user env
+    overrides from the launch context, then restores
+    STEAM_OVERLAY / STEAM_INPUT from steam.env.
+
+    Args:
+        ctx: Launch context.
+
+    Returns:
+        Environment dict ready for the subprocess.
+    """
     env = dict(os.environ)
     env.update(ctx.env_overrides)
     _restore_steam_env(env)
@@ -102,7 +152,19 @@ def _build_launch_argv(
     exe_path: Path,
 ) -> list[str]:
 
-    """Build launch argv."""
+    """Build the argv for the native game subprocess.
+
+    Composition: ``state.wrappers`` + (DOSBox-wrapper module |
+    Steam Runtime | direct exec) + ``state.game_args``.
+
+    Args:
+        ctx: Launch context.
+        state: Runtime state.
+        exe_path: Resolved exe path.
+
+    Returns:
+        argv list.
+    """
     argv: list[str] = list(state.wrappers)
     if _is_gog_dosbox_wrapper(ctx):
         logger.info(

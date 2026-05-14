@@ -28,7 +28,13 @@ logger = logging.getLogger(__name__)
 
 
 class _UpdateOperation:
-    """Update operation."""
+    """Apply pending updates for one installed Ubisoft game.
+
+    Re-runs UPC in update mode against the existing prefix via
+    the ``uplay://launch/<launch_id>/0`` URL — UPC detects the
+    outdated install and applies the patch. Long-running
+    (4-hour timeout) since large updates can take hours.
+    """
 
     def __init__(
         self,
@@ -38,14 +44,30 @@ class _UpdateOperation:
         session: UbisoftSession,
         build_launch_env: Callable[..., _UpcLaunchEnv],
     ) -> None:
-        """Initialize the instance."""
+        """Wire dependencies for the UPC update operation specialist.
+
+        Args:
+            id_map: Ubisoft ID map.
+            paths: Ubisoft prefix paths.
+            session: Ubisoft session state.
+            build_launch_env: Callable assembling the ``upc.exe``
+                launch environment (env + argv).
+        """
         self._id_map = id_map
         self._paths = paths
         self._session = session
         self._build_launch_env = build_launch_env
 
     async def update(self, game_id: str) -> InstallResult:
-        """Update."""
+        """Apply pending updates for one game.
+
+        Args:
+            game_id: UPC space_id.
+
+        Returns:
+            An ``InstallResult`` (failure modes: env-build errors,
+            ``launch_id_not_resolved``, or ``update_exception: <msg>``).
+        """
         try:
             prepared = self._prepare_launch(game_id)
         except UpcLaunchEnvBuildError as e:
@@ -79,7 +101,18 @@ class _UpdateOperation:
         self,
         game_id: str,
     ) -> _UpcLaunchEnv | InstallResult:
-        """Prepare launch."""
+        """Compute the prefix path, inject session, and build the launch env.
+
+        Args:
+            game_id: UPC space_id.
+
+        Returns:
+            A ``_UpcLaunchEnv`` ready to spawn, or an ``InstallResult``
+            error envelope if the launch ID can't be resolved.
+
+        Raises:
+            UpcLaunchEnvBuildError: UPC binary missing (forwarded).
+        """
         prefix_path = self._paths.get_prefix_path(game_id)
         self._session.inject_into_prefix(prefix_path)
         launch_id = self._id_map.resolve_launch_id(game_id)
@@ -101,7 +134,17 @@ class _UpdateOperation:
         game_id: str,
         launch_env: _UpcLaunchEnv,
     ) -> InstallResult:
-        """Run update process."""
+        """Spawn UPC with the update URL and wait for completion (4-hour timeout).
+
+        Args:
+            game_id: UPC space_id.
+            launch_env: Pre-built launch env.
+
+        Returns:
+            A ``InstallResult`` — always success-shape (UPC's update
+            progress isn't introspectable; the caller polls the
+            library afterwards to verify).
+        """
         launch_id = self._id_map.resolve_launch_id(game_id)
         launch_url = f"uplay://launch/{launch_id}/0"
         logger.info(

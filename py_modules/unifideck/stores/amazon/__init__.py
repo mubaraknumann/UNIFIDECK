@@ -1,3 +1,5 @@
+"""Amazon Games store backend — Nile-based authentication, library, and install pipeline."""
+
 # OP-49 | stores/amazon/__init__.py | Depends: OP-49a
 from .amazon_store import AmazonStore
 

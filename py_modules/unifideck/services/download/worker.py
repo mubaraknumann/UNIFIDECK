@@ -96,6 +96,7 @@ class _WorkerMixin:
 
             # Progress callback wrapper
             def progress_cb(progress_dict: dict[str, Any]) -> None:
+                """Forward gogdl/legendary progress dicts to the worker's progress reporter."""
                 self._update_progress(item, progress_dict)
 
             # Do the install

@@ -319,7 +319,19 @@ class PlaytimeService:
         )
 
     def _compute_streaks(self, game_db_id: int) -> tuple[int, int]:
-        """Compute consecutive play streaks from daily_stats."""
+        """Compute current and longest consecutive-day play streaks.
+
+        Reads distinct play dates from ``daily_stats`` descending,
+        then walks them: a current streak runs from today
+        backwards day-by-day; the longest streak is the maximum
+        run of consecutive dates anywhere in the history.
+
+        Args:
+            game_db_id: Internal game row ID in the playtime DB.
+
+        Returns:
+            Tuple ``(current_streak_days, longest_streak_days)``.
+        """
         if self._db is None:
             return (0, 0)
             

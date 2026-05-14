@@ -27,6 +27,7 @@ class RpcHandlerBase:
         sync_service: Any,
         services: Any,
     ) -> None:
+        """Initialize the handler with the shared plugin instance."""
         self._bus = bus
         self._registry = registry
         self._cache = cache

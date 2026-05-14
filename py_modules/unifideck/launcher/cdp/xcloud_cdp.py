@@ -1,3 +1,5 @@
+"""xCloud CDP injection — installs browser shims and navigation interceptors into Edge for cloud game streaming."""
+
 from __future__ import annotations
 import logging
 import shutil
@@ -12,7 +14,18 @@ from unifideck.cdp.xcloud_browser_shims import (
 from .steam_controller_popup import refresh_steam_controller_layout
 logger = logging.getLogger(__name__)
 def _build_launch_matches(launch_url: str) -> list[str]:
-    """Build launch matches."""
+    """Build CDP page-target URL match patterns for a launch URL.
+
+    Expands the user-provided launch URL into the URL itself,
+    its path, the trailing product ID, and the canonical xCloud
+    ``/play/launch/<product_id>`` form. Duplicates preserved order.
+
+    Args:
+        launch_url: xCloud launch URL.
+
+    Returns:
+        Deduplicated list of URL patterns to match against.
+    """
     if not launch_url:
         return []
     parsed = urlparse(launch_url)
@@ -30,7 +43,16 @@ def _build_launch_matches(launch_url: str) -> list[str]:
             deduped.append(match)
     return deduped
 def _merge_matches(*match_sets: list[str]) -> list[str]:
-    """Merge matches."""
+    """Merge several match-pattern lists with duplicate suppression.
+
+    Preserves insertion order.
+
+    Args:
+        *match_sets: Lists to merge.
+
+    Returns:
+        Single deduplicated list.
+    """
     merged: list[str] = []
     for match_set in match_sets:
         for match in match_set:
@@ -40,7 +62,13 @@ def _merge_matches(*match_sets: list[str]) -> list[str]:
 
 def _focus_xcloud_window() -> None:
 
-    """Focus xcloud window."""
+    """Use ``xdotool`` to find and refocus the xCloud window.
+
+    Required after the Steam controller-layout bounce so the
+    xCloud window doesn't lose focus to the popup. Tries
+    several xdotool search strategies. Silently returns if
+    xdotool is unavailable or no window is found within ~5s.
+    """
     if shutil.which("xdotool") is None:
         return
     search_commands = [
@@ -93,7 +121,28 @@ async def run_cdp_inject(
     steam_controller_delay: float = 10.0,
     steam_controller_dwell: float = 2.5,
 ) -> bool:
-    """Run CDP inject."""
+    """Inject the xCloud browser shims and navigation interceptor via CDP.
+
+    Runs the inject phases (initial broad shim + targeted
+    navigation if a launch URL was given) and, when an AppID is
+    provided, refreshes the Steam controller layout for that
+    non-Steam shortcut.
+
+    Args:
+        port: Edge browser CDP port.
+        launch_url: xCloud launch URL (may be empty).
+        timeout: Max seconds per inject phase.
+        initial_matches: Override broad-pass URL patterns
+            (default: ``["xbox.com"]``).
+        steam_port: CDP port of the Steam client.
+        steam_controller_appid: AppID for the Steam controller
+            bounce (0 disables).
+        steam_controller_delay: Pre-bounce delay (seconds).
+        steam_controller_dwell: Inter-phase dwell (seconds).
+
+    Returns:
+        True iff every required step succeeded.
+    """
     shims_js = get_xcloud_browser_shims_js()
     navigation_js = (
         get_xcloud_navigation_js(launch_url) if launch_url else ""
@@ -126,7 +175,25 @@ async def _run_inject_phases(
     initial_matches: list[str] | None,
 ) -> bool:
 
-    """Run inject phases."""
+    """Run the two-pass CDP script injection for xCloud.
+
+    Phase 1: broad shim injection (matches Xbox domains and
+    expanded launch-URL patterns). Phase 2 (only if a launch
+    URL was supplied): re-inject scripts targeted at the
+    post-redirect URL.
+
+    Args:
+        port: Edge browser CDP port.
+        timeout: Max seconds per phase.
+        shims_js: Browser-shims JS source.
+        navigation_js: Navigation-interceptor JS source
+            (empty if no launch URL).
+        launch_url: xCloud launch URL.
+        initial_matches: Broad-pass URL patterns override.
+
+    Returns:
+        True iff every required phase succeeded.
+    """
     final_matches = _build_launch_matches(launch_url)
     base_matches = initial_matches if initial_matches else ["xbox.com"]
     first_pass_matches = _merge_matches(base_matches, final_matches)

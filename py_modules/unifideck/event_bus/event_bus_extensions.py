@@ -71,16 +71,37 @@ class EventSchema:
 class TypedEventRegistry:
     """Holds per-event schemas and validates at emit time."""
 
-    def __init__(self) -> None:  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(self) -> None:
+        """Initialize an empty typed-event registry."""
         self._schemas: dict[str, EventSchema] = {}
 
-    def declare(self, event: Events | str, schema: EventSchema) -> None:  # noqa: D102 — documentation pending (Sprint D)
+    def declare(self, event: Events | str, schema: EventSchema) -> None:
+        """Declare the expected payload schema for one event.
+
+        Overwrites any previous schema for the same key. Schemas
+        are consulted by ``validate`` before dispatch when the
+        validation extension is enabled.
+
+        Args:
+            event: Event identifier (Events enum or string).
+            schema: Schema object exposing ``validate(kwargs)``.
+        """
         key = event.value if isinstance(event, Events) else str(event)
         self._schemas[key] = schema
 
-    def validate(  # noqa: D102 — documentation pending (Sprint D)
+    def validate(
         self, event: Events | str, kwargs: dict[str, Any],
     ) -> str | None:
+        """Validate a payload against the schema registered for an event.
+
+        Args:
+            event: Event identifier (Events enum or string).
+            kwargs: Payload dict to validate.
+
+        Returns:
+            ``None`` when valid (or no schema registered).
+            A human-readable error message otherwise.
+        """
         key = event.value if isinstance(event, Events) else str(event)
         schema = self._schemas.get(key)
         if schema is None:
@@ -103,14 +124,16 @@ class PredicateFilter:
         bus.on(Events.GAME_LAUNCHED, filter)
     """
 
-    def __init__(self, handler: Callable[..., Any], predicate: Predicate) -> None:  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(self, handler: Callable[..., Any], predicate: Predicate) -> None:
+        """Store the underlying predicate."""
         self._handler = handler
         self._predicate = predicate
         # Preserve the inner handler name for watchdog/metrics
         self.__name__ = getattr(handler, "__name__", "filtered_handler")
         self.__qualname__ = getattr(handler, "__qualname__", self.__name__)
 
-    async def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: D102 — documentation pending (Sprint D)
+    async def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """Apply the predicate to the event payload."""
         try:
             matches = self._predicate(*args, **kwargs)
         except Exception:
@@ -184,6 +207,7 @@ class DebugSnapshot:
 
     @staticmethod
     def _safe_call(fn: Callable | None) -> Any:
+        """Call a producer guarding against any exception."""
         if fn is None:
             return None
         try:
@@ -209,7 +233,8 @@ class DeadLetterQueue:
     not for recovery.
     """
 
-    def __init__(self, max_size: int = 256) -> None:  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(self, max_size: int = 256) -> None:
+        """Initialize the queue with the configured capacity."""
         self._max_size = int(max_size)
         self._entries: list[dict[str, Any]] = []
 
@@ -237,4 +262,5 @@ class DeadLetterQueue:
         self._entries.clear()
 
     def __len__(self) -> int:
+        """Return the current number of dead-letter entries."""
         return len(self._entries)

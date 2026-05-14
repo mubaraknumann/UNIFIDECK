@@ -29,7 +29,13 @@ logger = logging.getLogger(__name__)
 
 
 class _CredentialPropagator:
-    """Credential propagator."""
+    """Push UPC credentials and auth cache to every game prefix.
+
+    After sign-in, walks all game prefixes and replicates the
+    credentials + auth-cache artifacts from the best available
+    source. After sign-out, the caller invalidates the source
+    and this class becomes a no-op.
+    """
 
     def __init__(
         self,
@@ -38,13 +44,25 @@ class _CredentialPropagator:
         payload: _PayloadSync,
         reader: _CredentialReader,
     ) -> None:
-        """Initialize the instance."""
+        """Bind the propagator to its config + payload sync + reader collaborators.
+
+        Args:
+            config: Frozen ``UbisoftConfig``.
+            payload: Per-file payload synchroniser.
+            reader: Credential reader (source discovery).
+        """
         self._config = config
         self._payload = payload
         self._reader = reader
 
     def propagate_credentials_to_all(self) -> int:
-        """Propagate credentials to all."""
+        """Sync the DPAPI-encrypted credentials to every game prefix.
+
+        No-op if no credential source is available.
+
+        Returns:
+            Number of credential files copied across all prefixes.
+        """
         source = self._reader.find_best_credential_source()
         if not source:
             logger.info(
@@ -72,7 +90,13 @@ class _CredentialPropagator:
         return total
 
     def propagate_auth_artifacts_to_all(self) -> int:
-        """Propagate auth artifacts to all."""
+        """Sync UPC's auth-cache artifacts to every game prefix.
+
+        No-op if no credential source is available.
+
+        Returns:
+            Number of artifact entries copied across all prefixes.
+        """
         source = self._reader.find_best_credential_source()
         if not source:
             return 0
@@ -97,12 +121,27 @@ class _CredentialPropagator:
         return total
 
     def propagate_all_to_all(self) -> None:
-        """Propagate all to all."""
+        """Propagate both credentials and auth artifacts to every game prefix.
+
+        Convenience wrapper that calls
+        ``propagate_credentials_to_all`` then
+        ``propagate_auth_artifacts_to_all`` back-to-back.
+        """
         self.propagate_credentials_to_all()
         self.propagate_auth_artifacts_to_all()
 
     def inject_into_prefix(self, prefix_path: str) -> bool:
-        """Inject into prefix."""
+        """Sync credentials + auth artifacts into one specific prefix.
+
+        Used at launch time so a freshly bootstrapped per-game prefix
+        has the user's credentials before the game spawns UPC.
+
+        Args:
+            prefix_path: Target prefix.
+
+        Returns:
+            True iff at least one file was actually copied.
+        """
         source = self._reader.find_best_credential_source()
         if not source:
             logger.warning(
@@ -146,7 +185,16 @@ class _CredentialPropagator:
         self,
         prefix_paths: list[str],
     ) -> int:
-        """Ensure auth state in prefixes."""
+        """Inject credentials + auth artifacts into each prefix in a batch.
+
+        Per-prefix failures are logged and the batch continues.
+
+        Args:
+            prefix_paths: Target prefixes.
+
+        Returns:
+            Number of prefixes that received at least one synced file.
+        """
         ensured = 0
         for prefix_path in prefix_paths:
             if not Path(prefix_path).is_dir():
@@ -168,7 +216,16 @@ class _CredentialPropagator:
         return ensured
 
     def retroactive_sync(self) -> dict[str, Any]:
-        """Retroactive sync."""
+        """Full sync pass — credentials + artifacts to all known prefixes.
+
+        Used by the manual UI repair entry-point: after a logout/
+        login cycle, the user can ask Unifideck to fan out the auth
+        state again.
+
+        Returns:
+            Dict ``{success, credentials_synced, token_propagated}``
+            or ``{success: False, error: <msg>}`` on failure.
+        """
         try:
             cred_count = self.propagate_credentials_to_all()
             self.propagate_auth_artifacts_to_all()

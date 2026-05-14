@@ -19,7 +19,15 @@ class LaunchHandlers(RpcHandlerBase):
     """Circuit breaker, launch logs, save folders, and playtime."""
 
     def _launch_history(self) -> Any:
-        """Return the launch-history service, raising if unavailable."""
+        """Return the launch-history service, raising RpcError if unavailable.
+
+        Returns:
+            The launch-history service.
+
+        Raises:
+            RpcError: ``service_unavailable`` when the
+                launch_history service isn't wired.
+        """
         return self._require(
             getattr(self._services, "launch_history", None), "launch_history",
         )

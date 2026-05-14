@@ -37,7 +37,18 @@ _CAPTURE_SENTINEL = "credentials_captured"
 
 
 class UbisoftSession:
-    """Ubisoft session."""
+    """UPC session orchestration: read / propagate / capture credentials.
+
+    Three responsibilities:
+      * read state out of the auth prefix (``_CredentialReader``),
+      * push it into other prefixes (``_PayloadSync`` + ``_CredentialPropagator``),
+      * watch one prefix for new credentials and capture them
+        when they appear (``capture``).
+
+    The mtime sentinel file (``upc_session_file``) tracks the
+    last captured credential mtime so subsequent captures only
+    fire on real changes.
+    """
 
     def __init__(
         self,
@@ -45,7 +56,15 @@ class UbisoftSession:
         paths: UbisoftPrefixPaths,
         read_machine_guid: Callable[[str], str],
     ) -> None:
-        """Initialize the instance."""
+        """Build the credential reader, payload sync, and credential propagator.
+
+        Args:
+            config: Ubisoft store config.
+            paths: Ubisoft prefix paths.
+            read_machine_guid: Callable returning the
+                ``MachineGuid`` registry value for a given prefix
+                (used to scope encrypted credentials per prefix).
+        """
         self._config = config
         self._paths = paths
         self._read_machine_guid = read_machine_guid
@@ -61,52 +80,131 @@ class UbisoftSession:
         )
 
     def has_valid_credentials(self, prefix_path: str) -> bool:
-        """Check whether valid credentials."""
+        """Check whether the prefix has a usable ConnectSecureStorage vault.
+
+        Args:
+            prefix_path: Prefix to inspect.
+
+        Returns:
+            True iff any user home in the prefix has a CSS vault
+            that exceeds the 100-byte sanity threshold.
+        """
         return self._reader.has_valid_credentials(prefix_path)
 
     def get_credential_mtime(self, prefix_path: str) -> float:
-        """Get credential mtime."""
+        """Return the mtime of the prefix's CSS vault, if any.
+
+        Args:
+            prefix_path: Prefix to inspect.
+
+        Returns:
+            Unix mtime of the CSS file, or ``None`` if absent.
+        """
         return self._reader.get_credential_mtime(prefix_path)
 
     def find_best_credential_source(self) -> str | None:
-        """Find best credential source."""
+        """Locate the freshest CSS vault across every known prefix.
+
+        Used as the source for retroactive credential propagation.
+
+        Returns:
+            Path string to the chosen CSS file, or ``None`` if no
+            usable source exists.
+        """
         return self._reader.find_best_credential_source()
 
     def _is_valid_css(self, css_path: str, min_size: int) -> bool:
-        """Is valid CSS."""
+        """Validate one CSS file against the configured minimum size.
+
+        Args:
+            css_path: Path to the CSS file.
+            min_size: Minimum acceptable size (bytes).
+
+        Returns:
+            True iff the file exists and exceeds ``min_size``.
+        """
         return self._reader._is_valid_css(css_path, min_size)
 
     def propagate_credentials_to_all(self) -> int:
-        """Propagate credentials to all."""
+        """Sync the DPAPI-encrypted credentials to every game prefix.
+
+        Returns:
+            Number of prefixes that actually received a fresh CSS.
+        """
         return self._propagator.propagate_credentials_to_all()
 
     def propagate_auth_artifacts_to_all(self) -> int:
-        """Propagate auth artifacts to all."""
+        """Sync ancillary auth artifacts (cookies, tokens) to every game prefix.
+
+        Returns:
+            Number of prefixes updated.
+        """
         return self._propagator.propagate_auth_artifacts_to_all()
 
     def propagate_all_to_all(self) -> None:
-        """Propagate all to all."""
+        """Sync both credentials and auth artifacts to every game prefix.
+
+        Equivalent to calling ``propagate_credentials_to_all`` then
+        ``propagate_auth_artifacts_to_all``.
+        """
         self._propagator.propagate_all_to_all()
 
     def inject_into_prefix(self, prefix_path: str) -> bool:
-        """Inject into prefix."""
+        """Inject credentials + auth artifacts into one specific prefix.
+
+        Used at launch time so a freshly bootstrapped per-game
+        prefix has current credentials before UPC starts.
+
+        Args:
+            prefix_path: Target prefix.
+
+        Returns:
+            True iff at least one file was actually copied.
+        """
         return self._propagator.inject_into_prefix(prefix_path)
 
     def ensure_auth_state_in_prefixes(
         self,
         prefix_paths: list[str],
     ) -> int:
-        """Ensure auth state in prefixes."""
+        """Make sure every known prefix has a usable auth state.
+
+        Walks prefixes that lack credentials and pulls them from
+        the best available source. Combines source discovery and
+        propagation in one call.
+
+        Returns:
+            Number of prefixes that received credentials.
+        """
         return self._propagator.ensure_auth_state_in_prefixes(
             prefix_paths,
         )
 
     def retroactive_sync(self) -> dict[str, Any]:
-        """Retroactive sync."""
+        """Retroactively propagate fresh credentials to every prefix.
+
+        Called from the auth flow after a successful sign-in.
+
+        Returns:
+            Dict ``{updated, sources, …}`` summarising what was
+            propagated.
+        """
         return self._propagator.retroactive_sync()
 
     def capture(self, prefix_path: str) -> str | None:
-        """Capture."""
+        """Detect new credentials in one prefix and replicate to template + auth.
+
+        Compares the credential mtime against the persisted sentinel;
+        if newer, copies credentials and auth artifacts into the
+        template and auth prefixes, then advances the sentinel.
+
+        Args:
+            prefix_path: Prefix to inspect.
+
+        Returns:
+            The capture sentinel string on success, ``None`` if no
+            valid credentials or no change since last capture.
+        """
         if not self._reader.has_valid_credentials(prefix_path):
             return None
         new_mtime = self._reader.get_credential_mtime(prefix_path)
@@ -152,7 +250,15 @@ class UbisoftSession:
         return None
 
     def _read_stored_mtime(self) -> float:
-        """Read stored mtime."""
+        """Read the persisted credential mtime sentinel from the session file.
+
+        The file format is a single line ``credential_mtime:<float>``.
+        Returns 0.0 on any read or parse error so the next capture
+        is treated as fresh.
+
+        Returns:
+            The mtime as a float (Unix epoch), or 0.0.
+        """
         session_file = self._config.upc_session_file_expanded
         if not Path(session_file).is_file():
             return 0.0
@@ -174,7 +280,15 @@ class UbisoftSession:
             return 0.0
 
     def _write_stored_mtime(self, mtime: float) -> None:
-        """Write stored mtime."""
+        """Persist the credential mtime sentinel for change detection.
+
+        Creates the data dir if missing. Failures are logged but
+        not raised — losing the sentinel only causes the next
+        capture to over-fire once.
+
+        Args:
+            mtime: Unix mtime to record.
+        """
         session_file = self._config.upc_session_file_expanded
         try:
             Path(self._config.data_dir_expanded).mkdir(
@@ -192,7 +306,10 @@ class UbisoftSession:
             )
 
     def clear_session_file(self) -> None:
-        """Clear session file."""
+        """Remove the persisted session-mtime marker (best-effort).
+
+        Called on logout to invalidate the next capture cycle.
+        """
         session_file = self._config.upc_session_file_expanded
         if not Path(session_file).is_file():
             return

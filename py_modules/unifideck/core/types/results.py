@@ -161,13 +161,14 @@ class StoreError(Exception):
     any store failure without catching unrelated programmer errors.
     """
 
-    def __init__(  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(
         self,
         message: str,
         *,
         store: str | None = None,
         code: str | None = None,
     ) -> None:
+        """Build a StoreError with a code and human-readable message."""
         super().__init__(message)
         self.store = store
         self.code = code

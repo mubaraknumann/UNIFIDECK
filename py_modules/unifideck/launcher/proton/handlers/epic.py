@@ -1,3 +1,5 @@
+"""Epic-store Proton launch handler — wires the Epic Games Launcher wrapper through UMU."""
+
 from __future__ import annotations
 import json
 import logging
@@ -11,7 +13,16 @@ logger = logging.getLogger(__name__)
 
 def _lazy_cleanup_ubisoft_artifacts(plan: ProtonLaunchPlan) -> None:
 
-    """Lazy cleanup UBISOFT artifacts."""
+    """Best-effort removal of stale Ubisoft Connect cache before an Epic launch.
+
+    Ubisoft Connect leaves auth/cache files in the prefix that
+    can confuse Epic titles that ship Uplay components but
+    don't actually need them. Looks under the launch prefix
+    and the active wineprefix env var.
+
+    Args:
+        plan: Launch plan.
+    """
     drive_cs = [plan.prefix_path / "drive_c"]
     active = os.environ.get("ACTIVE_WINEPREFIX")
     if active:
@@ -71,7 +82,20 @@ def _lazy_cleanup_ubisoft_artifacts(plan: ProtonLaunchPlan) -> None:
 
 def _strip_registry_section(content: str, section_key: str) -> str:
 
-    """Strip registry section."""
+    """Delete every Wine-registry section whose header matches ``section_key``.
+
+    Used to clean Ubisoft Connect leftovers (auth keys, cached
+    tokens) before an Epic launch. Walks line-by-line: lines
+    between a matching header and the next non-matching section
+    header are dropped.
+
+    Args:
+        content: Full system.reg / user.reg text.
+        section_key: Substring matched inside ``[…]`` section headers.
+
+    Returns:
+        Registry text with matching sections removed.
+    """
     lines = content.splitlines(keepends=True)
     out: list[str] = []
     skipping = False
@@ -96,7 +120,20 @@ def _strip_registry_section(content: str, section_key: str) -> str:
         out.append(line)
     return "".join(out)
 def _resolve_exe_override(plan: ProtonLaunchPlan) -> Path | None:
-    """Resolve exe override."""
+    """Resolve the optional per-game exe override against installed.json.
+
+    Looks up the relative exe override from ``game_fixes``, then
+    joins it onto the game's ``install_path`` from Legendary's
+    installed.json.
+
+    Args:
+        plan: Launch plan.
+
+    Returns:
+        Absolute Path to the override exe, or ``None`` if no
+        override is configured, installed.json is missing, or
+        the resolved file doesn't exist.
+    """
     from ..fixes.game_fixes import get_exe_override
     rel = get_exe_override(plan.context.game_id)
     if not rel:
@@ -120,7 +157,11 @@ def _resolve_exe_override(plan: ProtonLaunchPlan) -> Path | None:
     return full if full.is_file() else None
 
 async def _run_epic_prerequisites(plan: ProtonLaunchPlan) -> None:
-    """Run epic prerequisites."""
+    """Invoke the Epic prerequisites step, swallowing crashes.
+
+    Args:
+        plan: Launch plan.
+    """
     from ..fixes.epic_prerequisites import apply_epic_prerequisites
     try:
         await apply_epic_prerequisites(plan)
@@ -133,7 +174,22 @@ async def _run_epic_prerequisites(plan: ProtonLaunchPlan) -> None:
 
 async def epic_launch(plan: ProtonLaunchPlan) -> int:
 
-    """Epic launch."""
+    """Launch an Epic Games title through Legendary + UMU.
+
+    Cleans up Ubisoft artefacts → runs prerequisites → builds
+    the Legendary argv (with optional exe override) → spawns
+    the game through UMU with retry on recoverable codes.
+
+    Args:
+        plan: Launch plan.
+
+    Returns:
+        Game exit code on success.
+
+    Raises:
+        UmuRuntimeError: UMU returned an unrecoverable code (2 or 74).
+        GameFailedError: Game exited non-zero (other codes).
+    """
     logger.info(
     "[launcher.proton.epic] launching %s", plan.context.game_key,
    )

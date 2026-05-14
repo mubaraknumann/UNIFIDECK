@@ -29,7 +29,20 @@ class CloudFailureRPCMixin:
     async def set_cloud_failure_behavior(
         self, store: str, value: str,
     ) -> Any:
-        """Persist a per-store cloud failure behavior override."""
+        """Persist a per-store cloud-sync failure behavior override.
+
+        Writes ``cloud.failure_behavior.<store>`` to the config.
+
+        Args:
+            store: Store identifier; must be in the supported set.
+            value: Behavior name; must be in the valid modes set.
+
+        Returns:
+            ``{store, value}`` echo of the persisted setting.
+
+        Raises:
+            RpcError: ``unsupported_store`` or ``invalid_behavior``.
+        """
         if store not in _CLOUD_FAILURE_STORES:
             raise RpcError(
                 "unsupported_store",

@@ -1,3 +1,5 @@
+"""Playtime activity database — SQLite-backed schema with migrations, session/game/daily aggregates."""
+
 import json
 import logging
 import os
@@ -11,6 +13,7 @@ logger = logging.getLogger(__name__)
 # --- Models ---
 @dataclass
 class PlaySessionResult:
+    """Result row for a single play session."""
     id: int
     game_id: int
     started_at: str
@@ -24,6 +27,7 @@ class PlaySessionResult:
 
 @dataclass
 class GameStatsResult:
+    """Aggregated stats for one game (totals, streaks, averages)."""
     game_id: int
     title: str
     store: str
@@ -40,6 +44,7 @@ class GameStatsResult:
 
 @dataclass
 class DailyTotal:
+    """Per-day totals across all games."""
     date: str
     total_secs: int
     session_count: int
@@ -47,6 +52,7 @@ class DailyTotal:
 
 # --- Migrations ---
 def run_migrations(conn: sqlite3.Connection) -> int:
+    """Apply pending SQLite migrations; returns the resulting user_version."""
     cursor = conn.cursor()
     cursor.execute("PRAGMA user_version")
     current_version = cursor.fetchone()[0]
@@ -123,11 +129,14 @@ def run_migrations(conn: sqlite3.Connection) -> int:
 
 # --- Database ---
 class ActivityDatabase:
+    """SQLite-backed connection wrapper for the playtime schema."""
     def __init__(self, db_path: str):
+        """Store the database path; defer connection to open()."""
         self.db_path = db_path
         self.conn: Optional[sqlite3.Connection] = None
 
     def open(self) -> int:
+        """Open the SQLite connection, configure pragmas, and run pending migrations."""
         parent = os.path.dirname(self.db_path)
         if parent:
             os.makedirs(parent, exist_ok=True)
@@ -139,20 +148,39 @@ class ActivityDatabase:
         return run_migrations(self.conn)
 
     def close(self):
+        """Close the SQLite connection if it's open (idempotent).
+
+        After this call the wrapper can be reopened via ``open()``.
+        """
         if self.conn:
             self.conn.close()
             self.conn = None
 
     def execute(self, sql: str, params: Tuple = ()) -> sqlite3.Cursor:
+        """Execute a write statement (INSERT/UPDATE/DELETE) and return the cursor.
+
+        The transaction is not committed here — callers commit
+        explicitly to allow grouping multiple writes.
+
+        Args:
+            sql: SQL statement with ``?`` placeholders.
+            params: Tuple of values bound to the placeholders.
+
+        Returns:
+            The ``sqlite3.Cursor`` of the executed statement.
+        """
         return self.conn.execute(sql, params)
 
     def query(self, sql: str, params: Tuple = ()) -> List[sqlite3.Row]:
+        """Run a SELECT and return all matching rows."""
         return self.conn.execute(sql, params).fetchall()
 
     def query_one(self, sql: str, params: Tuple = ()) -> Optional[sqlite3.Row]:
+        """Run a SELECT and return the first row or None."""
         return self.conn.execute(sql, params).fetchone()
 
     def get_or_create_game(self, store: str, store_game_id: str, title: str, steam_app_id: int) -> int:
+        """Look up or insert a game row keyed by (store, store_game_id); returns the game id."""
         row = self.query_one("SELECT id FROM games WHERE store = ? AND store_game_id = ?", (store, store_game_id))
         if row:
             self.execute("UPDATE games SET steam_app_id = ? WHERE id = ?", (steam_app_id, row["id"]))

@@ -52,19 +52,38 @@ _COMPAT_TOOLS_DIR = "~/.local/share/Steam/compatibilitytools.d"
 
 
 class UbisoftBinaryResolver:
-    """Ubisoft binary resolver."""
+    """Locate Ubisoft Connect / Proton / Python binaries and build subprocess envs.
+
+    Used by every flow that has to spawn a Wine-side process —
+    auth, install, launch, registry injection. Returns paths
+    as ``str`` since callers pass them to ``proton run``
+    directly.
+    """
 
     def __init__(
         self,
         config: UbisoftConfig,
         plugin_dir: str | None,
     ) -> None:
-        """Initialize the instance."""
+        """Bind the binary resolver to its config snapshot + plugin dir.
+
+        Args:
+            config: Frozen ``UbisoftConfig``.
+            plugin_dir: Plugin root directory (None when running
+                outside the Decky host).
+        """
         self._config = config
         self._plugin_dir = plugin_dir
 
     def find_umu_run(self) -> str | None:
-        """Find UMU run."""
+        """Locate the ``umu-run`` wrapper script.
+
+        Search order: bundled under ``<plugin_dir>/bin/umu/umu/`` →
+        ``~/.local/share/unifideck/bin/umu/umu/`` → ``/usr/bin``.
+
+        Returns:
+            Absolute path string, or ``None`` if no umu-run found.
+        """
         candidates: list[str] = []
         if self._plugin_dir:
             candidates.append(
@@ -89,7 +108,16 @@ class UbisoftBinaryResolver:
         return None
 
     def find_proton_path(self) -> str | None:
-        """Find PROTON path."""
+        """Locate a usable Proton install directory.
+
+        Tries the official Proton names (Experimental, 10.0,
+        9.0 Beta) first; falls back to UMU-Proton or GE-Proton
+        under ``compatibilitytools.d``.
+
+        Returns:
+            Absolute path to the Proton tool dir (not the script),
+            or ``None`` if nothing was found.
+        """
         official = self._find_official_proton()
         if official is not None:
             return official
@@ -104,7 +132,11 @@ class UbisoftBinaryResolver:
 
     @staticmethod
     def _find_official_proton() -> str | None:
-        """Find official PROTON."""
+        """Scan the standard Steam common dirs for the official Proton tools.
+
+        Returns:
+            Absolute path to the first match, or ``None``.
+        """
         for steam_common_raw in _STEAM_COMMON_CANDIDATES:
             steam_common = Path(steam_common_raw).expanduser()
             for name in _PROTON_OFFICIAL_NAMES:
@@ -119,7 +151,15 @@ class UbisoftBinaryResolver:
 
     @staticmethod
     def _find_custom_proton() -> str | None:
-        """Find custom PROTON."""
+        """Scan ``compatibilitytools.d`` for UMU-Proton then GE-Proton entries.
+
+        UMU-Proton is preferred when present (it's what umu-run
+        is designed for). GE-Proton entries are sorted in reverse
+        lexicographic order so the newest is picked.
+
+        Returns:
+            Absolute path to the chosen tool dir, or ``None``.
+        """
         compat_dir = Path(_COMPAT_TOOLS_DIR).expanduser()
         if not compat_dir.is_dir():
             return None
@@ -154,7 +194,12 @@ class UbisoftBinaryResolver:
 
     @staticmethod
     def find_python() -> str:
-        """Find python."""
+        """Locate a Python interpreter (used as the umu-run host).
+
+        Returns:
+            Absolute path to ``python3``/``python``, or the literal
+            ``"python3"`` if no candidate resolved via PATH.
+        """
         for name in ("python3", "python"):
             path = shutil.which(name)
             if path:
@@ -163,7 +208,16 @@ class UbisoftBinaryResolver:
 
     @staticmethod
     def proton_family(version_str: str) -> str:
-        """Proton family."""
+        """Classify a Proton version string into a coarse family.
+
+        Args:
+            version_str: Version display string (e.g. ``"GE-Proton9-22"``).
+
+        Returns:
+            One of ``umu-proton``, ``ge-proton``, ``experimental``,
+            or ``other``. Pure-digit version strings classify as
+            ``experimental``.
+        """
         v = (version_str or "").lower()
         if "umu-proton" in v:
             return "umu-proton"
@@ -185,7 +239,25 @@ class UbisoftBinaryResolver:
         store_game_id: str | None = None,
         steam_window_env: dict[str, str] | None = None,
     ) -> dict[str, str]:
-        """Build UMU env."""
+        """Build the environment dict for spawning UPC via umu-run.
+
+        Always sets HOME, USER, PATH, LANG, XDG_RUNTIME_DIR,
+        XDG_DATA_HOME, WINEPREFIX, GAMEID, STORE=ubisoft, and
+        PROTON_VERB. PROTONPATH is filled in if Proton can be
+        located. Display vars (DISPLAY, WAYLAND_DISPLAY, …) are
+        merged in via ``detect_display_env``.
+
+        Args:
+            wineprefix: Absolute prefix path.
+            gameid: UMU game ID.
+            proton_path: Override the resolved Proton path.
+            store_game_id: Unused (kept for signature stability).
+            steam_window_env: Extra env merged in (typically
+                Steam window vars for overlay/input compatibility).
+
+        Returns:
+            Environment dict ready for ``subprocess`` / ``asyncio``.
+        """
         home = os.environ.get(
             "HOME",
             str(Path("~").expanduser()),
@@ -222,7 +294,16 @@ class UbisoftBinaryResolver:
         return env
 
     def detect_display_env(self) -> dict[str, str]:
-        """Detect display env."""
+        """Detect or synthesize the X11/Wayland display environment.
+
+        Tries our own env first → falls back to scraping live
+        ``steam`` / ``gamescope-session`` processes → finally
+        applies Steam Deck defaults (``DISPLAY=:0``, ``XAUTHORITY=~/.Xauthority``).
+
+        Returns:
+            Dict containing whichever of DISPLAY / WAYLAND_DISPLAY /
+            DBUS_SESSION_BUS_ADDRESS / XAUTHORITY could be resolved.
+        """
         result = self._collect_display_env_from_self()
         if result.get("DISPLAY") or result.get("WAYLAND_DISPLAY"):
             return result
@@ -233,7 +314,11 @@ class UbisoftBinaryResolver:
 
     @staticmethod
     def _collect_display_env_from_self() -> dict[str, str]:
-        """Collect display env from self."""
+        """Snapshot the display env vars from our own process.
+
+        Returns:
+            Dict containing whichever ``_DISPLAY_ENV_VARS`` are set.
+        """
         result: dict[str, str] = {}
         for var in _DISPLAY_ENV_VARS:
             val = os.environ.get(var)
@@ -245,7 +330,15 @@ class UbisoftBinaryResolver:
         self,
         result: dict[str, str],
     ) -> bool:
-        """Fill display env from steam."""
+        """Scrape ``steam`` / ``gamescope-session`` processes for display env vars.
+
+        Args:
+            result: Output dict (mutated in place; existing keys
+                are not overwritten).
+
+        Returns:
+            True iff DISPLAY or WAYLAND_DISPLAY could be filled in.
+        """
         try:
             for proc_name in ("steam", "gamescope-session"):
                 for pid in self._pgrep(proc_name):
@@ -269,7 +362,15 @@ class UbisoftBinaryResolver:
         pid: str,
         result: dict[str, str],
     ) -> bool:
-        """Scan pid for display."""
+        """Read ``/proc/<pid>/environ`` and merge display vars into the result dict.
+
+        Args:
+            pid: PID to scan.
+            result: Output dict (mutated; existing keys preserved).
+
+        Returns:
+            True iff DISPLAY or WAYLAND_DISPLAY ended up populated.
+        """
         env_from_proc = self._read_proc_environ(
             pid,
             _DISPLAY_ENV_VARS,
@@ -286,7 +387,11 @@ class UbisoftBinaryResolver:
     def _apply_steam_deck_defaults(
         result: dict[str, str],
     ) -> None:
-        """Apply steam DECK defaults."""
+        """Apply the Steam Deck fallback display env (``DISPLAY=:0`` + Xauthority).
+
+        Args:
+            result: Output dict (mutated; existing keys preserved).
+        """
         if not result.get("DISPLAY"):
             result["DISPLAY"] = ":0"
             logger.info(
@@ -298,7 +403,14 @@ class UbisoftBinaryResolver:
 
     @staticmethod
     def _pgrep(process_name: str) -> list[str]:
-        """Pgrep."""
+        """Run ``pgrep -u <uid> -x <name>`` and return matching PIDs.
+
+        Args:
+            process_name: Exact process name.
+
+        Returns:
+            List of PID strings (empty on subprocess failure).
+        """
         try:
             result = subprocess.run(
                 [
@@ -324,7 +436,16 @@ class UbisoftBinaryResolver:
         pid: str,
         targets: tuple[str, ...],
     ) -> dict[str, str]:
-        """Read proc environ."""
+        """Read environment variables from ``/proc/<pid>/environ`` (filtered).
+
+        Args:
+            pid: PID to read.
+            targets: Tuple of env var names to keep.
+
+        Returns:
+            Dict of matching env vars (empty on permission /
+            not-found errors).
+        """
         try:
             env_path = Path(f"/proc/{pid}/environ")
             env_bytes = env_path.read_bytes()

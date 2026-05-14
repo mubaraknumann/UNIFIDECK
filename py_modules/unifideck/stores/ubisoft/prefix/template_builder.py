@@ -39,7 +39,12 @@ logger = logging.getLogger(__name__)
 
 
 class _TemplatePrefixBuilder:
-    """Template prefix builder."""
+    """Build and maintain the ``.template`` prefix used as the per-game baseline.
+
+    Owns the bootstrap-marker check, the Proton-version staleness
+    check, the machine-GUID reader (for DPAPI integrity), and
+    the background-task plumbing for template (re-)creation.
+    """
 
     def __init__(
         self,
@@ -49,7 +54,14 @@ class _TemplatePrefixBuilder:
         helpers: _PrefixHelpers,
         installer_cache: UbisoftInstallerCache,
     ) -> None:
-        """Initialize the instance."""
+        """Wire dependencies for the template-prefix builder.
+
+        Args:
+            config: Ubisoft store config.
+            paths: Ubisoft prefix paths.
+            helpers: Shared prefix helpers.
+            installer_cache: Cached UPC installer artefacts.
+        """
         self._config = config
         self._paths = paths
         self._helpers = helpers
@@ -57,14 +69,27 @@ class _TemplatePrefixBuilder:
         self._template_task: asyncio.Task[None] | None = None
 
     def template_exists(self) -> bool:
-        """Template exists."""
+        """Return True iff the template prefix has the bootstrap marker.
+
+        Returns:
+            True iff a Unifideck-tagged template prefix is present.
+        """
         marker = (
             Path(self._config.template_dir_expanded) / self._config.bootstrap_marker
         )
         return marker.is_file()
 
     def is_prefix_version_stale(self, prefix_dir: str) -> bool:
-        """Check whether prefix version stale."""
+        """Return True if the prefix's Proton ``version`` file points outside the experimental family.
+
+        Args:
+            prefix_dir: Wine prefix directory.
+
+        Returns:
+            True iff the recorded version exists and isn't from the
+            ``experimental`` Proton family (i.e. needs rebuild).
+            False when no version file is present (legacy/clean).
+        """
         version_file = Path(prefix_dir) / "version"
         if not version_file.is_file():
             return False
@@ -92,7 +117,19 @@ class _TemplatePrefixBuilder:
 
     @staticmethod
     def read_machine_guid(prefix_path: str) -> str:
-        """Read machine guid."""
+        """Extract the Wine ``MachineGuid`` value out of system.reg.
+
+        Used by the DPAPI guard to refuse credential sync between
+        prefixes with different machine GUIDs (would corrupt the
+        credential vault).
+
+        Args:
+            prefix_path: Wine prefix directory.
+
+        Returns:
+            The MachineGuid string, or ``""`` if the registry file
+            is missing or the key isn't present.
+        """
         prefix_p = Path(prefix_path)
         for reg_path in (
             prefix_p / "pfx" / "system.reg",
@@ -116,7 +153,11 @@ class _TemplatePrefixBuilder:
         return ""
 
     def queue_template_creation(self) -> None:
-        """Queue template creation."""
+        """Schedule a background task to create the template prefix.
+
+        Coalesces concurrent calls — a second call while a task
+        is running is a no-op.
+        """
         if self._template_task is not None and not self._template_task.done():
             logger.info(
                 "[UbisoftPrefixManager] template creation already in progress",
@@ -130,7 +171,11 @@ class _TemplatePrefixBuilder:
         )
 
     async def regenerate_template_if_stale(self) -> None:
-        """Regenerate template if stale."""
+        """Wipe the template if its recorded Proton family isn't ``experimental``.
+
+        The caller is expected to ``ensure_template_prefix`` afterwards
+        to rebuild. No-op if no template exists or the version is fine.
+        """
         if not self.template_exists():
             return
         template_dir = self._config.template_dir_expanded
@@ -142,7 +187,12 @@ class _TemplatePrefixBuilder:
         shutil.rmtree(template_dir, ignore_errors=True)
 
     async def ensure_template_prefix(self) -> None:
-        """Ensure template prefix."""
+        """Create the template prefix by running the UPC installer in a fresh prefix.
+
+        Idempotent: returns immediately if the template marker is
+        already present. On success writes the marker and injects
+        auth state. Exceptions are logged and swallowed.
+        """
         if self.template_exists():
             logger.info(
                 "[UbisoftPrefixManager] template already exists",

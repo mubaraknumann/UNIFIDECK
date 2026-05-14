@@ -45,6 +45,7 @@ def rpc_wrapper(func: F) -> F:
 
     @functools.wraps(func)
     async def wrapper(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Wrap the RPC target with JSON-safe error and result encoding."""
         try:
             result = await func(*args, **kwargs)
             return _to_envelope(_serialize(result))

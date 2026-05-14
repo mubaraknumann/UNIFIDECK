@@ -48,10 +48,25 @@ class LaunchContext:
         return not self.is_xcloud and not self.is_windows_game
     @property
     def game_key(self) -> str:
-        """Game key."""
+        """Compose the canonical ``store:game_id`` identifier.
+
+        Used as the cache key for circuit-breaker, launch history,
+        and toast namespacing.
+
+        Returns:
+            The composed key string.
+        """
         return f"{self.store}:{self.game_id}"
     def to_log_dict(self) -> dict[str, Any]:
-        """To log dict."""
+        """Project the launch context as a JSON-safe dict for structured logs.
+
+        Paths are stringified; only fields useful for post-mortem
+        log analysis are included.
+
+        Returns:
+            Dict suitable for ``json.dumps`` or structured logger
+            extras.
+        """
         return {
             "store": self.store,
             "game_id": self.game_id,
@@ -82,7 +97,16 @@ class RuntimeState:
     game_exit_code: int | None = None
     terminated_by_signal: bool = False
     def to_log_dict(self) -> dict[str, Any]:
-        """To log dict."""
+        """Project the runtime state as a JSON-safe dict for structured logs.
+
+        Paths are stringified, collections are reported by length
+        rather than content. Only fields useful for post-mortem
+        log analysis are included.
+
+        Returns:
+            Dict suitable for ``json.dumps`` or structured logger
+            extras.
+        """
         return {
             "proton_path": str(self.proton_path) if self.proton_path else None,
             "proton_tool_id": self.proton_tool_id,

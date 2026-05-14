@@ -1,3 +1,5 @@
+"""Locale map and user-language resolution — converts BCP-47 tags to Windows LCIDs and per-store display names."""
+
 from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
@@ -45,7 +47,17 @@ GOG_DISPLAY_NAMES: dict[str, str] = {
 }
 _DEFAULT_LANGUAGE = "en-US"
 def get_unifideck_language(config: ConfigManager | None = None) -> str:
-    """Get unifideck language."""
+    """Resolve the user's preferred language from ConfigManager (BCP-47).
+
+    Falls back to ``en-US`` when no config is provided or the
+    underlying ``get_unifideck_locale`` raises.
+
+    Args:
+        config: ConfigManager, or ``None`` (uses default).
+
+    Returns:
+        BCP-47 language tag.
+    """
     if config is None:
         logger.debug(
             "[language_setup] no ConfigManager provided, using %s",

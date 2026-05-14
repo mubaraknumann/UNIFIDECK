@@ -1,3 +1,5 @@
+"""Native Linux DOSBox launch handler for GOG titles shipping a Linux build with embedded DOSBox."""
+
 from __future__ import annotations
 import os
 import platform
@@ -8,7 +10,12 @@ from pathlib import Path
 from typing import NoReturn
 DOSBOX_CALL_RE = re.compile(r'run_dosbox\s+((?:\"[^\"]+\"\s*)+)')
 def find_steam_runtime() -> Path | None:
-    """Find steam runtime."""
+    """Locate the bundled Steam Runtime under the user's home.
+
+    Returns:
+        Path to the runtime root, or ``None`` if no known
+        install location holds it.
+    """
     candidates = (
         Path.home() / ".steam" / "steam" / "ubuntu12_32" / "steam-runtime",
         Path.home() / ".local" / "share" / "Steam" / "ubuntu12_32" / "steam-runtime",
@@ -20,7 +27,16 @@ def find_steam_runtime() -> Path | None:
 def build_runtime_library_paths(
     runtime_root: Path, arch_dir: str,
 ) -> list[str]:
-    """Build runtime library paths."""
+    """Build the ``LD_LIBRARY_PATH`` segments for the Steam Runtime.
+
+    Args:
+        runtime_root: Path to the Steam Runtime root.
+        arch_dir: Sub-architecture directory name
+            (e.g. ``"x86_64-linux-gnu"``).
+
+    Returns:
+        List of absolute path strings to prepend to LD_LIBRARY_PATH.
+    """
     paths: list[str] = []
     for rel in (f"usr/lib/{arch_dir}", f"lib/{arch_dir}"):
         candidate = runtime_root / rel
@@ -28,7 +44,17 @@ def build_runtime_library_paths(
             paths.append(str(candidate))
     return paths
 def parse_dosbox_conf_args(start_script: Path) -> list[str]:
-    """Parse dosbox conf args."""
+    """Extract the ``-conf`` arguments from a ``run_dosbox`` call in start.sh.
+
+    Args:
+        start_script: Path to the game's ``start.sh``.
+
+    Returns:
+        List of arguments to forward to dosbox.
+
+    Raises:
+        SystemExit: No ``run_dosbox`` call found in the script.
+    """
     content = start_script.read_text(encoding="utf-8", errors="ignore")
     match = DOSBOX_CALL_RE.search(content)
     if not match:
@@ -41,14 +67,31 @@ def launch_via_steam_runtime(
     start_script: Path,
     args: list[str],
 ) -> NoReturn:
-    """Launch via steam runtime."""
+    """execv into the original start.sh through the Steam Runtime.
+
+    Used as a fallback path when our bundled DOSBox cannot be
+    selected (unknown arch, missing files, …). Never returns.
+
+    Args:
+        runtime_root: Steam Runtime root, or ``None``.
+        start_script: Original game start script.
+        args: Extra args to forward to the script.
+    """
     if runtime_root:
         run_sh = runtime_root / "run.sh"
         if run_sh.exists():
             os.execv(str(run_sh), [str(run_sh), str(start_script), *args])
     os.execv(str(start_script), [str(start_script), *args])
 def _parse_argv() -> tuple[Path, list[str]]:
-    """Parse argv."""
+    """Parse the script's argv into a (start_script, extra_args) tuple.
+
+    Returns:
+        Tuple of the resolved start.sh path and the remaining
+        arguments with any ``store:game_id`` token filtered out.
+
+    Raises:
+        SystemExit: argv too short.
+    """
     if len(sys.argv) < 2:
         raise SystemExit(
             "Usage: python -m "
@@ -66,7 +109,15 @@ def _select_architecture(
     dosbox_dir: Path,
 ) -> tuple[Path, Path, str] | None:
 
-    """Select architecture."""
+    """Pick the bundled dosbox binary matching the host architecture.
+
+    Args:
+        dosbox_dir: ``dosbox/`` directory shipped alongside the game.
+
+    Returns:
+        Tuple ``(binary, lib_dir, runtime_arch_dir)`` or ``None`` if
+        the host arch isn't supported.
+    """
     arch = platform.machine().lower()
     if arch in {"x86_64", "amd64"}:
         return (
@@ -86,7 +137,20 @@ def _build_env(
     runtime_root: Path | None,
     runtime_arch_dir: str,
 ) -> dict[str, str]:
-    """Build env."""
+    """Build the environment for the bundled DOSBox subprocess.
+
+    Composes ``LD_LIBRARY_PATH`` from the bundled lib dir,
+    the runtime arch lib dir(s), and any pre-existing
+    ``LD_LIBRARY_PATH`` value (duplicates dropped).
+
+    Args:
+        bundled_lib_dir: Directory containing the bundled libs.
+        runtime_root: Steam Runtime root, or ``None``.
+        runtime_arch_dir: Runtime arch directory name.
+
+    Returns:
+        Environment dict ready for ``os.execvpe``.
+    """
     runtime_libs = (
         build_runtime_library_paths(runtime_root, runtime_arch_dir)
         if runtime_root else []
@@ -100,7 +164,12 @@ def _build_env(
     )
     return env
 def main() -> None:
-    """Main."""
+    """Entry point — execvpe into the bundled DOSBox binary.
+
+    Parses argv → finds the Steam Runtime → picks an arch →
+    builds the env → execvpe. Falls back to the original
+    ``start.sh`` through the Steam Runtime if any step fails.
+    """
     start_script, extra_args = _parse_argv()
     runtime_root = find_steam_runtime()
     if extra_args:

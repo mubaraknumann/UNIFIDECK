@@ -33,7 +33,14 @@ logger = logging.getLogger(__name__)
 
 
 class _AuthPrefixBuilder:
-    """Auth prefix builder."""
+    """Build the dedicated ``.upc-auth`` prefix used for the sign-in flow.
+
+    Same UPC install + DPAPI setup as a game prefix, but kept
+    isolated so credentials live in one well-known place and
+    can be propagated to game prefixes on demand. Performs
+    MachineGuid sync against the template to keep DPAPI vault
+    consistency.
+    """
 
     def __init__(
         self,
@@ -44,7 +51,17 @@ class _AuthPrefixBuilder:
         installer_cache: UbisoftInstallerCache,
         template_builder: _TemplatePrefixBuilder,
     ) -> None:
-        """Initialize the instance."""
+        """Wire dependencies and initialise the auth-assets task lock.
+
+        Args:
+            config: Ubisoft store config.
+            paths: Ubisoft prefix paths.
+            helpers: Shared prefix helpers (copy/move primitives).
+            installer_cache: Cached installer artefacts (avoids
+                re-downloading the UPC installer per prefix).
+            template_builder: Template-prefix builder used to
+                seed the auth prefix from the template.
+        """
         self._config = config
         self._paths = paths
         self._helpers = helpers
@@ -54,7 +71,15 @@ class _AuthPrefixBuilder:
         self._auth_assets_lock = asyncio.Lock()
 
     async def ensure_auth_prefix(self) -> str | None:
-        """Ensure auth prefix."""
+        """Ensure the auth prefix exists and has a valid UPC install.
+
+        Rebuild triggers: missing UPC binary, stale Proton version,
+        or MachineGuid desync from the template.
+
+        Returns:
+            Path to ``upc.exe`` inside the auth prefix, or ``None``
+            on build failure.
+        """
         auth_dir = self._config.auth_prefix_dir_expanded
         upc_path = self._paths.find_upc_exe(auth_dir)
         rebuild = self._auth_prefix_needs_rebuild(
@@ -80,7 +105,21 @@ class _AuthPrefixBuilder:
         auth_dir: str,
         upc_path: str | None,
     ) -> bool:
-        """Auth prefix needs rebuild."""
+        """Decide whether to rebuild the auth prefix from scratch.
+
+        Rebuilds when:
+          * the Proton version recorded in the prefix isn't
+            ``experimental`` (stale family),
+          * the template's MachineGuid differs from the auth
+            prefix's (DPAPI key vault would break).
+
+        Args:
+            auth_dir: Auth prefix directory.
+            upc_path: Resolved upc.exe path (or ``None``).
+
+        Returns:
+            True iff a rebuild is required.
+        """
         if not upc_path:
             return False
         if self._template_builder.is_prefix_version_stale(auth_dir):
@@ -108,7 +147,14 @@ class _AuthPrefixBuilder:
         self,
         auth_dir: str,
     ) -> str | None:
-        """Rebuild and finalise auth prefix."""
+        """Tear down then rebuild the auth prefix; inject state on success.
+
+        Args:
+            auth_dir: Auth prefix directory.
+
+        Returns:
+            Path to upc.exe on success, ``None`` on failure.
+        """
         await self._template_builder.regenerate_template_if_stale()
         cloned = await self._build_auth_prefix_from_source()
         if not cloned:
@@ -124,7 +170,14 @@ class _AuthPrefixBuilder:
         return None
 
     async def _build_auth_prefix_from_source(self) -> bool:
-        """Build auth prefix from source."""
+        """Populate the auth prefix from a source (template / game / fresh install).
+
+        Tries, in order: clone template → clone any existing game
+        prefix → run the UPC installer fresh.
+
+        Returns:
+            True iff the prefix was built and contains upc.exe.
+        """
         auth_dir = self._config.auth_prefix_dir_expanded
         src, label = self._pick_clone_source()
         if src:
@@ -168,7 +221,16 @@ class _AuthPrefixBuilder:
         return True
 
     def _pick_clone_source(self) -> tuple[str | None, str]:
-        """Pick clone source."""
+        """Choose the best existing prefix to clone the auth prefix from.
+
+        Order: the template, then any game prefix with an installed
+        upc.exe. Hidden dirs (``.template``, ``.upc-auth``) are
+        skipped.
+
+        Returns:
+            Tuple ``(source_path, label_for_logs)``. Both elements
+            are ``None``/empty if no source is available.
+        """
         if self._template_builder.template_exists():
             return (
                 self._config.template_dir_expanded,
@@ -193,7 +255,15 @@ class _AuthPrefixBuilder:
         self,
         reason: str = "background",
     ) -> None:
-        """Queue auth assets ensure."""
+        """Schedule a background task to verify/refresh auth assets.
+
+        Coalesces concurrent calls — a second call while a task is
+        running is a no-op.
+
+        Args:
+            reason: Free-form reason logged on dispatch (e.g.
+                ``"connect-account"``).
+        """
         if self._auth_assets_task is not None and not self._auth_assets_task.done():
             logger.info(
                 "[UbisoftPrefixManager] auth asset ensure "
@@ -210,7 +280,13 @@ class _AuthPrefixBuilder:
         )
 
     async def _ensure_auth_assets(self, reason: str) -> None:
-        """Ensure auth assets."""
+        """Background coroutine — refresh template, inject state, repair auth prefix.
+
+        Held under ``_auth_assets_lock`` so only one runs at a time.
+
+        Args:
+            reason: Free-form reason (for logs).
+        """
         async with self._auth_assets_lock:
             logger.info(
                 "[UbisoftPrefixManager] ensuring auth assets (reason=%s)",
@@ -225,7 +301,12 @@ class _AuthPrefixBuilder:
             await self._repair_auth_prefix_if_needed()
 
     async def _repair_auth_prefix_if_needed(self) -> None:
-        """Repair auth prefix if needed."""
+        """Re-create the auth prefix when it disappears but the session marker remains.
+
+        Symptomatic of a user manually wiping ``~/.local/share/unifideck/prefixes/.upc-auth``
+        while still signed in. Re-injects state into every game
+        prefix after rebuild.
+        """
         auth_dir = self._config.auth_prefix_dir_expanded
         session_file = self._config.upc_session_file_expanded
         if os.path.isdir(auth_dir):

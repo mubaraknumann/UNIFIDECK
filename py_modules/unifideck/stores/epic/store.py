@@ -45,7 +45,14 @@ _LEGENDARY_USER_JSON = '~/.config/legendary/user.json'
 
 
 class EpicStore(StoreBase):
-    """Epic store."""
+    """Epic Games store backend (``StoreBase`` implementation).
+
+    Wires legendary, library reader, installer, update checker,
+    exe resolver, and OAuth flow into a cohesive façade.
+    Discovers the legendary binary via the bundled-or-system
+    search path and tracks Epic authentication via
+    legendary's ``user.json``.
+    """
 
     store_info = StoreInfo(
         name='epic',
@@ -70,7 +77,20 @@ class EpicStore(StoreBase):
         browser_monitor: OAuthBrowserMonitor | None = None,
         shortcut_service: ShortcutService | None = None,
     ) -> None:
-        """Initialize the instance."""
+        """Build the Epic store specialists (auth, library, installer, updates).
+
+        Reads Epic-specific config (install root, timeouts) and
+        builds the CLI-backed submodules on top of the bundled
+        Legendary binary.
+
+        Args:
+            bus: Event bus.
+            cache: Cache manager.
+            plugin_dir: Plugin root directory.
+            config: ConfigManager.
+            browser_monitor: Optional OAuth browser monitor.
+            shortcut_service: Optional shortcut service.
+        """
         super().__init__(bus, cache, plugin_dir, config)
         self._config_manager = config
         self._shortcut_service = shortcut_service
@@ -87,7 +107,16 @@ class EpicStore(StoreBase):
     def _read_epic_config(
         self, config: ConfigManager | None,
     ) -> dict[str, Any]:
-        """Read epic config."""
+        """Read Epic-specific configuration with defaults.
+
+        Args:
+            config: ConfigManager, or ``None``.
+
+        Returns:
+            Dict with install root, library timeout, installed-cache
+            TTL, install/uninstall timeouts, size-cache TTL, info
+            timeout, auth-URL timeout.
+        """
         cli_timeouts = read_cli_timeouts(config) if config else {}
         return {
             'install_root': str(get_cfg(
@@ -114,7 +143,12 @@ class EpicStore(StoreBase):
     def _build_cli_submodules(
         self, bus: EventBus, epic_cfg: dict[str, Any],
     ) -> None:
-        """Build CLI submodules."""
+        """Build the library reader, exe resolver, installer, update checker.
+
+        Args:
+            bus: Event bus.
+            epic_cfg: Epic config dict from ``_read_epic_config``.
+        """
         self._library = EpicLibraryReader(
             cli_path=self._cli_path,
             library_timeout=epic_cfg['library_timeout'],
@@ -149,7 +183,15 @@ class EpicStore(StoreBase):
         bus: EventBus,
         browser_monitor: OAuthBrowserMonitor | None,
     ) -> None:
-        """Build auth submodule."""
+        """Build the EpicAuthFlow when a browser monitor is available.
+
+        Without a browser monitor, ``self._auth`` stays ``None`` and
+        auth operations return ``auth_not_configured``.
+
+        Args:
+            bus: Event bus.
+            browser_monitor: Optional ``OAuthBrowserMonitor``.
+        """
         if browser_monitor is None:
             self._auth: EpicAuthFlow | None = None
             return
@@ -166,7 +208,14 @@ class EpicStore(StoreBase):
         )
 
     async def is_available(self) -> bool:
-        """Is available."""
+        """Return True iff legendary is installed and the user is logged in.
+
+        Caches the result and emits ``EXTERNAL_AUTH_CHECK_FAILED``
+        when no valid ``user.json`` is present.
+
+        Returns:
+            True iff Epic is usable.
+        """
         if not self._cli_path:
             self._cached_available = False
             return False
@@ -179,7 +228,11 @@ class EpicStore(StoreBase):
         return authenticated
 
     def _check_legendary_authenticated(self) -> bool:
-        """Check LEGENDARY authenticated."""
+        """Check whether legendary's user.json contains an access token.
+
+        Returns:
+            True iff ``access_token`` is present.
+        """
         user_json = os.path.expanduser(_LEGENDARY_USER_JSON)
         if not os.path.isfile(user_json):
             return False
@@ -192,7 +245,11 @@ class EpicStore(StoreBase):
         return isinstance(data, dict) and 'access_token' in data
 
     async def start_auth(self, **kwargs: Any) -> AuthResult:
-        """Start auth."""
+        """Delegate to ``EpicAuthFlow.start_auth`` (no-op when not configured).
+
+        Returns:
+            ``AuthResult`` from the flow, or ``auth_not_configured``.
+        """
         if self._auth is None:
             return AuthResult(
                 success=False, store='epic', error='auth_not_configured',
@@ -204,7 +261,14 @@ class EpicStore(StoreBase):
     async def complete_auth(
         self, code: str = '', **kwargs: Any,
     ) -> AuthResult:
-        """Complete auth."""
+        """Forward an externally-captured auth code to ``legendary auth --code``.
+
+        Args:
+            code: OAuth code.
+
+        Returns:
+            ``AuthResult``.
+        """
         if self._auth is None:
             return AuthResult(
                 success=False, store='epic', error='auth_not_configured',
@@ -212,14 +276,23 @@ class EpicStore(StoreBase):
         return await self._auth._register_code(code)
 
     async def logout(self) -> Result:
-        """Logout."""
+        """Logout via the auth flow if available; emit STORE_LOGOUT otherwise.
+
+        Returns:
+            ``Result``.
+        """
         if self._auth is None:
             await self._bus.emit(Events.STORE_LOGOUT, store='epic')
             return Result(success=True)
         return await self._auth.logout()
 
     async def get_library(self) -> list[Game] | None:
-        """Get library."""
+        """Read owned + installed games and merge them.
+
+        Returns:
+            Full ``Game`` list with install state, or ``None`` on
+            any read failure.
+        """
         try:
             owned = await self._library.read_owned_games()
             installed = await self._library.read_installed_map()
@@ -236,7 +309,16 @@ class EpicStore(StoreBase):
         progress_cb: ProgressCallback | None = None,
         **kwargs: Any,
     ) -> InstallResult:
-        """Install game."""
+        """Delegate to ``EpicInstaller.install_game``.
+
+        Args:
+            game_id: Epic game identifier.
+            base_path: Optional install root override.
+            progress_cb: Optional progress callback.
+
+        Returns:
+            ``InstallResult``.
+        """
         return await self._installer.install_game(
             game_id, base_path=base_path, progress_cb=progress_cb,
         )
@@ -244,7 +326,14 @@ class EpicStore(StoreBase):
     async def uninstall_game(
         self, game_id: str, **kwargs: Any,
     ) -> Result:
-        """Uninstall game."""
+        """Delegate to ``EpicInstaller.uninstall_game``.
+
+        Args:
+            game_id: Epic game identifier.
+
+        Returns:
+            ``Result``.
+        """
         return await self._installer.uninstall_game(game_id)
 
     async def update_game(
@@ -253,17 +342,36 @@ class EpicStore(StoreBase):
         progress_cb: ProgressCallback | None = None,
         **kwargs: Any,
     ) -> InstallResult:
-        """Update game."""
+        """Delegate to ``EpicUpdateChecker.update_game``.
+
+        Args:
+            game_id: Epic game identifier.
+            progress_cb: Optional progress callback.
+
+        Returns:
+            ``InstallResult``.
+        """
         return await self._updates.update_game(
             game_id, installer=self._installer, progress_cb=progress_cb,
         )
 
     async def check_for_updates(self) -> list[str]:
-        """Check for updates."""
+        """Delegate to ``EpicUpdateChecker.check_for_updates``.
+
+        Returns:
+            List of game IDs with pending updates.
+        """
         return await self._updates.check_for_updates()
 
     async def get_game_size(self, game_id: str) -> int | None:
-        """Get game size."""
+        """Delegate to ``EpicUpdateChecker.get_game_size``.
+
+        Args:
+            game_id: Epic game identifier.
+
+        Returns:
+            Download size in bytes, or ``None``.
+        """
         return await self._updates.get_game_size(game_id)
 
     async def _ensure_auth_shortcut(self) -> None:

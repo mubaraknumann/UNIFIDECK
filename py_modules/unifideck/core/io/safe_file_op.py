@@ -84,6 +84,7 @@ def safe_file_op(
     """
 
     def decorator(fn: _Callable) -> _Callable:
+        """Wrap the target function with OSError logging and default-value fallback."""
         # First positional arg is conventionally the path — we
         # capture it for the log message so callers see which
         # file triggered the failure without wiring up extra args.
@@ -92,6 +93,7 @@ def safe_file_op(
         if asyncio.iscoroutinefunction(fn):
             @functools.wraps(fn)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                """Async variant of the wrapper — logs and returns the default on OSError."""
                 try:
                     return await fn(*args, **kwargs)
                 except OSError as e:
@@ -108,6 +110,7 @@ def safe_file_op(
 
         @functools.wraps(fn)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            """Sync variant of the wrapper — logs and returns the default on OSError."""
             try:
                 return fn(*args, **kwargs)
             except OSError as e:

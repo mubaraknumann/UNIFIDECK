@@ -31,7 +31,12 @@ logger = logging.getLogger(__name__)
 
 
 class _DataLoader:
-    """Data loader."""
+    """Locate and read UPC's configurations + ownership binaries from disk.
+
+    The configurations binary lists owned games' metadata; the
+    ownership binary lists the numeric IDs the user owns. Together
+    they're the source of truth for what the library exposes.
+    """
 
     def __init__(
         self,
@@ -39,7 +44,12 @@ class _DataLoader:
         config: UbisoftConfig,
         paths: UbisoftPrefixPaths,
     ) -> None:
-        """Initialize the instance."""
+        """Bind the data-loader to its config + paths dependencies.
+
+        Args:
+            config: Frozen ``UbisoftConfig``.
+            paths: Wine prefix path helpers.
+        """
         self._config = config
         self._paths = paths
 
@@ -47,7 +57,15 @@ class _DataLoader:
         self,
         parse_configurations: ParseConfigurationsFn,
     ) -> list[GameConfig] | None:
-        """Load configurations."""
+        """Read and parse the configurations binary (in a thread).
+
+        Args:
+            parse_configurations: Synchronous parser function.
+
+        Returns:
+            Parsed configs list, or ``None`` if the file is missing
+            or parsed empty.
+        """
         cfg_path = self._find_library_configurations_path()
         if not cfg_path:
             logger.info(
@@ -69,7 +87,15 @@ class _DataLoader:
         self,
         parse_ownership: ParseOwnershipFn,
     ) -> set[int] | None:
-        """Load ownership set."""
+        """Read and parse the ownership binary into a set of owned IDs.
+
+        Args:
+            parse_ownership: Synchronous parser function.
+
+        Returns:
+            Set of owned numeric IDs, or ``None`` if no ownership
+            file is present.
+        """
         ownership_path, user_id = self._discover_ownership_file()
         if not ownership_path:
             return None
@@ -87,7 +113,11 @@ class _DataLoader:
         return owned_set
 
     def _find_library_configurations_path(self) -> str | None:
-        """Find library configurations path."""
+        """Locate the configurations binary in the auth or template prefix.
+
+        Returns:
+            Absolute path string, or ``None`` if neither prefix has it.
+        """
         for prefix_dir in (
             self._config.auth_prefix_dir_expanded,
             self._config.template_dir_expanded,
@@ -100,7 +130,16 @@ class _DataLoader:
     def _discover_ownership_file(
         self,
     ) -> tuple[str | None, str]:
-        """Discover ownership file."""
+        """Find the ownership file (named after the user ID).
+
+        Walks the auth and template prefixes, checking both layout
+        variants (root and ``pfx``). The first file inside the
+        ownership directory is the user's ownership snapshot.
+
+        Returns:
+            Tuple ``(path, user_id)`` — path is ``None`` if no
+            ownership file was found.
+        """
         for prefix_dir in (
             self._config.auth_prefix_dir_expanded,
             self._config.template_dir_expanded,

@@ -22,7 +22,14 @@ class SecurityRPCMixin:
         return svc
 
     async def get_security_audit_log(self, limit: int = 100) -> Any:
-        """Return recent security audit log entries."""
+        """Return the last N entries from the security audit log.
+
+        Args:
+            limit: Max number of entries (tail-bias). Default 100.
+
+        Returns:
+            List of audit-log entry dicts (newest first).
+        """
         return self._require_security().get_audit_log(limit=limit)
 
     async def get_security_counters(self) -> Any:
@@ -34,7 +41,11 @@ class SecurityRPCMixin:
         return self._require_security().get_bruteforce_status()
 
     async def clear_security_audit_log(self) -> Any:
-        """Clear the security audit log."""
+        """Clear the security audit log.
+
+        Returns:
+            None — present for RPC return-type uniformity.
+        """
         self._require_security().clear_audit_log()
         return {"success": True}
 

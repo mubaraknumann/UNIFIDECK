@@ -1,3 +1,5 @@
+"""OAuth mixin — refresh-token lifecycle for the Microsoft OAuth access token."""
+
 from __future__ import annotations
 import asyncio
 import logging
@@ -8,13 +10,26 @@ if TYPE_CHECKING:
     from ..microsoft_config import MicrosoftConfig
 logger = logging.getLogger(__name__)
 class OAuthMixin:
-    """Oauth mixin."""
+    """OAuth refresh-token lifecycle for the Microsoft access token.
+
+    Provides ``exchange_code`` (used at first sign-in) and
+    ``refresh_if_stale`` (used before every privileged call).
+    Both rely on ``_token_request`` for the shared HTTP +
+    save sequence.
+    """
     _ms_access_token: str | None
     _ms_refresh_token: str | None
     _token_saved_at: float
     _config: MicrosoftConfig
     async def exchange_code(self, auth_code: str) -> bool:
-        """Exchange code."""
+        """Exchange an OAuth authorization code for access + refresh tokens.
+
+        Args:
+            auth_code: OAuth code captured from the redirect URL.
+
+        Returns:
+            True iff the token endpoint returned a valid response.
+        """
         return await self._token_request({
             "client_id": self._config.client_id,
             "redirect_uri": self._config.redirect_uri,
@@ -23,7 +38,16 @@ class OAuthMixin:
             "scope": self._config.scope,
         })
     async def refresh_if_stale(self) -> bool:
-        """Refresh if stale."""
+        """Refresh the access token if it's older than the refresh threshold.
+
+        No-op (returns True) when the token is still fresh.
+        Returns False if a refresh is required but no refresh
+        token is available (session dead).
+
+        Returns:
+            True iff the current access token is fresh enough
+            to use after this call returns.
+        """
         age = time.time() - self._token_saved_at
         threshold = self._config.token_refresh_threshold_seconds
         if age < threshold and self._ms_access_token:
@@ -51,7 +75,19 @@ class OAuthMixin:
         self, params: dict[str, str],
     ) -> bool:
 
-        """Token request."""
+        """POST to the token endpoint and update in-memory + on-disk tokens on success.
+
+        Updates ``_ms_access_token`` and (if returned) the
+        refresh token, sets ``_token_saved_at`` to now, and
+        persists via ``self.save()``.
+
+        Args:
+            params: Form fields posted to the token endpoint
+                (grant_type + scope + grant-specific keys).
+
+        Returns:
+            True iff the endpoint returned ``access_token``.
+        """
         headers = {
             "Content-Type":
                 "application/x-www-form-urlencoded",

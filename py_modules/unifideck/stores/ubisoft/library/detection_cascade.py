@@ -39,10 +39,21 @@ _INSTALL_MARKER_FILENAME = ".unifideck_ubisoft"
 
 
 class _DetectionCascade:
-    """Detection cascade."""
+    """Chain of strategies to identify an Ubisoft install on disk.
+
+    Each ``detect_via_*`` method implements one strategy; the
+    caller tries them in order and stops at the first that
+    produces a confident match. Strategies are ordered by
+    reliability: marker file → prefix install state → external
+    roots → registry InstallDir.
+    """
 
     def __init__(self, parent: _InstallDetector) -> None:
-        """Initialize the instance."""
+        """Bind the cascade helper to its parent detector.
+
+        Args:
+            parent: Owning ``_InstallDetector`` instance.
+        """
         self._parent = parent
 
     def detect_via_marker(
@@ -51,7 +62,20 @@ class _DetectionCascade:
         known_name: str,
         search_roots: list[str],
     ) -> dict[str, Any] | None:
-        """Detect via marker."""
+        """Strategy 1: find an install carrying a ``.unifideck_ubisoft`` marker.
+
+        The marker is JSON written at install time and carries the
+        canonical ``space_id``, ``install_path``, ``executable``, and
+        ``game_title`` — most reliable signal when present.
+
+        Args:
+            space_id: UPC space_id we're trying to detect.
+            known_name: Last-known display name (used in the result).
+            search_roots: Directories to walk.
+
+        Returns:
+            Install-info dict on match, ``None`` if no marker found.
+        """
         for game_dir, folder in walk_install_candidates(
             search_roots,
         ):
@@ -75,7 +99,15 @@ class _DetectionCascade:
         game_dir: str,
         space_id: str,
     ) -> dict | None:
-        """Load marker for space."""
+        """Read and validate a marker file for one space_id.
+
+        Args:
+            game_dir: Candidate install directory.
+            space_id: Expected space_id (the marker must match).
+
+        Returns:
+            Marker dict if present and matching, else ``None``.
+        """
         marker_path = Path(game_dir) / _INSTALL_MARKER_FILENAME
         if not marker_path.is_file():
             return None
@@ -94,7 +126,19 @@ class _DetectionCascade:
         folder: str,
         marker_data: dict,
     ) -> dict[str, Any]:
-        """Build marker result."""
+        """Build the install-info dict from a matching marker.
+
+        Args:
+            space_id: UPC space_id.
+            known_name: Last-known display name.
+            game_dir: Install directory found.
+            folder: Last path component of ``game_dir``.
+            marker_data: Parsed marker dict.
+
+        Returns:
+            Install-info dict (``space_id``, ``executable``,
+            ``install_path``, ``work_dir``, ``title``).
+        """
         install_path = marker_data.get("install_path") or game_dir
         executable = self._resolve_marker_executable(
             marker_data,
@@ -113,7 +157,19 @@ class _DetectionCascade:
         marker_data: dict,
         install_path: str,
     ) -> str:
-        """Resolve marker executable."""
+        """Resolve the executable path from the marker (falling back to scan).
+
+        Joins relative paths against ``install_path``; if the recorded
+        exe is missing on disk, falls back to ``find_game_executable``
+        (scans the install dir for a likely game .exe).
+
+        Args:
+            marker_data: Parsed marker dict.
+            install_path: Install directory.
+
+        Returns:
+            Absolute executable path (empty string if nothing was found).
+        """
         executable = marker_data.get("executable", "") or ""
         exe_path = Path(executable) if executable else None
         if exe_path and not exe_path.is_absolute():
@@ -131,7 +187,22 @@ class _DetectionCascade:
         known_name: str,
         check_install_state: Callable[[str], bool],
     ) -> dict[str, Any] | None:
-        """Detect via prefix install state."""
+        """Strategy 2: find an install via UPC's ``uplay_install.state`` file.
+
+        Within the game's own prefix, UPC writes a state file under
+        each installed game. With a known display name, falls back
+        to fuzzy-folder-name matching to disambiguate.
+
+        Args:
+            space_id: UPC space_id.
+            prefix_game_roots: In-prefix candidate directories.
+            normalized_known_name: Pre-normalized display name.
+            known_name: Raw display name.
+            check_install_state: Predicate validating a state file.
+
+        Returns:
+            Install-info dict on match, ``None`` otherwise.
+        """
         candidates: list[str] = []
         for game_dir, _folder in walk_install_candidates(
             prefix_game_roots,
@@ -169,7 +240,22 @@ class _DetectionCascade:
         known_name: str,
         check_install_state: Callable[[str], bool],
     ) -> dict[str, Any] | None:
-        """Detect via external roots."""
+        """Strategy 3: same as in-prefix detection but for external install roots.
+
+        External roots include the configured ``default_install_base``
+        and ``sdcard_install_base``. Requires a name match because
+        external roots may contain unrelated games.
+
+        Args:
+            space_id: UPC space_id.
+            external_game_roots: External candidate directories.
+            normalized_known_name: Pre-normalized display name.
+            known_name: Raw display name.
+            check_install_state: Predicate validating a state file.
+
+        Returns:
+            Install-info dict on match, ``None`` otherwise.
+        """
         for game_dir, folder in walk_install_candidates(
             external_game_roots,
         ):
@@ -197,7 +283,21 @@ class _DetectionCascade:
         known_name: str,
         check_install_state: Callable[[str], bool],
     ) -> dict[str, Any] | None:
-        """Detect via registry install ID."""
+        """Strategy 4: read the ``InstallDir`` value out of the Wine registry.
+
+        Looks for the ``HKLM\\Software\\WOW6432Node\\Ubisoft\\Launcher\\Installs\\<id>``
+        section that UPC writes after a successful install, decodes
+        the Wine path back to Linux, and writes a marker if valid.
+
+        Args:
+            space_id: UPC space_id.
+            prefix_path: Wine prefix path.
+            known_name: Raw display name.
+            check_install_state: Predicate validating a state file.
+
+        Returns:
+            Install-info dict on match, ``None`` otherwise.
+        """
         install_id = self._parent._id_map.resolve_install_id(
             space_id,
         )
@@ -223,7 +323,14 @@ class _DetectionCascade:
 
     @staticmethod
     def _build_registry_pattern(install_id: str) -> re.Pattern:
-        """Build registry pattern."""
+        """Compile the regex that pulls ``InstallDir`` out of system.reg for one id.
+
+        Args:
+            install_id: Ubisoft install ID.
+
+        Returns:
+            Compiled regex with one capture group for ``InstallDir``.
+        """
         return re.compile(
             r"\[Software\\\\(?:Wow6432Node\\\\)?"
             r"Ubisoft\\\\Launcher\\\\Installs\\\\" + re.escape(install_id) + r"\]"
@@ -241,7 +348,24 @@ class _DetectionCascade:
         known_name: str,
         check_install_state: Callable[[str], bool],
     ) -> dict[str, Any] | None:
-        """Try registry file."""
+        """Read one ``*.reg`` file and apply the InstallDir pattern.
+
+        On match: converts the Wine path to Linux, validates the
+        install state, writes a ``.unifideck_ubisoft`` marker for
+        future fast-path detection, and returns the install-info.
+
+        Args:
+            reg_path: Path to the registry file.
+            pattern: Compiled InstallDir regex.
+            space_id: UPC space_id.
+            install_id: Ubisoft install ID (for the marker).
+            prefix_path: Wine prefix path.
+            known_name: Raw display name.
+            check_install_state: Predicate validating a state file.
+
+        Returns:
+            Install-info dict on match, ``None`` otherwise.
+        """
         reg_p = Path(reg_path)
         if not reg_p.is_file():
             return None
@@ -287,7 +411,19 @@ class _DetectionCascade:
         linux_path: str | None,
         check_install_state: Callable[[str], bool],
     ) -> bool:
-        """Validate registry install."""
+        """Validate that a Linux path looks like an installed game.
+
+        Accepts when the path is a directory AND either has
+        ``uplay_install.state`` or matches the
+        ``looks_like_game_install`` heuristic.
+
+        Args:
+            linux_path: Converted Linux path.
+            check_install_state: Predicate validating a state file.
+
+        Returns:
+            True iff the path is a plausible install.
+        """
         if not linux_path or not Path(linux_path).is_dir():
             return False
         state_file = str(
@@ -301,7 +437,19 @@ class _DetectionCascade:
         game_dir: str,
         title_hint: str,
     ) -> dict[str, Any]:
-        """Build install info."""
+        """Assemble the install-info dict from a detected directory.
+
+        Runs ``find_game_executable`` against the dir to populate
+        the ``executable`` field.
+
+        Args:
+            space_id: UPC space_id.
+            game_dir: Detected install directory.
+            title_hint: Best-known display name.
+
+        Returns:
+            Install-info dict.
+        """
         exe = self._parent.find_game_executable(game_dir) or ""
         title = title_hint or Path(game_dir).name
         return {
@@ -317,7 +465,18 @@ class _DetectionCascade:
         folder_name: str,
         normalized_known_name: str,
     ) -> bool:
-        """Fuzzy folder match."""
+        """Permissive substring match between folder name and normalized title.
+
+        Accepts equality, or either-direction substring containment
+        (handles e.g. ``"farcry5"`` vs ``"far cry 5"``).
+
+        Args:
+            folder_name: Disk folder name.
+            normalized_known_name: Pre-normalized expected display name.
+
+        Returns:
+            True iff the names are considered a fuzzy match.
+        """
         if not normalized_known_name:
             return False
         normalized_folder = self._parent._id_map.normalize_for_matching(

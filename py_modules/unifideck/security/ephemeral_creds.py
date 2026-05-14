@@ -385,6 +385,7 @@ class EphemeralCredentialContext:
         self._plaintext_path = None
 
         def _rmtree() -> None:
+            """Blocking recursive removal of the temporary directory."""
             with contextlib.suppress(FileNotFoundError):
                 # Walk + remove. We don't use shutil.rmtree
                 # because it follows symlinks by default in
@@ -596,7 +597,14 @@ class InPlaceEphemeralFile:
         )
 
     async def _write_plaintext(self, payload: dict[str, Any]) -> None:
-        """Serialise + write the decrypted payload to plaintext path."""
+        """JSON-serialise the payload and atomically write it to the plaintext path.
+
+        Args:
+            payload: Decrypted credential dict.
+
+        Raises:
+            EphemeralCredentialError: The atomic write failed.
+        """
         import json  # noqa: PLC0415 — stdlib, lazy
 
         body = json.dumps(payload).encode("utf-8")
@@ -664,6 +672,7 @@ class InPlaceEphemeralFile:
         """
 
         def _remove() -> None:
+            """Blocking unlink of the plaintext file, ignoring missing files."""
             try:
                 if Path(self._plaintext_path).is_file():
                     os.unlink(self._plaintext_path)

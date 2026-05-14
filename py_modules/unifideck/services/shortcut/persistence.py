@@ -34,6 +34,7 @@ async def read_vdf(shortcuts_path: str) -> dict[str, Any]:
         return {"shortcuts": {}}
 
     def _read_sync() -> dict[str, Any]:
+        """Blocking binary VDF read of shortcuts.vdf."""
         try:
             with open(shortcuts_path, "rb") as f:
                 return vdf.binary_loads(f.read())
@@ -50,6 +51,7 @@ async def write_vdf(shortcuts_path: str, data: dict[str, Any]) -> None:
     Uses tmpfile + os.replace pattern to prevent corruption on crash.
     """
     def _write_sync() -> None:
+        """Blocking atomic write of shortcuts.vdf."""
         parent = os.path.dirname(shortcuts_path)
         if parent:
             os.makedirs(parent, exist_ok=True)
@@ -87,6 +89,7 @@ async def read_games_map(games_map_path: str) -> dict[str, GameMapEntry]:
     for attempt in range(1, _GAMES_MAP_READ_ATTEMPTS + 1):
         try:
             def _read_sync() -> str:
+                """Blocking text read of the games_map file."""
                 with open(games_map_path, encoding="utf-8") as f:
                     return f.read()
 
@@ -118,6 +121,7 @@ async def write_games_map(games_map_path: str, games_map: dict[str, GameMapEntry
     truncate and the subsequent writes.
     """
     def _write_sync() -> None:
+        """Blocking atomic write of the formatted games_map file."""
         parent = os.path.dirname(games_map_path)
         if parent:
             os.makedirs(parent, exist_ok=True)

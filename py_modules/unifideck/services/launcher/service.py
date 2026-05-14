@@ -60,6 +60,7 @@ class LauncherService:
         active launch subprocess gracefully.
         """
         def _handle_signal(sig: int, frame: Any) -> None:
+            """Signal handler — set cancellation flag and terminate the active subprocess."""
             logger.info("[LauncherService] received signal %s, cancelling launch", sig)
             self._cancelled = True
             if self._active_subprocess:
@@ -148,62 +149,154 @@ class LauncherService:
         return None
 
     async def _emit_circuit_open_toast(self, ctx: LaunchContext, failure_count: int) -> None:
-        """Delegate to ``error_toasts.emit_circuit_open``."""
+        """Delegate to ``error_toasts.emit_circuit_open_toast``.
+
+        Kept as a service method so the rest of the launcher can
+        stay decoupled from the toast-emission helpers.
+
+        Args:
+            ctx: Launch context.
+            failure_count: Number of failures that tripped the
+                breaker (interpolated into the toast text).
+        """
         from .error_toasts import emit_circuit_open_toast
         await emit_circuit_open_toast(self, ctx, failure_count)
 
     async def _check_circuit_breaker(self, ctx: LaunchContext) -> bool:
-        """Delegate to ``circuit_breaker.check_before_launch``."""
+        """Delegate to ``circuit_breaker.check_circuit_breaker``.
+
+        Args:
+            ctx: Launch context.
+
+        Returns:
+            True iff the breaker is currently open for this game
+            (launch must be aborted).
+        """
         from .circuit_breaker import check_circuit_breaker
         res = await check_circuit_breaker(self, ctx)
         return res is not None and not res.success
 
     async def _emit_launcher_error_toast(self, ctx: LaunchContext, err_code: str) -> None:
-        """Delegate to ``error_toasts.emit_launcher_error``."""
+        """Delegate to ``error_toasts.emit_launcher_error_toast``.
+
+        Args:
+            ctx: Launch context.
+            err_code: Stable error code surfaced to the UI.
+        """
         from .error_toasts import emit_launcher_error_toast
         await emit_launcher_error_toast(self, ctx, err_code)
 
     async def _handle_launcher_error(self, ctx: LaunchContext, err: Any) -> Result:
-        """Delegate to ``error_toasts.handle_launcher_error``."""
+        """Delegate to ``error_toasts.handle_launcher_error``.
+
+        Args:
+            ctx: Launch context.
+            err: The ``LauncherError`` that was raised.
+
+        Returns:
+            A ``Result`` summarising what to do next (emit toast,
+            record failure, propagate, …).
+        """
         from .error_toasts import handle_launcher_error
         return await handle_launcher_error(self, ctx, err)
 
     async def _launch_windows(self, ctx: LaunchContext, state: RuntimeState) -> Result:
-        """Delegate to ``orchestrator.launch_windows``."""
+        """Delegate to ``orchestrator.launch_windows``.
+
+        Args:
+            ctx: Launch context.
+            state: Runtime state.
+
+        Returns:
+            The Windows-path launch ``Result``.
+        """
         from .orchestrator import launch_windows
         return await launch_windows(self, ctx, state)
 
     async def _launch_native(self, ctx: LaunchContext, state: RuntimeState) -> Result:
-        """Delegate to ``orchestrator.launch_native``."""
+        """Delegate to ``orchestrator.launch_native``.
+
+        Args:
+            ctx: Launch context.
+            state: Runtime state.
+
+        Returns:
+            The native-path launch ``Result``.
+        """
         from .orchestrator import launch_native
         return await launch_native(self, ctx, state)
 
     async def _prepare_windows_plan(self, ctx: LaunchContext, state: RuntimeState) -> tuple["ProtonLaunchPlan", object]:
-        """Delegate to ``helpers.prepare_windows_plan``."""
+        """Delegate to ``helpers.prepare_windows_plan``.
+
+        Args:
+            ctx: Launch context.
+            state: Runtime state.
+
+        Returns:
+            Tuple ``(plan, extra_state)`` — the Proton launch plan
+            plus an opaque carrier the orchestrator threads through.
+        """
         from .helpers import prepare_windows_plan
         return await prepare_windows_plan(self, ctx, state)
 
     async def _cloud_sync_phase(self, ctx: LaunchContext, direction: str) -> None:
-        """Delegate to ``helpers.cloud_sync_phase``."""
+        """Delegate to ``helpers.cloud_sync_phase``.
+
+        Args:
+            ctx: Launch context.
+            direction: ``"sync_down"`` before launch, ``"sync_up"``
+                after launch.
+        """
         from .helpers import cloud_sync_phase
         await cloud_sync_phase(self, ctx, direction)
 
     async def _run_game_subprocess(self, plan: "ProtonLaunchPlan", ctx: LaunchContext, state: RuntimeState) -> int:
-        """Delegate to ``helpers.run_game_subprocess``."""
+        """Delegate to ``helpers.run_game_subprocess``.
+
+        Args:
+            plan: Proton launch plan.
+            ctx: Launch context.
+            state: Runtime state.
+
+        Returns:
+            The game subprocess exit code.
+        """
         from .helpers import run_game_subprocess
         return await run_game_subprocess(self, plan, ctx, state)
 
     async def _sync_saves_and_track_size(self, ctx: LaunchContext, phase: str) -> None:
-        """Delegate to ``helpers.sync_saves_and_track_size``."""
+        """Delegate to ``helpers.sync_saves_and_track_size``.
+
+        Records the post-sync save size into the cache for the
+        disk-space pre-check on subsequent launches.
+
+        Args:
+            ctx: Launch context.
+            direction: Sync direction (``"sync_down"`` /
+                ``"sync_up"``).
+        """
         from .helpers import sync_saves_and_track_size
         await sync_saves_and_track_size(self, ctx, phase)
 
     def _resolve_exit_code(self, state: RuntimeState) -> int:
-        """Delegate to ``helpers.resolve_exit_code``."""
+        """Delegate to ``helpers.resolve_exit_code``.
+
+        Args:
+            state: Runtime state.
+
+        Returns:
+            Final exit code (or -1 if the launch was cancelled).
+        """
         from .helpers import resolve_exit_code
         return resolve_exit_code(self, state)
 
     def _elapsed_since_launch(self) -> float:
-        """Delegate to ``helpers.elapsed_since_launch``."""
+        """Delegate to ``helpers.elapsed_since_launch``.
+
+        Returns:
+            Monotonic seconds since ``_launch_started_at`` was set
+            (0.0 if no launch is active).
+        """
         from .helpers import elapsed_since_launch
         return elapsed_since_launch(self)

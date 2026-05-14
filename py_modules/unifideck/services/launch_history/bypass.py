@@ -52,7 +52,19 @@ class _BypassMixin:
             logger.warning("[LaunchHistory] Failed to arm bypass for %s: %s", game_key, e)
 
     def consume_bypass(self, game_key: str) -> bool:
-        """Atomically check and consume an armed bypass flag."""
+        """Atomically check, consume, and validate an armed bypass flag.
+
+        On first call returning True (within validity window) the
+        flag is deleted from disk. Expired flags are silently
+        dropped. Any I/O error returns False.
+
+        Args:
+            game_key: ``store:game_id`` key into the history.
+
+        Returns:
+            True iff a valid (non-expired) bypass was present and
+            has just been consumed.
+        """
         try:
             data = load_history(self._path)
             

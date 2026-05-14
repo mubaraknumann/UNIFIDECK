@@ -20,7 +20,19 @@ from dataclasses import dataclass
 
 @dataclass
 class _UpcLaunchEnv:
-    """Upc launch env."""
+    """Resolved launch environment for spawning UPC under Proton.
+
+    Built once per UPC spawn so the caller doesn't have to
+    carry four separate values around.
+
+    Attributes:
+        upc_path: Absolute path to ``upc.exe`` inside the prefix
+            (Windows-style path).
+        umu_run: Path to the ``umu-run`` wrapper script.
+        python_bin: Python interpreter feeding umu-run.
+        env: Subprocess environment dict (GAMEID, STORE,
+            STEAM_COMPAT_*, PROTON_VERB, …).
+    """
 
     upc_path: str
     umu_run: str
@@ -29,9 +41,19 @@ class _UpcLaunchEnv:
 
 
 class UpcLaunchEnvBuildError(Exception):
-    """Upc launch env build error."""
+    """Raised when the UPC launch environment can't be built.
+
+    Carries a stable ``error_code`` (e.g. ``"upc_exe_missing"``,
+    ``"prefix_uninitialised"``) that the caller surfaces to the
+    UI via a localized toast.
+    """
 
     def __init__(self, error_code: str) -> None:
-        """Initialize the instance."""
+        """Construct with a stable, UI-friendly error code.
+
+        Args:
+            error_code: Stable identifier surfaced to the UI
+                (e.g. ``"upc_exe_missing"``).
+        """
         super().__init__(error_code)
         self.error_code = error_code

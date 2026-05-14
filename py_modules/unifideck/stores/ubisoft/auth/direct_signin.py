@@ -26,7 +26,13 @@ logger = logging.getLogger(__name__)
 
 
 class _DirectSignIn:
-    """Direct sign in."""
+    """Direct-sign-in fallback — launches UPC, watches for credentials, propagates them.
+
+    Bypasses the Steam-shortcut auth flow when the user wants to
+    sign in directly from the QAM panel. Spawns UPC inside the
+    auth prefix, polls for credential capture, then propagates
+    to all game prefixes once captured.
+    """
 
     def __init__(
         self,
@@ -39,7 +45,20 @@ class _DirectSignIn:
         ensure_auth_prefix: Any,
         queue_auth_assets_ensure: Any,
     ) -> None:
-        """Initialize the instance."""
+        """Wire dependencies for the direct-sign-in (upc.exe-driven) Ubisoft auth flow.
+
+        Args:
+            binaries: Ubisoft binary resolver (finds upc.exe).
+            bus: Event bus.
+            config: Ubisoft store config.
+            paths: Ubisoft prefix paths.
+            session: Ubisoft session state (receives the captured
+                credentials on success).
+            ensure_auth_prefix: Awaitable callback that ensures
+                the auth prefix is bootstrapped before sign-in.
+            queue_auth_assets_ensure: Callback enqueueing the
+                post-sign-in auth-assets propagation.
+        """
         self._binaries = binaries
         self._bus = bus
         self._config = config
@@ -49,7 +68,15 @@ class _DirectSignIn:
         self._queue_auth_assets_ensure = queue_auth_assets_ensure
 
     async def connect(self) -> dict[str, Any]:
-        """Connect."""
+        """Drive the direct-sign-in flow end-to-end.
+
+        Steps: queue an asset-ensure → resolve UPC paths → build env
+        → spawn UPC → wait up to 10 min for the session token to
+        appear in the auth prefix → propagate credentials.
+
+        Returns:
+            Dict ``{success: bool, message|error: str}``.
+        """
         self._queue_auth_assets_ensure("connect-account")
         resolved = await self._resolve_launch_targets()
         if isinstance(resolved, dict):
@@ -89,7 +116,15 @@ class _DirectSignIn:
     async def _resolve_launch_targets(
         self,
     ) -> tuple[str, str, str] | dict[str, Any]:
-        """Resolve launch targets."""
+        """Resolve UPC binaries and the auth prefix directory.
+
+        Returns an error dict (with EXTERNAL_AUTH_CHECK_FAILED
+        emitted) on missing UPC binary or Ubisoft Connect exe.
+
+        Returns:
+            ``(umu_run, connect_path, prefix_path)`` on success,
+            or an error dict on failure.
+        """
         upc_path = await self._ensure_auth_prefix()
         umu_run = self._binaries.find_umu_run()
         if not upc_path or not umu_run:
@@ -122,7 +157,15 @@ class _DirectSignIn:
         self,
         prefix_path: str,
     ) -> tuple[str, dict[str, str]]:
-        """Build launch env."""
+        """Build the Python binary path and env dict for the UPC subprocess.
+
+        Args:
+            prefix_path: Auth prefix directory.
+
+        Returns:
+            ``(python_bin, env)`` ready to pass to
+            ``asyncio.create_subprocess_exec``.
+        """
         python_bin = self._binaries.find_python()
         env = self._binaries.build_umu_env(
             wineprefix=prefix_path,
@@ -135,7 +178,14 @@ class _DirectSignIn:
         self,
         prefix_path: str,
     ) -> dict[str, Any]:
-        """Finalize success."""
+        """Post-capture: propagate credentials and queue follow-up asset ensure.
+
+        Args:
+            prefix_path: Auth prefix where credentials were captured.
+
+        Returns:
+            Success dict ``{success: True, message: ...}``.
+        """
         self._session.propagate_all_to_all()
         self._queue_auth_assets_ensure("post-connect-account")
         return {
@@ -148,7 +198,19 @@ class _DirectSignIn:
         proc: asyncio.subprocess.Process,
         prefix_path: str,
     ) -> str | None:
-        """Wait for capture."""
+        """Poll the auth prefix for credential capture, with a 10-minute deadline.
+
+        Polls every 2 seconds. Terminates the UPC process cleanly when
+        credentials are captured (SIGTERM with 10s grace, then SIGKILL).
+        Same cleanup on timeout.
+
+        Args:
+            proc: UPC subprocess.
+            prefix_path: Auth prefix to watch.
+
+        Returns:
+            Captured session token, or ``None`` on timeout / failure.
+        """
         loop = asyncio.get_event_loop()
         start = loop.time()
         timeout_seconds = 600.0

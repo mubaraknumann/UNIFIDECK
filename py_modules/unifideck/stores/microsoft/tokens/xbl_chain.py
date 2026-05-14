@@ -1,3 +1,5 @@
+"""XBL/XSTS token chain mixin — builds and caches Xbox Live and GSSV tokens derived from the OAuth access token."""
+
 from __future__ import annotations
 import asyncio
 import logging
@@ -10,18 +12,40 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 @dataclass
 class XBLTokenChain:
-    """Xbltoken chain."""
+    """Cached XBL/XSTS chain ready for an Xbox-API call.
+
+    Attributes:
+        xsts_token: XSTS token to put in the ``Authorization`` header.
+        user_hash: XBL user hash (``uhs``).
+        xuid: Xbox user ID, if surfaced by XSTS.
+        xbl_token: Underlying XBL user token (kept so a GSSV
+            chain can be derived without redoing the XBL leg).
+    """
     xsts_token: str
     user_hash: str
     xuid: str | None = None
     xbl_token: str | None = None
 class XBLChainMixin:
-    """Xblchain mixin."""
+    """Mixin: build XBL + GSSV token chains from the cached access token.
+
+    ``build_chain`` returns the standard ``xboxlive.com`` chain.
+    ``build_gssv_chain`` returns a chain bound to the GSSV
+    relying party — either piggy-backing on an existing XBL
+    token or doing a full from-scratch dance.
+    """
     _ms_access_token: str | None
     _config: MicrosoftConfig
     _locale_fn: Callable[[], str]
     async def build_chain(self) -> XBLTokenChain | None:
-        """Build chain."""
+        """Build the default XBL → XSTS chain (relying party ``http://xboxlive.com``).
+
+        Runs the synchronous ``build_xbl_chain`` in a thread
+        executor.
+
+        Returns:
+            Populated ``XBLTokenChain``, or ``None`` on missing
+            access token or any failure in the chain.
+        """
         if not self._ms_access_token:
             return None
         access_token = self._ms_access_token
@@ -59,7 +83,18 @@ class XBLChainMixin:
         xbl_token: str | None = None,
     ) -> XBLTokenChain | None:
 
-        """Build gssv chain."""
+        """Build an XSTS chain bound to the GSSV relying party.
+
+        Used by the Game Pass subscription probe and the
+        xCloud launcher. When ``xbl_token`` is provided we
+        skip the XBL leg and re-trade just the XSTS token.
+
+        Args:
+            xbl_token: Optional cached XBL token to reuse.
+
+        Returns:
+            Populated ``XBLTokenChain``, or ``None`` on failure.
+        """
         relying_party = self._config.gssv_relying_party
         if xbl_token:
             return await self._gssv_from_xbl_token(
@@ -69,7 +104,16 @@ class XBLChainMixin:
     async def _gssv_from_xbl_token(
         self, xbl_token: str, relying_party: str,
     ) -> XBLTokenChain | None:
-        """Gssv from XBL token."""
+        """Build a GSSV chain by re-trading an existing XBL token.
+
+        Args:
+            xbl_token: Cached XBL user token.
+            relying_party: GSSV relying-party URL.
+
+        Returns:
+            Populated ``XBLTokenChain``, or ``None`` on XSTS
+            failure / XErr response / missing user hash.
+        """
         loop = asyncio.get_event_loop()
         try:
             resp = await loop.run_in_executor(
@@ -105,7 +149,14 @@ class XBLChainMixin:
     async def _gssv_from_scratch(
         self, relying_party: str,
     ) -> XBLTokenChain | None:
-        """Gssv from scratch."""
+        """Build a full GSSV chain from the access token, no XBL token reuse.
+
+        Args:
+            relying_party: GSSV relying-party URL.
+
+        Returns:
+            Populated ``XBLTokenChain``, or ``None`` on failure.
+        """
         if not self._ms_access_token:
             return None
         access_token = self._ms_access_token

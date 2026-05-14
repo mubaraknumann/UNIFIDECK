@@ -16,11 +16,26 @@ class SecurityHandlers(RpcHandlerBase):
     """Security audit log, counters, and brute-force management."""
 
     def _security(self) -> Any:
-        """Return the security service, raising if unavailable."""
+        """Return the security service, raising RpcError if unavailable.
+
+        Returns:
+            The security service.
+
+        Raises:
+            RpcError: ``service_unavailable`` when the security
+                service isn't wired.
+        """
         return self._require(self._services.security, "security")
 
     async def get_security_audit_log(self, limit: int = 100) -> Any:
-        """Return recent security audit log entries."""
+        """Return the last N entries from the security audit log.
+
+        Args:
+            limit: Max number of entries (tail-bias). Default 100.
+
+        Returns:
+            List of audit-log entry dicts (newest first).
+        """
         return self._security().get_audit_log(limit=limit)
 
     async def get_security_counters(self) -> Any:
@@ -32,7 +47,14 @@ class SecurityHandlers(RpcHandlerBase):
         return self._security().get_bruteforce_status()
 
     async def clear_security_audit_log(self) -> Any:
-        """Clear the security audit log."""
+        """Clear the security audit log.
+
+        Wipes every recorded event. Used by the UI's privacy
+        controls.
+
+        Returns:
+            None — present for RPC return-type uniformity.
+        """
         self._security().clear_audit_log()
         return {"success": True}
 

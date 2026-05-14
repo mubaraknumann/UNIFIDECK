@@ -41,7 +41,17 @@ _STEAM_COMPAT_ENV_VARS = (
 def resolve_active_prefix_dir(
     prefix_path: str,
 ) -> str | None:
-    """Resolve active prefix dir."""
+    """Pick the directory that holds the prefix's ``system.reg``.
+
+    Tries ``<prefix>/pfx/`` first, then ``<prefix>/`` directly.
+
+    Args:
+        prefix_path: Prefix root.
+
+    Returns:
+        Absolute path to the registry-bearing directory, or
+        ``None`` if neither layout exists.
+    """
     prefix = Path(prefix_path)
     pfx = prefix / "pfx"
     if (pfx / "system.reg").is_file():
@@ -54,7 +64,15 @@ def resolve_active_prefix_dir(
 def read_system_reg(
     active_prefix: str,
 ) -> tuple[str, str] | None:
-    """Read system reg."""
+    """Read ``system.reg`` from a registry-bearing prefix.
+
+    Args:
+        active_prefix: Directory returned by
+            ``resolve_active_prefix_dir``.
+
+    Returns:
+        Tuple ``(system_reg_path, content)``, or ``None`` on read failure.
+    """
     system_reg = str(Path(active_prefix) / "system.reg")
     try:
         content = Path(system_reg).read_text(
@@ -70,7 +88,16 @@ def find_install_registry_section_bounds(
     content: str,
     section: str,
 ) -> tuple[int, int] | None:
-    """Find install registry section bounds."""
+    """Locate the byte-bounds of a registry section in a system.reg dump.
+
+    Args:
+        content: Full system.reg text.
+        section: Section header line (e.g. ``[Software\\WOW6432Node\\...]``).
+
+    Returns:
+        Tuple ``(section_start, section_end)``, or ``None`` if
+        the section isn't present.
+    """
     if section not in content:
         return None
     sec_start = content.index(section)
@@ -85,7 +112,20 @@ def _update_or_append_install_section(
     section: str,
     values: list[str],
 ) -> str:
-    """Update or append install section."""
+    """Update existing keys in a registry section, or append new lines.
+
+    Appends the section itself if missing; otherwise updates
+    each ``"Key"="..."`` line in place (appending the key
+    inside the section if not yet present).
+
+    Args:
+        content: Full system.reg text.
+        section: Section header line.
+        values: List of ``"Key"="Value"`` lines to write.
+
+    Returns:
+        Patched system.reg text.
+    """
     bounds = find_install_registry_section_bounds(
         content,
         section,
@@ -115,7 +155,18 @@ def inject_install_registry(
     install_id: str,
     install_dir: str,
 ) -> None:
-    """Inject install registry."""
+    """Inject the UPC install-dir registry section into system.reg.
+
+    Writes ``InstallDir`` under
+    ``[Software\\WOW6432Node\\Ubisoft\\Launcher\\Installs\\<install_id>]``.
+    Linux paths are converted to Wine paths (``Z:`` prefix +
+    backslashes).
+
+    Args:
+        prefix_path: Wine prefix root.
+        install_id: UPC install_id (per game).
+        install_dir: Absolute Linux install path.
+    """
     try:
         active_prefix = resolve_active_prefix_dir(prefix_path)
         if active_prefix is None:
@@ -155,7 +206,14 @@ def clean_install_registry(
     prefix_path: str,
     install_id: str,
 ) -> None:
-    """Clean install registry."""
+    """Remove the install-dir registry section for one game.
+
+    No-op when no install_id or no matching section is present.
+
+    Args:
+        prefix_path: Wine prefix root.
+        install_id: UPC install_id.
+    """
     if not install_id:
         return
     try:
@@ -193,7 +251,16 @@ def clean_install_registry(
 
 
 def get_directory_size(path: str) -> int:
-    """Get directory size."""
+    """Sum the file sizes under a directory tree.
+
+    Per-file stat failures are silently skipped.
+
+    Args:
+        path: Directory root.
+
+    Returns:
+        Total size in bytes (0 on top-level walk failure).
+    """
     total = 0
     try:
         for dirpath, _dirs, filenames in os.walk(path):
@@ -208,7 +275,14 @@ def get_directory_size(path: str) -> int:
 
 
 def parse_positive_int(value: Any) -> int | None:
-    """Parse positive int."""
+    """Parse a value as a positive int.
+
+    Args:
+        value: Any value to coerce.
+
+    Returns:
+        Positive int, or ``None`` on parse failure / non-positive.
+    """
     try:
         parsed = int(value)
     except (TypeError, ValueError):
@@ -217,14 +291,28 @@ def parse_positive_int(value: Any) -> int | None:
 
 
 class _ShortcutRegistry:
-    """Shortcut registry."""
+    """Read access to Unifideck's persistent shortcut-registry JSON.
+
+    Used by the installer to find the Steam appid associated
+    with the user's Ubisoft games — needed for compat-tool
+    selection and registry injection.
+    """
 
     def __init__(self, config: UbisoftConfig) -> None:
-        """Initialize the instance."""
+        """Bind the shortcut-registry helper to its config snapshot.
+
+        Args:
+            config: Frozen ``UbisoftConfig`` (provides the
+                ``data_dir`` for registry I/O).
+        """
         self._config = config
 
     def load(self) -> dict[str, Any]:
-        """Load."""
+        """Load ``shortcuts_registry.json`` from the data dir.
+
+        Returns:
+            Parsed dict (empty on missing/malformed file).
+        """
         path = Path(self._config.data_dir_expanded) / "shortcuts_registry.json"
         if not path.is_file():
             return {}
@@ -246,7 +334,15 @@ class _ShortcutRegistry:
         self,
         registry: dict[str, Any],
     ) -> int | None:
-        """Scan for UBISOFT appid."""
+        """Find any positive Ubisoft appid in the registry.
+
+        Args:
+            registry: Parsed registry dict.
+
+        Returns:
+            First positive ``appid_unsigned`` under a
+            ``ubisoft:*`` key, or ``None``.
+        """
         for key, entry in registry.items():
             if not isinstance(key, str) or not key.startswith("ubisoft:"):
                 continue
@@ -263,7 +359,19 @@ class _ShortcutRegistry:
         self,
         store_game_id: str | None,
     ) -> int | None:
-        """Resolve shortcut appid."""
+        """Resolve the Steam appid associated with a Ubisoft launch.
+
+        Resolution order: exact registry lookup by store_game_id →
+        any Ubisoft entry → Steam compat env vars (SteamAppId,
+        SteamGameId, STEAM_COMPAT_APP_ID) → any Ubisoft entry as a
+        last resort.
+
+        Args:
+            store_game_id: Ubisoft store_game_id (may be ``None``).
+
+        Returns:
+            Steam appid (unsigned), or ``None`` if nothing resolves.
+        """
         registry = self.load()
         if store_game_id:
             entry = registry.get(store_game_id, {})

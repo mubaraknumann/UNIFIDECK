@@ -51,7 +51,19 @@ _STANDARD_INSTALL_PATH_MARKERS = (
 def extract_game_id_from_registry(
     prefix_path: str,
 ) -> str | None:
-    """Extract game ID from registry."""
+    """Pull the UPC install-id out of a prefix's Wine registry.
+
+    Tries ``<prefix>/system.reg`` then ``<prefix>/pfx/system.reg``;
+    within each, prefers ``Software\\Wow6432Node\\...\\Installs\\<id>``
+    and falls back to ``user.reg`` sibling scans.
+
+    Args:
+        prefix_path: Wine prefix root.
+
+    Returns:
+        Install-id string, or ``None`` if no installs entry
+        is present in either reg file.
+    """
     prefix = Path(prefix_path)
     for reg_name in ("system.reg", "pfx/system.reg"):
         reg_path = prefix / reg_name
@@ -72,7 +84,14 @@ def extract_game_id_from_registry(
 
 
 def read_reg_file(reg_path: str) -> str | None:
-    """Read reg file."""
+    """Read a Wine registry file with permissive decoding.
+
+    Args:
+        reg_path: Absolute path.
+
+    Returns:
+        File text, or ``None`` on read failure.
+    """
     try:
         return Path(reg_path).read_text(
             encoding="utf-8",
@@ -83,7 +102,18 @@ def read_reg_file(reg_path: str) -> str | None:
 
 
 def scan_system_reg_installs(content: str) -> str | None:
-    """Scan system reg installs."""
+    """Find the best Ubisoft install_id in a system.reg dump.
+
+    Prefers entries whose InstallDir contains one of the
+    standard UPC games-dir path markers; falls back to the
+    first match otherwise (custom install path).
+
+    Args:
+        content: system.reg text.
+
+    Returns:
+        Install-id, or ``None`` if no Installs block found.
+    """
     fallback_id: str | None = None
     for match in _REGISTRY_INSTALLS_PATTERN.finditer(content):
         game_id = match.group(1)
@@ -111,7 +141,15 @@ def scan_system_reg_installs(content: str) -> str | None:
 def extract_id_from_user_reg_sibling(
     reg_path: str,
 ) -> str | None:
-    """Extract ID from user reg sibling."""
+    """Read an Installs entry from the ``user.reg`` next to a ``system.reg``.
+
+    Args:
+        reg_path: Path to a ``system.reg``.
+
+    Returns:
+        Install-id, or ``None`` if no sibling user.reg or no
+        matching entry.
+    """
     user_reg = reg_path.replace("system.reg", "user.reg")
     if not Path(user_reg).is_file():
         return None
@@ -132,17 +170,39 @@ def extract_id_from_user_reg_sibling(
 
 
 class _IdMapSources:
-    """Id map sources."""
+    """External sources feeding the Ubisoft id_map.
+
+    Two sources: UPC's binary ``configurations`` file (parsed
+    via ``parser_binary``), and a community-maintained
+    ``space_id|name`` database fetched from GitHub. Both feed
+    the in-memory id_map cache through ``update_bulk``.
+    """
 
     def __init__(self, idmap: UbisoftIdMap) -> None:
-        """Initialize the instance."""
+        """Bind the sources helper to its owning id_map store.
+
+        Args:
+            idmap: Parent ``UbisoftIdMap`` instance.
+        """
         self._idmap = idmap
 
     async def refresh_from_configurations(
         self,
         space_id: str | None = None,
     ) -> bool:
-        """Refresh from configurations."""
+        """Re-parse UPC's configurations file and refresh the id_map.
+
+        Tries the template prefix's configurations first; falls
+        back to scanning every game prefix for one that has a
+        configurations file. Returns ``False`` if none were
+        found or all parses produced empty maps.
+
+        Args:
+            space_id: Reserved (unused).
+
+        Returns:
+            True iff the id_map was refreshed.
+        """
         try:
             from ..ubisoft_parser import (
                 build_id_map_from_configurations,
@@ -198,7 +258,16 @@ class _IdMapSources:
         parser_fn: Any,
         label: str,
     ) -> bool:
-        """Refresh from path."""
+        """Parse one configurations file and merge it into the id_map.
+
+        Args:
+            config_path: Absolute path to a UPC configurations file.
+            parser_fn: Parser callable (``build_id_map_from_configurations``).
+            label: Free-form label for diagnostic logs.
+
+        Returns:
+            True iff parsing succeeded and the map was non-empty.
+        """
         try:
             new_map = await asyncio.to_thread(
                 parser_fn,
@@ -227,7 +296,15 @@ class _IdMapSources:
     async def fetch_game_id_database(
         self,
     ) -> list[tuple[str, str]]:
-        """Fetch game ID database."""
+        """Fetch (and cache) the community-maintained Ubisoft game-ID list.
+
+        Uses a TTL cache (``game_id_db_max_age_seconds``). When
+        fresh cache is missing and the download fails, returns
+        an empty list rather than raising.
+
+        Returns:
+            List of ``(install_id, name)`` tuples.
+        """
         config = self._idmap._config
         cache_file = config.game_id_db_file_expanded
         max_age = config.game_id_db_max_age_seconds
@@ -267,7 +344,16 @@ class _IdMapSources:
         self,
         game_name: str,
     ) -> str | None:
-        """Lookup game ID by name."""
+        """Resolve an install_id from a game name via the community DB.
+
+        Matches with the standard id_map name normalization.
+
+        Args:
+            game_name: Display name to look up.
+
+        Returns:
+            Install-id string, or ``None`` on miss / fetch error.
+        """
         if not game_name:
             return None
         try:
@@ -301,7 +387,16 @@ def _download_game_id_database(
     url: str,
     dest_path: str,
 ) -> None:
-    """Download game ID database."""
+    """Stream-download the game-ID database to a temp file then atomically rename.
+
+    Uses a permissive SSL context — the upstream CDN ships
+    stale certificates and the payload is treated as
+    advisory.
+
+    Args:
+        url: Source URL.
+        dest_path: Final destination path.
+    """
     dest_p = Path(dest_path)
     tmp_path = dest_p.with_suffix(dest_p.suffix + ".tmp")
     ctx = ssl_ctx_permissive(
@@ -332,7 +427,18 @@ def _download_game_id_database(
 def _parse_game_id_database(
     filepath: str,
 ) -> list[tuple[str, str]]:
-    """Parse game ID database."""
+    """Parse the ``id, name`` line-format used by the community DB.
+
+    Lines starting with ``#`` are treated as comments and
+    skipped. Lines whose ID part isn't all-digits are skipped
+    silently.
+
+    Args:
+        filepath: Absolute path to the cached DB file.
+
+    Returns:
+        List of ``(install_id, name)`` tuples.
+    """
     entries: list[tuple[str, str]] = []
     try:
         content = Path(filepath).read_text(

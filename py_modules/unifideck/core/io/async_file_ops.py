@@ -41,14 +41,34 @@ PathLike = str | os.PathLike
 
 
 async def exists(path: PathLike) -> bool:
-    """Check if a path exists (file or directory)."""
+    """Async existence check (file OR directory).
+
+    Runs ``Path.exists`` on a worker thread to keep the
+    event loop responsive.
+
+    Args:
+        path: Path to test.
+
+    Returns:
+        True iff the path resolves to an existing entry.
+    """
     return await asyncio.to_thread(
         lambda: Path(path).exists(),
     )
 
 
 async def is_file(path: PathLike) -> bool:
-    """Check if a path is a regular file."""
+    """Async regular-file check.
+
+    Runs ``Path.is_file`` on a worker thread.
+
+    Args:
+        path: Path to test.
+
+    Returns:
+        True iff the path is a regular file (False for
+        directories, symlinks to nothing, devices, …).
+    """
     return await asyncio.to_thread(
         lambda: Path(path).is_file(),
     )
@@ -117,7 +137,17 @@ async def ensure_dir(path: PathLike) -> bool:
 
 
 async def copy(src: PathLike, dst: PathLike) -> bool:
-    """Copy a file. Returns True on success."""
+    """Async file copy via ``shutil.copy2`` on a thread.
+
+    Preserves metadata. Failures are logged but not raised.
+
+    Args:
+        src: Source path.
+        dst: Destination path.
+
+    Returns:
+        True on success, False on OSError / shutil.Error.
+    """
     try:
         await asyncio.to_thread(shutil.copy2, src, dst)
         return True
@@ -146,6 +176,7 @@ async def remove(path: PathLike) -> bool:
     """Delete a file or directory tree. Returns True on success."""
     try:
         def _remove_sync():
+            """Blocking recursive removal of the path (rmtree for dirs, unlink for files)."""
             p = Path(path)
             if not p.exists():
                 return
@@ -181,7 +212,22 @@ async def read_text(path: PathLike, encoding: str = "utf-8") -> str | None:
 
 async def write_text(path: PathLike, content: str,
                      encoding: str = "utf-8", mode: int = 0o644) -> bool:
-    """Write text atomically (tmp + rename) with optional chmod."""
+    """Async atomic text write with optional chmod.
+
+    Writes to a sibling ``.tmp`` file then renames over the
+    target so partial writes never reach disk. Parent dirs
+    are created on demand. Failures are logged but not raised.
+
+    Args:
+        path: Destination path.
+        content: Text to write.
+        encoding: Text encoding (default UTF-8).
+        mode: chmod mode applied after the rename (only when
+            non-default 0o644).
+
+    Returns:
+        True on success, False on OSError.
+    """
     return await asyncio.to_thread(_write_text_sync, path, content, encoding, mode)
 
 

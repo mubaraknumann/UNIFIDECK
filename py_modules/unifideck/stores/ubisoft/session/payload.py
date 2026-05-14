@@ -35,10 +35,21 @@ _HASH_CHUNK_SIZE = 1024 * 1024
 
 
 class _PayloadSync:
-    """Payload sync."""
+    """Copy UPC credentials and auth-cache artifacts between Wine prefixes.
+
+    Handles two payload kinds: DPAPI-encrypted credentials (with
+    MachineGuid guard) and unencrypted cache artifacts. Uses
+    SHA-256 hashing for idempotent dedup so repeated syncs of
+    identical files are no-ops.
+    """
 
     def __init__(self, parent: UbisoftSession) -> None:
-        """Initialize the instance."""
+        """Bind the payload sync helper to its parent session.
+
+        Args:
+            parent: Owning ``UbisoftSession`` instance (provides
+                config, paths, and the DPAPI guard).
+        """
         self._parent = parent
 
     def sync_payload_to_prefix(
@@ -51,7 +62,24 @@ class _PayloadSync:
         handle_directories: bool,
         log_label: str,
     ) -> int:
-        """Sync payload to prefix."""
+        """Generic payload sync — iterate per-user homes and copy each entry.
+
+        Skips entirely when source/target resolve to the same path,
+        when the payload is empty, or (with DPAPI guard) when the
+        MachineGuids differ.
+
+        Args:
+            source_prefix: Source prefix root.
+            target_prefix: Target prefix root.
+            payload_sources: ``{rel_path: abs_src_path}``.
+            apply_dpapi_guard: Skip on MachineGuid mismatch when True.
+            handle_directories: True for cache artifacts (may be
+                directory trees); False for credential files.
+            log_label: Free-form label for logs.
+
+        Returns:
+            Number of entries actually copied.
+        """
         if self.should_skip_payload_sync(
             source_prefix,
             target_prefix,
@@ -84,7 +112,17 @@ class _PayloadSync:
         payload_sources: dict[str, str],
         apply_dpapi_guard: bool,
     ) -> bool:
-        """Check whether skip payload sync."""
+        """Composite skip predicate for ``sync_payload_to_prefix``.
+
+        Args:
+            source_prefix: Source prefix root.
+            target_prefix: Target prefix root.
+            payload_sources: Empty dict triggers skip.
+            apply_dpapi_guard: When True, MachineGuid mismatch triggers skip.
+
+        Returns:
+            True iff sync should be skipped.
+        """
         if os.path.realpath(source_prefix) == os.path.realpath(target_prefix):
             return True
         if not payload_sources:
@@ -116,7 +154,22 @@ class _PayloadSync:
         log_label: str,
         rel_path: str,
     ) -> bool:
-        """Copy payload entry."""
+        """Copy one source path into the target, skipping when content is identical.
+
+        Uses ``hash_artifact`` for the equality check, handles
+        directory replacement when ``handle_directories=True``,
+        and creates parent dirs as needed.
+
+        Args:
+            src_path: Source file or directory.
+            dst_path: Destination path.
+            handle_directories: Required when the source may be a tree.
+            log_label: Free-form label for logs.
+            rel_path: Relative path inside the prefix (for logs).
+
+        Returns:
+            True iff a copy actually happened (False if identical or on error).
+        """
         if os.path.exists(dst_path):
             try:
                 same = self.hash_artifact(src_path) == self.hash_artifact(dst_path)
@@ -157,7 +210,15 @@ class _PayloadSync:
         source_prefix: str,
         target_prefix: str,
     ) -> int:
-        """Sync credentials to prefix."""
+        """Sync the DPAPI-encrypted credential files into a target prefix.
+
+        Args:
+            source_prefix: Source prefix (where credentials live).
+            target_prefix: Destination prefix.
+
+        Returns:
+            Number of credential files actually copied.
+        """
         return self.sync_payload_to_prefix(
             source_prefix=source_prefix,
             target_prefix=target_prefix,
@@ -173,7 +234,17 @@ class _PayloadSync:
         self,
         source_prefix: str,
     ) -> dict[str, str]:
-        """Collect credential sources."""
+        """Discover the credential files in a source prefix.
+
+        Walks user homes (pfx_first=True). First file matching each
+        of ``config.upc_credential_files`` wins.
+
+        Args:
+            source_prefix: Source prefix to scan.
+
+        Returns:
+            ``{credential_filename: absolute_path}``.
+        """
         source_files: dict[str, str] = {}
         for _root, user_home in self._parent._paths.iter_user_homes(
             source_prefix,
@@ -199,7 +270,15 @@ class _PayloadSync:
         source_prefix: str,
         target_prefix: str,
     ) -> int:
-        """Sync auth artifacts to prefix."""
+        """Sync UPC's auth-cache artifacts (cookies, http2 cache, …).
+
+        Args:
+            source_prefix: Source prefix (where artifacts live).
+            target_prefix: Destination prefix.
+
+        Returns:
+            Number of artifact files actually copied.
+        """
         return self.sync_payload_to_prefix(
             source_prefix=source_prefix,
             target_prefix=target_prefix,
@@ -215,7 +294,17 @@ class _PayloadSync:
         self,
         source_prefix: str,
     ) -> dict[str, str]:
-        """Collect artifact sources."""
+        """Discover the cache-artifact paths in a source prefix.
+
+        Walks user homes (pfx_first=True). First match for each
+        of ``config.upc_auth_cache_artifacts`` wins.
+
+        Args:
+            source_prefix: Source prefix to scan.
+
+        Returns:
+            ``{rel_path: absolute_path}`` for present files and dirs.
+        """
         artifacts: dict[str, str] = {}
         for _root, user_home in self._parent._paths.iter_user_homes(
             source_prefix,
@@ -238,7 +327,21 @@ class _PayloadSync:
 
     @staticmethod
     def hash_artifact(path: str) -> str:
-        """Check whether artifact."""
+        """Compute a SHA-256 fingerprint of a credentials artefact.
+
+        Used to detect whether the captured auth payload changed
+        between captures so the propagator can avoid redundant
+        writes into every game prefix. Both files and directories
+        are accepted; directories hash all contained file bytes
+        in deterministic order.
+
+        Args:
+            path: File or directory to hash.
+
+        Returns:
+            Hex SHA-256 digest. For non-existent paths the empty
+            digest of an unfed SHA-256 is returned.
+        """
         digest = hashlib.sha256()
         if os.path.isdir(path):
             _PayloadSync._hash_directory_into(digest, path)
@@ -248,7 +351,16 @@ class _PayloadSync:
 
     @staticmethod
     def _hash_directory_into(digest: hashlib._Hash, path: str) -> None:
-        """Hash directory into."""
+        """Update a hash digest with the contents of a directory tree.
+
+        Walks files sorted alphabetically per directory (sub-dirs in
+        filesystem order) for a stable hash. Each file's relative
+        path is included in the digest so renames break equality.
+
+        Args:
+            digest: hashlib digest object (mutated).
+            path: Directory root to walk.
+        """
         for root, _dirs, files in os.walk(path):
             files.sort()
             for name in files:
@@ -259,7 +371,14 @@ class _PayloadSync:
 
     @staticmethod
     def _hash_file_into(digest: hashlib._Hash, path: str) -> None:
-        """Hash file into."""
+        """Update a hash digest with the contents of one file in 1 MB chunks.
+
+        Read errors are silent (the file is omitted from the digest).
+
+        Args:
+            digest: hashlib digest object (mutated).
+            path: File to read.
+        """
         try:
             with open(path, "rb") as f:
                 for chunk in iter(

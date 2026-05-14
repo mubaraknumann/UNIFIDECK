@@ -38,7 +38,13 @@ _EXE_PATTERNS: tuple[str, ...] = (
 
 
 class EpicExeResolver:
-    """Epic exe resolver."""
+    """Resolve the playable executable for an Epic title.
+
+    Tries the legendary manifest's ``launch_exe`` first;
+    if that's missing or invalid (common for UE titles),
+    scans the install dir with a curated set of glob
+    patterns + skip-list for installers/redistributables.
+    """
 
     def __init__(
         self,
@@ -46,13 +52,29 @@ class EpicExeResolver:
         find_exe: Callable[[str, list[str] | None], str | None],
         info_timeout_seconds: float,
     ) -> None:
-        """Initialize the instance."""
+        """Wire the resolver dependencies (config, prefixes, manifests cache).
+
+        Args:
+            config: ConfigManager.
+            epic_root: Absolute path to the Epic install root.
+            install_dir: Absolute path to the game install directory.
+            manifest_cache: Pre-loaded manifest cache (avoids
+                re-reading from disk on every probe).
+        """
         self._cli_path = cli_path
         self._find_exe = find_exe
         self._info_timeout_seconds = info_timeout_seconds
 
     async def resolve(self, game_id: str) -> dict[str, Any]:
-        """Resolve."""
+        """Resolve the executable + display title + install path for one game.
+
+        Args:
+            game_id: Epic game identifier.
+
+        Returns:
+            Dict ``{game_id, install_path, executable, title}``.
+            String values are empty on failure to resolve them.
+        """
         info = await self._fetch_info(game_id)
         install_path = self._extract_install_path(info)
         title = self._extract_title(info, game_id)
@@ -65,7 +87,14 @@ class EpicExeResolver:
         }
 
     async def _fetch_info(self, game_id: str) -> dict[str, Any] | None:
-        """Fetch info."""
+        """Wrap ``legendary info`` (returns ``None`` when the CLI is unavailable).
+
+        Args:
+            game_id: Epic game identifier.
+
+        Returns:
+            Parsed manifest dict, or ``None``.
+        """
         if not self._cli_path:
             return None
         return await fetch_info(
@@ -76,7 +105,14 @@ class EpicExeResolver:
 
     @staticmethod
     def _extract_install_path(info: dict | None) -> str | None:
-        """Extract install path."""
+        """Pull ``install.install_path`` out of a legendary info dict.
+
+        Args:
+            info: Parsed legendary info, or ``None``.
+
+        Returns:
+            Install path string, or ``None`` if missing.
+        """
         if not isinstance(info, dict):
             return None
         install = info.get('install')
@@ -88,7 +124,15 @@ class EpicExeResolver:
 
     @staticmethod
     def _extract_title(info: dict | None, game_id: str) -> str:
-        """Extract title."""
+        """Pull ``game.title`` out of a legendary info dict (with fallback).
+
+        Args:
+            info: Parsed legendary info, or ``None``.
+            game_id: Fallback used when no title is present.
+
+        Returns:
+            Display title.
+        """
         if isinstance(info, dict):
             game = info.get('game')
             if isinstance(game, dict):
@@ -100,7 +144,15 @@ class EpicExeResolver:
     def _resolve_executable(
         self, install_path: str | None, info: dict | None,
     ) -> str | None:
-        """Resolve executable."""
+        """Resolve the executable via manifest hint → glob scan → generic fallback.
+
+        Args:
+            install_path: Game install directory.
+            info: Parsed legendary info, or ``None``.
+
+        Returns:
+            Absolute exe path, or ``None``.
+        """
         if not install_path:
             return None
         manifest = info.get('manifest', {}) if isinstance(info, dict) else {}
@@ -121,7 +173,19 @@ class EpicExeResolver:
 
     @staticmethod
     def _scan_install_path(install_path: str) -> str | None:
-        """Scan install path."""
+        """Glob for executables under the install dir, ignoring installers.
+
+        Tries each pattern in ``_EXE_PATTERNS``, drops any match
+        whose basename matches ``_SKIP_PATTERNS`` or whose path
+        lives under a redistributables directory, then picks the
+        largest survivor.
+
+        Args:
+            install_path: Game install directory.
+
+        Returns:
+            Path to the largest plausible exe, or ``None``.
+        """
         if not install_path or not os.path.isdir(install_path):
             return None
         candidates: list[tuple[int, str]] = []

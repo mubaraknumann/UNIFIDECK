@@ -1,3 +1,5 @@
+"""Microsoft store configuration — frozen dataclass with OAuth endpoints, scopes, token file path."""
+
 from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
@@ -10,7 +12,13 @@ _MS_CONFIG_PREFIX = "stores.microsoft"
 _DEFAULT_TOKEN_FILE = "~/.local/share/unifideck/microsoft_tokens.json"
 @dataclass(frozen=True)
 class MicrosoftConfig:
-    """Microsoft config."""
+    """Frozen Microsoft store configuration.
+
+    Holds OAuth endpoints (auth_url, token_url, redirect
+    URIs), XBL/XSTS endpoints, xCloud catalog URLs, and
+    tunables (refresh threshold, user-agents, token file).
+    Built from a ``ConfigManager`` via ``from_config_manager``.
+    """
     client_id: str = ""
     scope: str = ""
     auth_url: str = ""
@@ -33,20 +41,59 @@ class MicrosoftConfig:
 
     @classmethod
     def from_config_manager(cls, config: ConfigManager | None) -> MicrosoftConfig:
-        """From config manager."""
+        """Build a ``MicrosoftConfig`` from a ConfigManager (or defaults).
+
+        Reads every key under ``stores.microsoft.*``. Missing
+        keys produce empty strings (or sensible defaults for
+        tunables). ``allowed_redirect_uris`` falls back to
+        ``[redirect_uri]`` if not explicitly configured.
+
+        Args:
+            config: ConfigManager, or ``None`` (yields a
+                ``MicrosoftConfig`` with empty required fields).
+
+        Returns:
+            Fully-populated ``MicrosoftConfig``.
+        """
         def _s(key: str, default: str = "") -> str:
-            """S."""
+            """Read a stripped string from the Microsoft config namespace.
+
+            Args:
+                key: Suffix appended to ``stores.microsoft.``.
+                default: Default returned if the key is missing.
+
+            Returns:
+                Stripped value or default.
+            """
             val = get_cfg(config, f"{_MS_CONFIG_PREFIX}.{key}", default)
             return str(val).strip() if val is not None else default
         def _i(key: str, default: int) -> int:
-            """I."""
+            """Read an int from the Microsoft config namespace, defaulting on parse failure.
+
+            Args:
+                key: Suffix appended to ``stores.microsoft.``.
+                default: Default returned on missing key or parse failure.
+
+            Returns:
+                Integer value.
+            """
             val = get_cfg(config, f"{_MS_CONFIG_PREFIX}.{key}", default)
             try:
                 return int(val)
             except (TypeError, ValueError):
                 return default
         def _list(key: str) -> list[str]:
-            """List."""
+            """Read a list-of-strings from the Microsoft config namespace.
+
+            Filters out non-string and empty entries.
+
+            Args:
+                key: Suffix appended to ``stores.microsoft.``.
+
+            Returns:
+                Non-empty string list (empty list if the key is
+                missing or non-list).
+            """
             val = get_cfg(config, f"{_MS_CONFIG_PREFIX}.{key}", None)
             if not isinstance(val, list):
                 return []
@@ -89,7 +136,13 @@ class MicrosoftConfig:
 
     def is_valid(self) -> bool:
 
-        """Check whether valid."""
+        """Check whether every required URL / scope is non-empty.
+
+        Logs the list of missing keys at WARNING.
+
+        Returns:
+            True iff all required fields are populated.
+        """
         required = (
             self.client_id,
             self.scope,
@@ -120,7 +173,11 @@ class MicrosoftConfig:
             return False
         return True
     def describe(self) -> str:
-        """Describe."""
+        """Build a short, redacted description suitable for logs.
+
+        Returns:
+            String like ``MicrosoftConfig(client_id=abc123…, ...)``.
+        """
         return (
             f"MicrosoftConfig(client_id={self.client_id[:6]}…, "
             f"scope={self.scope!r}, "

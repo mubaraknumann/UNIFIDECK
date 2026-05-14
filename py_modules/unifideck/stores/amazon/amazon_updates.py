@@ -18,7 +18,11 @@ logger = logging.getLogger(__name__)
 
 
 class AmazonUpdateChecker:
-    """Amazon update checker."""
+    """Update detection + size lookup via the nile CLI.
+
+    All operations are JSON-driven (``--json``) and timeout-
+    bounded; failures degrade silently to empty results.
+    """
 
     def __init__(
         self,
@@ -29,7 +33,18 @@ class AmazonUpdateChecker:
         get_size_timeout: int,
         default_install_root: str,
     ) -> None:
-        """Initialize the instance."""
+        """Wire dependencies for the Amazon update-check specialist.
+
+        Args:
+            bus: Event bus.
+            cli_path: Path to the ``nile`` binary.
+            library: Amazon library reader.
+            list_updates_timeout: Hard timeout for the
+                ``nile list-updates`` call.
+            get_size_timeout: Hard timeout for size-probing calls.
+            default_install_root: Default install root (used when
+                the library doesn't record a per-game path).
+        """
         self._bus = bus
         self._cli_path = cli_path
         self._library = library
@@ -38,7 +53,15 @@ class AmazonUpdateChecker:
         self._default_install_root = default_install_root
 
     async def check_for_updates(self) -> list[str]:
-        """Check for updates."""
+        """List game IDs with a pending Amazon update.
+
+        Runs ``nile list-updates --json`` and extracts the
+        ``id``/``game_id`` field from each entry. Returns empty
+        on timeout, non-zero exit, or malformed JSON.
+
+        Returns:
+            List of Amazon game IDs needing updates.
+        """
         if not self._cli_path:
             return []
         try:
@@ -86,7 +109,16 @@ class AmazonUpdateChecker:
         return out
 
     async def get_game_size(self, game_id: str) -> int | None:
-        """Get game size."""
+        """Probe download size for a game via ``nile install --info``.
+
+        Tries ``download_size``, ``size``, ``total_size`` in order.
+
+        Args:
+            game_id: Amazon game identifier.
+
+        Returns:
+            Size in bytes, or ``None`` on any failure.
+        """
         if not self._cli_path:
             return None
         try:
@@ -127,7 +159,18 @@ class AmazonUpdateChecker:
         return None
 
     async def resolve_current_base_path(self, game_id: str) -> str:
-        """Resolve current base path."""
+        """Resolve the current install base path for an installed game.
+
+        Returns the *parent* of the installed game directory (since
+        nile installs games under ``<base>/<game_id>/``), or the
+        configured default install root when the game isn't installed.
+
+        Args:
+            game_id: Amazon game identifier.
+
+        Returns:
+            Absolute base path.
+        """
         installed = await self._library.read_installed_ids()
         info = installed.get(game_id) or {}
         path = info.get('path') or info.get('install_path')

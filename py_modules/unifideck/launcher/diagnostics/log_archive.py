@@ -1,3 +1,5 @@
+"""Persistent log archival — writes per-launch log files to disk for post-mortem inspection."""
+
 from __future__ import annotations
 import logging
 import os
@@ -8,7 +10,18 @@ if TYPE_CHECKING:
     from ...config import ConfigManager
 logger = logging.getLogger(__name__)
 def _resolve_archive_dir(config: ConfigManager | None) -> Path:
-    """Resolve archive dir."""
+    """Resolve and create the per-launch archive directory.
+
+    Reads ``logs.archive_path`` from config. Default
+    ``~/.local/share/unifideck/launches``. Failure to create
+    the directory is logged but not raised.
+
+    Args:
+        config: ConfigManager, or ``None`` (uses default).
+
+    Returns:
+        Absolute path (may not exist if mkdir failed).
+    """
     if config is None or not hasattr(config, "get_str"):
         raw = "~/.local/share/unifideck/launches"
     else:
@@ -26,12 +39,30 @@ def _resolve_archive_dir(config: ConfigManager | None) -> Path:
         )
     return path
 def _resolve_retention_seconds(config: ConfigManager | None) -> int:
-    """Resolve retention seconds."""
+    """Resolve the log-retention duration from config.
+
+    Reads ``logs.retention_days``. Default 7 days.
+
+    Args:
+        config: ConfigManager, or ``None`` (uses default).
+
+    Returns:
+        Retention in seconds.
+    """
     if config is None or not hasattr(config, "get_int"):
         return 7 * 24 * 3600
     return config.get_int("logs.retention_days", 7) * 24 * 3600
 def prune_old_launches(config: ConfigManager | None) -> int:
-    """Prune old launches."""
+    """Delete archived ``*.log`` files older than the configured retention.
+
+    Failures (unlink / stat / readdir) are logged but not raised.
+
+    Args:
+        config: ConfigManager.
+
+    Returns:
+        Number of files successfully removed.
+    """
     archive_dir = _resolve_archive_dir(config)
     if not archive_dir.is_dir():
         return 0
@@ -65,7 +96,17 @@ def attach_launch_handler(
     *, min_level: int = logging.INFO,
 ) -> logging.Handler | None:
 
-    """Attach launch handler."""
+    """Attach a per-launch FileHandler to ``unifideck.launcher``.
+
+    Args:
+        launch_id: Correlation ID (used as the filename stem).
+        config: ConfigManager (for archive dir).
+        min_level: Minimum level captured to the file.
+
+    Returns:
+        The handler instance (pass to ``detach_launch_handler``),
+        or ``None`` if the file couldn't be opened.
+    """
     archive_dir = _resolve_archive_dir(config)
     path = archive_dir / f"{launch_id}.log"
     try:
@@ -83,7 +124,11 @@ def attach_launch_handler(
         )
         return None
 def detach_launch_handler(handler: logging.Handler | None) -> None:
-    """Detach launch handler."""
+    """Remove and close a handler previously returned by ``attach_launch_handler``.
+
+    Args:
+        handler: The handler to detach, or ``None`` (no-op).
+    """
     if handler is None:
         return
     try:
@@ -95,7 +140,21 @@ def read_launch_logs(
     launch_id: str, config: ConfigManager | None,
     *, max_lines: int = 500,
 ) -> dict:
-    """Read launch logs."""
+    """Read up to ``max_lines`` of the tail of one archived launch log.
+
+    Each line is parsed for a level marker (``[ERROR]`` /
+    ``[WARNING]`` / ``[DEBUG]``; everything else INFO).
+
+    Args:
+        launch_id: Correlation ID.
+        config: ConfigManager.
+        max_lines: Cap on lines returned (tail bias).
+
+    Returns:
+        Dict ``{exists, path, lines, total}``. ``lines`` is a
+        list of ``{level, text}`` dicts, empty if the file is
+        missing or unreadable.
+    """
     archive_dir = _resolve_archive_dir(config)
     path = archive_dir / f"{launch_id}.log"
     result = {
@@ -130,7 +189,22 @@ def export_launch_logs(
     launch_id: str, dest_path: str, config: ConfigManager | None,
 ) -> dict:
 
-    """Export launch logs."""
+    """Copy one archived launch log to a user-chosen path.
+
+    ``dest_path`` is expanded (``~``) and resolved relative to
+    the user's home if not already absolute. Parent dirs are
+    created.
+
+    Args:
+        launch_id: Correlation ID.
+        dest_path: Destination path (absolute or relative to home).
+        config: ConfigManager.
+
+    Returns:
+        Dict ``{success, dest_path, error}``. On failure,
+        ``error`` is either ``"source_missing"`` or the OS
+        error string.
+    """
     import shutil
     archive_dir = _resolve_archive_dir(config)
     src = archive_dir / f"{launch_id}.log"

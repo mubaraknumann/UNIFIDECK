@@ -1,3 +1,5 @@
+"""Atomic Windows registry write helpers used by the per-store language setup modules."""
+
 from __future__ import annotations
 import logging
 import os
@@ -7,11 +9,23 @@ from .matchers import smart_match_locale
 from .resolver import _DEFAULT_LANGUAGE, LOCALE_MAP
 logger = logging.getLogger(__name__)
 def _resolve_prefix(prefix_path: str) -> str:
-    """Resolve prefix."""
+    """Resolve the directory holding the Wine registry files.
+
+    Args:
+        prefix_path: Any path inside (or equal to) the prefix.
+
+    Returns:
+        Path string to the registry-bearing directory.
+    """
     from ..infrastructure.prefix_layout import resolve_registry_prefix
     return str(resolve_registry_prefix(prefix_path))
 def _atomic_write_text(path: str, content: str) -> None:
-    """Atomic write text."""
+    """Atomic text write (temp file + fsync + ``os.replace``).
+
+    Args:
+        path: Destination file path.
+        content: Text to write.
+    """
     target_dir = os.path.dirname(path) or "."
     fd, tmp_path = tempfile.mkstemp(
         prefix=".reg.", suffix=".tmp", dir=target_dir,
@@ -34,7 +48,24 @@ def _update_user_reg(
     lcid: str, slanguage: str, locale_name: str, scountry: str,
 ) -> bool:
 
-    """Update user reg."""
+    """Patch the ``Control Panel\\International`` section of user.reg.
+
+    Writes the four locale keys (``Locale``, ``LocaleName``,
+    ``sLanguage``, ``sCountry``). Existing values are updated
+    in place; missing keys are appended. The whole section is
+    created if absent.
+
+    Args:
+        prefix_path: Registry-bearing prefix directory.
+        lcid: LCID hex code (e.g. ``"00000409"``).
+        slanguage: 3-letter sLanguage code.
+        locale_name: BCP-47 locale name.
+        scountry: Display country name.
+
+    Returns:
+        True iff user.reg was patched (False if the file
+        doesn't exist yet — prefix not initialised).
+    """
     user_reg = os.path.join(prefix_path, "user.reg")
     if not os.path.exists(user_reg):
         logger.warning(
@@ -87,7 +118,19 @@ def _update_user_reg(
     )
     return True
 def _apply_windows_locale(prefix_path: str, language: str) -> bool:
-    """Apply windows locale."""
+    """Apply a locale to user.reg, with fallback to en-US.
+
+    Looks up the locale in ``LOCALE_MAP`` (with fuzzy matching
+    via ``smart_match_locale``); falls back to ``en-US`` if the
+    language has no mapping.
+
+    Args:
+        prefix_path: Any path inside the prefix.
+        language: BCP-47 tag (e.g. ``"fr-FR"`` or ``"fr"``).
+
+    Returns:
+        True iff user.reg was patched.
+    """
     resolved_prefix = _resolve_prefix(prefix_path)
     locale = smart_match_locale(language)
     if locale is None:

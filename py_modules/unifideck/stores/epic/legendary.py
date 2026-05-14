@@ -23,7 +23,22 @@ async def fetch_info(
     timeout: float,
     log_prefix: str = '[epic_legendary]',
 ) -> dict[str, Any] | None:
-    """Fetch info."""
+    """Run ``legendary info <game_id> --json`` and parse the output.
+
+    Single function used by both ``exe_resolver`` and
+    ``updates`` so the subprocess + JSON parse boilerplate
+    isn't duplicated.
+
+    Args:
+        cli_path: Path to the legendary binary.
+        game_id: Epic game identifier.
+        timeout: Subprocess timeout in seconds.
+        log_prefix: Logger prefix for diagnostic messages.
+
+    Returns:
+        Parsed manifest dict, or ``None`` on spawn / timeout /
+        non-zero exit / decode error / non-dict result.
+    """
     if not cli_path or not game_id:
         return None
     try:

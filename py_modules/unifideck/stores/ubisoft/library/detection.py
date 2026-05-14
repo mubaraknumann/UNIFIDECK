@@ -34,14 +34,28 @@ logger = logging.getLogger(__name__)
 
 
 class _InstallDetector:
-    """Install detector."""
+    """Detect installed Ubisoft games on disk and emit install-info dicts.
+
+    Wraps the detection cascade and helpers, exposing a clean API
+    for the library facade. Owns the ``_DetectionCascade`` and
+    ``_DetectionHelpers`` instances.
+    """
 
     def __init__(
         self,
         config: UbisoftConfig,
         id_map: UbisoftIdMap,
     ) -> None:
-        """Initialize the instance."""
+        """Build the install-detector with cascade and helper sub-objects.
+
+        The detector probes the filesystem and Wine registry to
+        decide whether a game is installed; the cascade and
+        helpers split the probe steps into composable pieces.
+
+        Args:
+            config: Ubisoft store config.
+            id_map: Ubisoft ID map (resolves space_id → install_id).
+        """
         self._config = config
         self._id_map = id_map
         self._cascade = _DetectionCascade(self)
@@ -51,7 +65,14 @@ class _InstallDetector:
     def find_game_executable(
         install_path: str,
     ) -> str | None:
-        """Find game executable."""
+        """Scan an install directory for the most likely game executable.
+
+        Args:
+            install_path: Game install directory.
+
+        Returns:
+            Absolute path string to the .exe, or ``None``.
+        """
         return _find_game_executable_impl(install_path)
 
     async def write_install_marker(
@@ -61,7 +82,14 @@ class _InstallDetector:
         executable: str,
         game_title: str = "",
     ) -> None:
-        """Write install marker."""
+        """Write the ``.unifideck_ubisoft`` JSON marker into an install dir.
+
+        Args:
+            space_id: UPC space_id.
+            install_path: Install directory.
+            executable: Relative or absolute exe path.
+            game_title: Display name.
+        """
         await _write_install_marker_impl(
             space_id,
             install_path,
@@ -71,16 +99,40 @@ class _InstallDetector:
 
     @staticmethod
     def load_json_file_safe(path: str) -> Any | None:
-        """Load JSON file safe."""
+        """Load a JSON file, returning ``None`` on any error.
+
+        Args:
+            path: File path.
+
+        Returns:
+            Parsed value or ``None``.
+        """
         return _load_json_file_safe_impl(path)
 
     @staticmethod
     def get_game_official_url(game_id: str) -> str:
-        """Get game official URL."""
+        """Return the canonical Ubisoft store URL for one space_id.
+
+        Pure helper — doesn't touch any state.
+
+        Args:
+            game_id: Ubisoft space_id.
+
+        Returns:
+            Store URL string.
+        """
         return f"https://store.ubisoft.com/game?pid={game_id}"
 
     async def get_installed(self) -> dict[str, Any]:
-        """Get installed."""
+        """Walk every per-game prefix and emit a map of installed games.
+
+        For each prefix bearing the bootstrap marker, runs
+        ``_detect_installed_game`` to identify the game on disk and
+        auto-resolves the id_map entry when missing.
+
+        Returns:
+            ``{space_id: install_info}`` for every detected install.
+        """
         installed: dict[str, Any] = {}
         prefixes_dir = Path(self._config.prefixes_dir_expanded)
         if not prefixes_dir.is_dir():
@@ -119,7 +171,20 @@ class _InstallDetector:
         self,
         game_id: str,
     ) -> dict[str, Any] | None:
-        """Get installed game info."""
+        """Return install info for one game (validates marker first).
+
+        Looks up the game's prefix directory, requires the bootstrap
+        marker to be present, runs the detection cascade, and
+        auto-resolves any missing id_map entry from the registry.
+
+        Args:
+            game_id: UPC space_id.
+
+        Returns:
+            Install-info dict (``space_id``, ``executable``,
+            ``install_path``, ``work_dir``, ``title``), or ``None``
+            if the prefix or marker is absent or detection failed.
+        """
         prefix_path = Path(self._config.prefixes_dir_expanded) / game_id
         if not prefix_path.is_dir():
             return None
@@ -144,7 +209,18 @@ class _InstallDetector:
         prefix_path: str,
         game_info: dict[str, Any],
     ) -> None:
-        """Auto resolve ID from registry."""
+        """Synchronous variant — fill missing launch_id from system.reg.
+
+        No-op if the id_map already has a launch_id or
+        ubisoftconnect_game_id for this space_id. Otherwise reads
+        the install ID from the prefix's system.reg and writes it
+        into the id_map.
+
+        Args:
+            space_id: UPC space_id.
+            prefix_path: Wine prefix path.
+            game_info: Detected install info (carries the title).
+        """
         existing = self._id_map.get_entry(space_id)
         if existing.get("launch_id") or existing.get("ubisoftconnect_game_id"):
             return
@@ -174,7 +250,16 @@ class _InstallDetector:
         prefix_path: str,
         game_info: dict[str, Any],
     ) -> None:
-        """Auto resolve missing ID."""
+        """Async variant — fill missing launch_id from registry or game-ID DB.
+
+        Tries the prefix's system.reg first; on miss, looks up the
+        game by display name in the iArtorias game-ID database.
+
+        Args:
+            space_id: UPC space_id.
+            prefix_path: Wine prefix path.
+            game_info: Detected install info (carries the title).
+        """
         existing = self._id_map.get_entry(space_id)
         if existing.get("launch_id") or existing.get("ubisoftconnect_game_id"):
             return
@@ -209,7 +294,19 @@ class _InstallDetector:
         space_id: str,
         prefix_path: str,
     ) -> dict[str, Any] | None:
-        """Detect installed game."""
+        """Run the detection cascade on one prefix to identify the installed game.
+
+        Strategies tried in order: marker → in-prefix install state
+        → external roots → registry InstallDir. The first match
+        is returned.
+
+        Args:
+            space_id: UPC space_id (used to score matches).
+            prefix_path: Wine prefix path.
+
+        Returns:
+            Install-info dict on success, ``None`` on no match.
+        """
         try:
             from ..parser import check_install_state
         except ImportError as e:
@@ -258,6 +355,14 @@ class _InstallDetector:
         )
 
     def _get_game_name(self, space_id: str) -> str | None:
-        """Get game name."""
+        """Look up a game's display name from the id_map.
+
+        Args:
+            space_id: Ubisoft space_id.
+
+        Returns:
+            Display name string, or ``None`` if the id_map has
+            no entry for this space_id.
+        """
         entry = self._id_map.get_entry(space_id)
         return entry.get("name")

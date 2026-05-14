@@ -1,3 +1,5 @@
+"""Cache mixin for the subscription service — read/write/invalidate operations against the CacheManager-backed store."""
+
 from __future__ import annotations
 import logging
 import time
@@ -21,7 +23,18 @@ class _CacheMixin:
         self,
         token_manager: MicrosoftTokenManager,
     ) -> str:
-        """Resolve cache key."""
+        """Build a cache key for the current Microsoft account.
+
+        Builds the XBL token chain to extract the xuid and uses it
+        as the per-account cache namespace. Falls back to
+        ``default`` if the chain can't be built.
+
+        Args:
+            token_manager: Microsoft token manager.
+
+        Returns:
+            Cache key string ``<prefix><xuid|"default">``.
+        """
         xuid: str | None = None
         try:
             chain = await token_manager.build_chain()
@@ -35,7 +48,15 @@ class _CacheMixin:
             )
         return f"{_CACHE_KEY_PREFIX}{xuid or 'default'}"
     def _read_cache(self, key: str) -> _CachedEntry | None:
-        """Read cache."""
+        """Read the cached subscription entry for one key.
+
+        Args:
+            key: Cache key from ``_resolve_cache_key``.
+
+        Returns:
+            The cached ``_CachedEntry``, or ``None`` if absent,
+            unreadable, or malformed.
+        """
         try:
             raw = self._cache.get(_CACHE_STORE_NAME, key)
         except Exception:
@@ -47,7 +68,15 @@ class _CacheMixin:
             return _CachedEntry.from_dict(raw)
         return None
     def _write_cache(self, key: str, entry: _CachedEntry) -> None:
-        """Write cache."""
+        """Persist one subscription entry under ``key`` in the cache.
+
+        Failures are logged but not raised — the cache is
+        best-effort.
+
+        Args:
+            key: Cache key.
+            entry: Entry to store.
+        """
         try:
             self._cache.set(_CACHE_STORE_NAME, key, entry.to_dict())
         except Exception:
@@ -55,7 +84,16 @@ class _CacheMixin:
     async def _store_tier_result(
         self, cache_key: str, tier: SubscriptionTier,
     ) -> None:
-        """Store tier result."""
+        """Persist a freshly-probed subscription tier and notify subscribers.
+
+        Builds a ``_CachedEntry`` with the current detection time
+        and end-of-month UTC expiry, writes it to the cache, and
+        emits the state-change event for the new tier.
+
+        Args:
+            cache_key: Per-account cache key.
+            tier: Newly-detected subscription tier.
+        """
         entry = _CachedEntry(
             tier=tier,
             expires_at=_end_of_month_utc(),

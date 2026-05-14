@@ -36,10 +36,29 @@ _DELETE_MIN_PATH_DEPTH = 4
 
 
 class _UninstallPipeline:
-    """Uninstall pipeline."""
+    """Multi-stage Ubisoft uninstall pipeline.
+
+    Steps (each idempotent and best-effort):
+      1. resolve targets (prefix, install_id, install_path);
+      2. try UPC's protocol uninstall (``uplay://uninstall/<id>``);
+      3. refresh the install path post-protocol;
+      4. delete the game directory if still present;
+      5. delete the prefix if the caller asked for it;
+      6. clean registry / id_map / SteamGrid artwork.
+
+    All filesystem deletes go through ``_is_path_safe_to_delete``
+    which refuses to remove ``/``, the home dir, or Unifideck-
+    managed base directories.
+    """
 
     def __init__(self, parent: UbisoftInstaller) -> None:
-        """Initialize the instance."""
+        """Bind the uninstall pipeline to its parent installer.
+
+        Args:
+            parent: Owning ``UbisoftInstaller`` instance (provides
+                access to id_map, paths, library, and the process
+                cleanup helpers).
+        """
         self._parent = parent
 
     async def uninstall_game(
@@ -48,7 +67,21 @@ class _UninstallPipeline:
         *,
         delete_prefix: bool = False,
     ) -> Result:
-        """Uninstall game."""
+        """Orchestrate the full uninstall pipeline for one game.
+
+        Any unexpected exception is caught and returned as a
+        structured ``Result`` with ``uninstall_exception:`` prefix.
+
+        Args:
+            game_id: Ubisoft space_id.
+            delete_prefix: When True, the whole Wine prefix is
+                also deleted (no game-dir delete needed first).
+
+        Returns:
+            ``Result`` — error codes ``game_dir_delete_failed: ...``,
+            ``prefix_delete_failed: ...``,
+            ``uninstall_exception: ...``.
+        """
         try:
             logger.info(
                 "[UbisoftInstaller] uninstalling %s (delete_prefix=%s)",
@@ -111,7 +144,16 @@ class _UninstallPipeline:
         self,
         game_id: str,
     ) -> tuple[str, str | None, str | None]:
-        """Resolve uninstall targets."""
+        """Resolve the prefix path, install_id, and install_path for a game.
+
+        Args:
+            game_id: Ubisoft space_id.
+
+        Returns:
+            Tuple ``(prefix_path, install_id, install_path)``;
+            install_id and install_path may be ``None`` if no
+            install record exists.
+        """
         prefix_path = self._parent._paths.get_prefix_path(
             game_id,
         )
@@ -131,7 +173,21 @@ class _UninstallPipeline:
         install_id: str | None,
         delete_prefix: bool,
     ) -> bool:
-        """Attempt protocol uninstall."""
+        """Decide whether to try ``uplay://uninstall/<id>`` and execute it if so.
+
+        Skipped when ``delete_prefix=True`` (we're nuking the
+        whole prefix anyway) or when no install_id is known.
+
+        Args:
+            game_id: Ubisoft space_id.
+            prefix_path: Wine prefix root.
+            install_id: UPC install_id, or ``None``.
+            delete_prefix: Caller flag.
+
+        Returns:
+            True iff the protocol uninstall was attempted (regardless
+            of whether it actually succeeded).
+        """
         if delete_prefix:
             logger.info(
                 "[UbisoftInstaller] delete_prefix=True: "
@@ -153,7 +209,21 @@ class _UninstallPipeline:
         prefix_path: str,
         install_path: str | None,
     ) -> str | None:
-        """Refresh install path."""
+        """Re-detect the install path after the protocol uninstall ran.
+
+        The protocol uninstall may have moved or deleted the
+        install directory; refreshing here means subsequent
+        fallback delete steps target the right location.
+
+        Args:
+            game_id: Ubisoft space_id.
+            prefix_path: Wine prefix root.
+            install_path: Previously-resolved install path.
+
+        Returns:
+            Fresh install path, falling back to the input if
+            re-detection returns nothing.
+        """
         post_info = self._parent._library._detector._detect_installed_game(
             game_id, prefix_path
         )
@@ -167,7 +237,19 @@ class _UninstallPipeline:
         prefix_path: str,
         delete_prefix: bool,
     ) -> str | None:
-        """Delete game directory."""
+        """Recursively remove the game's install directory (with safety checks).
+
+        Skipped when the install path is already inside a prefix
+        that's about to be deleted (avoids double-delete races).
+
+        Args:
+            install_path: Resolved install path, or ``None``.
+            prefix_path: Wine prefix root.
+            delete_prefix: Caller flag.
+
+        Returns:
+            Error string on failure, or ``None`` on success / no-op.
+        """
         if not install_path or not Path(install_path).is_dir():
             return None
         inside_prefix = str(
@@ -194,7 +276,15 @@ class _UninstallPipeline:
         prefix_path: str,
         delete_prefix: bool,
     ) -> tuple[bool, str | None]:
-        """Delete prefix if requested."""
+        """Recursively delete the Wine prefix if the caller asked for it.
+
+        Args:
+            prefix_path: Wine prefix root.
+            delete_prefix: Caller flag.
+
+        Returns:
+            Tuple ``(prefix_deleted, error_or_none)``.
+        """
         if not delete_prefix:
             return False, None
         if not Path(prefix_path).is_dir():
@@ -214,7 +304,18 @@ class _UninstallPipeline:
         install_id: str | None,
         prefix_deleted: bool,
     ) -> None:
-        """Post uninstall cleanup."""
+        """Final cleanup pass — registry entries + id_map cache.
+
+        When the prefix wasn't deleted, also strips the install
+        registry section. When the prefix WAS deleted, removes
+        the game's id_map entry too (no recovery possible).
+
+        Args:
+            game_id: Ubisoft space_id.
+            prefix_path: Wine prefix root.
+            install_id: UPC install_id (or empty if unknown).
+            prefix_deleted: True iff the prefix was just removed.
+        """
         if not prefix_deleted:
             _reg.clean_install_registry(
                 prefix_path,
@@ -231,7 +332,20 @@ class _UninstallPipeline:
         prefix_path: str,
         install_id: str,
     ) -> bool:
-        """Try protocol uninstall."""
+        """Launch UPC with ``uplay://uninstall/<install_id>`` and wait for completion.
+
+        Bounded by ``_PROTOCOL_UNINSTALL_TIMEOUT_S``; on timeout
+        kills the subprocess and falls back to direct delete.
+
+        Args:
+            game_id: Ubisoft space_id.
+            prefix_path: Wine prefix root.
+            install_id: UPC install_id.
+
+        Returns:
+            True iff the protocol uninstall command was at least
+            spawned (even if it timed out or errored).
+        """
         try:
             launch_env = self._parent._build_upc_launch_env(
                 game_id,
@@ -283,7 +397,19 @@ class _UninstallPipeline:
         target_path: str,
         label: str,
     ) -> bool:
-        """Is path safe to delete."""
+        """Refuse to delete dangerous paths (root, home, Unifideck bases).
+
+        Also refuses paths shorter than ``_DELETE_MIN_PATH_DEPTH``
+        non-slash characters, as a sanity check against
+        accidental short-string corruption.
+
+        Args:
+            target_path: Absolute path being considered.
+            label: Free-form label used in the refusal log.
+
+        Returns:
+            True iff the deletion is allowed.
+        """
         if not target_path:
             logger.error(
                 "[UbisoftInstaller] refusing to delete empty path for %s",
@@ -321,7 +447,17 @@ class _UninstallPipeline:
         *,
         retries: int = 3,
     ) -> bool:
-        """Delete tree with retries."""
+        """rmtree with safety check and bounded retries.
+
+        Args:
+            target_path: Absolute path to remove.
+            label: Free-form label for logs.
+            retries: Max attempts (with 1.5s sleep between).
+
+        Returns:
+            True iff the target was either deleted or absent;
+            False on unsafe path or persistent failure.
+        """
         if not self._is_path_safe_to_delete(target_path, label):
             return False
         resolved = str(Path(target_path).resolve())

@@ -29,7 +29,8 @@ class CacheStore:
     means entries never expire.
     """
 
-    def __init__(self, name: str, path: Path, ttl_seconds: int = 0) -> None:  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(self, name: str, path: Path, ttl_seconds: int = 0) -> None:
+        """Open or create the on-disk store with an optional TTL."""
         self.name = name
         self.path = path
         self.ttl = ttl_seconds
@@ -177,7 +178,8 @@ class CacheManager:
     value = cm.get("steam_metadata", "123456").
     """
 
-    def __init__(self, base_path: str) -> None:  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(self, base_path: str) -> None:
+        """Create the base directory and prepare an empty store registry."""
         self.base_path = Path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)
         self._stores: dict[str, CacheStore] = {}
@@ -189,24 +191,44 @@ class CacheManager:
         self._stores[name] = CacheStore(name, path, ttl_seconds)
 
     def _get_store(self, name: str) -> CacheStore:
+        """Return the registered store or raise ValueError."""
         if name not in self._stores:
             raise ValueError(f"Cache {name!r} not registered")
         return self._stores[name]
             # -------- proxied API --------
-    def get(self, cache: str, key: str) -> Any | None:  # noqa: D102 — documentation pending (Sprint D)
+    def get(self, cache: str, key: str) -> Any | None:
+        """Return the value for key in the named cache, or None."""
         return self._get_store(cache).get(key)
-    def set(self, cache: str, key: str, value: Any) -> None:  # noqa: D102 — documentation pending (Sprint D)
+    def set(self, cache: str, key: str, value: Any) -> None:
+        """Store a value under key in the named cache."""
         self._get_store(cache).set(key, value)
-    def delete(self, cache: str, key: str) -> None:  # noqa: D102 — documentation pending (Sprint D)
+    def delete(self, cache: str, key: str) -> None:
+        """Delete one key from a named cache store.
+
+        Args:
+            cache: Registered cache name.
+            key: Key to remove. No-op if the key is absent.
+
+        Raises:
+            KeyError: ``cache`` is not registered.
+        """
         self._get_store(cache).delete(key)
-    def clear(self, cache: str) -> None:  # noqa: D102 — documentation pending (Sprint D)
+    def clear(self, cache: str) -> None:
+        """Remove every entry from the named cache."""
         self._get_store(cache).clear()
 
     def clear_all(self) -> None:
         """Empty every registered cache in place."""
         for store in self._stores.values():
             store.clear()
-    def cache_size(self, cache: str) -> int:  # noqa: D102 — documentation pending (Sprint D)
+    def cache_size(self, cache: str) -> int:
+        """Return the number of entries in the named cache."""
         return self._get_store(cache).size()
-    def registered_names(self) -> list[str]:  # noqa: D102 — documentation pending (Sprint D)
+    def registered_names(self) -> list[str]:
+        """List every registered cache name.
+
+        Returns:
+            Snapshot list of cache identifiers (order matches
+            registration order).
+        """
         return list(self._stores.keys())

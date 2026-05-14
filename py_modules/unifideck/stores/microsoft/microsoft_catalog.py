@@ -1,3 +1,5 @@
+"""Microsoft Store catalog reader — batched product lookups, locale-aware title resolution."""
+
 from __future__ import annotations
 import asyncio
 import logging
@@ -13,17 +15,39 @@ from .microsoft_config import MicrosoftConfig
 logger = logging.getLogger(__name__)
 _TITLE_BATCH_SIZE = 20
 class MicrosoftCatalogReader:
-    """Microsoft catalog reader."""
+    """Read the xCloud catalog and resolve product titles.
+
+    Pulls the catalog ID list from ``xcloud_catalog_url``
+    then batches title lookups against ``xcloud_titles_url``
+    (20 IDs per batch). Locale + market come from the user's
+    preferences via ``get_unifideck_locale`` /
+    ``get_unifideck_market``.
+    """
     def __init__(
         self,
         config: MicrosoftConfig,
         config_manager: Any,
     ) -> None:
-        """Initialize the instance."""
+        """Wire dependencies and prepare the per-request HTTP session lazily.
+
+        Args:
+            config: ConfigManager (provides catalog endpoints and
+                rate-limit settings).
+            token_manager: Microsoft token manager (used to build
+                the XBL chain for authenticated requests).
+        """
         self._config = config
         self._config_manager = config_manager
     async def fetch_games(self) -> list[Game]:
-        """Fetch games."""
+        """Fetch the full xCloud catalog as ``Game`` records.
+
+        Pipeline: GET the catalog ID list → batch-resolve product
+        titles → build ``Game`` entries tagged with ``GameTag.XCLOUD``.
+
+        Returns:
+            List of catalog ``Game`` records (empty if the
+            catalog can't be reached or returned no IDs).
+        """
         product_ids = await self._fetch_catalog_ids()
         if not product_ids:
             logger.warning(
@@ -52,7 +76,12 @@ class MicrosoftCatalogReader:
 
     async def _fetch_catalog_ids(self) -> list[str]:
 
-        """Fetch catalog ids."""
+        """GET the catalog ID list with the user's language + market.
+
+        Returns:
+            List of product ID strings; empty on HTTP failure or
+            when the response isn't a JSON list.
+        """
         locale = get_unifideck_locale(self._config_manager)
         market = get_unifideck_market(self._config_manager)
         base_url = self._config.xcloud_catalog_url
@@ -98,7 +127,14 @@ class MicrosoftCatalogReader:
     async def _batch_get_titles(
         self, product_ids: list[str],
     ) -> dict[str, str]:
-        """Batch get titles."""
+        """Batch product-title lookups (20 IDs per call) into a single map.
+
+        Args:
+            product_ids: All product IDs to resolve.
+
+        Returns:
+            Dict ``product_id → display_title``.
+        """
         if not product_ids:
             return {}
         locale = get_unifideck_locale(self._config_manager)
@@ -132,7 +168,19 @@ class MicrosoftCatalogReader:
         user_agent: str,
     ) -> dict[str, str]:
 
-        """Fetch one title batch."""
+        """GET one batch of up to 20 product titles.
+
+        Args:
+            batch: Subset of product IDs.
+            base_url: Titles endpoint base URL.
+            locale: BCP-47 locale.
+            market: Two-letter market code.
+            user_agent: User-Agent header value.
+
+        Returns:
+            Dict ``product_id → title`` for this batch (empty
+            on HTTP failure).
+        """
         ids_param = ",".join(batch)
         separator = "&" if "?" in base_url else "?"
         params = {
@@ -162,7 +210,14 @@ class MicrosoftCatalogReader:
         return self._extract_titles(data)
     @staticmethod
     def _extract_titles(data: Any) -> dict[str, str]:
-        """Extract titles."""
+        """Walk a titles-endpoint response, pulling out ``ProductId → ProductTitle``.
+
+        Args:
+            data: Parsed JSON from the titles endpoint.
+
+        Returns:
+            Dict ``product_id → first localized title``.
+        """
         if not isinstance(data, dict):
             return {}
         products = data.get("Products")
@@ -182,7 +237,15 @@ class MicrosoftCatalogReader:
     def _extract_one_product_title(
         product: Any,
     ) -> tuple[str, str] | None:
-        """Extract one product title."""
+        """Pull ``(ProductId, first localized title)`` out of one product entry.
+
+        Args:
+            product: One entry from ``data.Products``.
+
+        Returns:
+            Tuple ``(product_id, title)``, or ``None`` if any
+            field is missing/wrong type.
+        """
         if not isinstance(product, dict):
             return None
         pid = product.get("ProductId")
@@ -203,7 +266,15 @@ class MicrosoftCatalogReader:
     def _first_localized_title(
         localized: list,
     ) -> str | None:
-        """First localized title."""
+        """Return the first non-empty ``ProductTitle`` in a ``LocalizedProperties`` list.
+
+        Args:
+            localized: ``LocalizedProperties`` array.
+
+        Returns:
+            Title string, or ``None`` if none of the entries
+            has a usable title.
+        """
         for loc in localized:
             if not isinstance(loc, dict):
                 continue

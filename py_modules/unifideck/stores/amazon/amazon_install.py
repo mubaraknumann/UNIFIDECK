@@ -29,7 +29,12 @@ ProgressCallback = Callable[[float], Awaitable[None]]
 
 
 class AmazonInstaller:
-    """Amazon installer."""
+    """Drive ``nile install`` / ``nile uninstall`` and surface progress.
+
+    Pipes the CLI's stdout through ``parse_progress_line`` and
+    emits DOWNLOAD_PROGRESS for each line so the UI gets both
+    structured percentage updates and raw log output.
+    """
 
     def __init__(
         self,
@@ -41,7 +46,22 @@ class AmazonInstaller:
         install_timeout_seconds: int = 3600,
         uninstall_timeout_seconds: int = 120,
     ) -> None:
-        """Initialize the instance."""
+        """Wire dependencies for the Nile-backed Amazon install flow.
+
+        Args:
+            bus: Event bus.
+            cli_path: Path to the ``nile`` binary.
+            library: Amazon library reader (resolves install path /
+                per-game metadata).
+            find_exe: Helper resolving an executable inside a game
+                install directory.
+            default_install_root: Default install location used
+                when no per-game override is set.
+            install_timeout_seconds: Hard timeout for the install
+                subprocess.
+            uninstall_timeout_seconds: Hard timeout for the
+                uninstall subprocess.
+        """
         self._bus = bus
         self._cli_path = cli_path
         self._library = library
@@ -56,7 +76,21 @@ class AmazonInstaller:
         base_path: str | None = None,
         progress_cb: ProgressCallback | None = None,
     ) -> InstallResult:
-        """Install game."""
+        """Install a game via ``nile install <id> --base-path <root>``.
+
+        Phases: spawn nile → drain its output (progress + bus emit) →
+        on rc=0, resolve the install path / executable / title and
+        write the unifideck manifest.
+
+        Args:
+            game_id: Amazon game identifier.
+            base_path: Override the configured default install root.
+            progress_cb: Optional progress callback receiving 0–100.
+
+        Returns:
+            ``InstallResult`` — ``success=False`` on missing nile,
+            non-zero rc, or undetected install dir.
+        """
         if not self._cli_path:
             return InstallResult(
                 success=False, store='amazon', game_id=game_id,
@@ -75,7 +109,21 @@ class AmazonInstaller:
     async def _finalize_install(
         self, game_id: str, base: str,
     ) -> InstallResult:
-        """Finalize install."""
+        """Post-install bookkeeping — manifest write and result construction.
+
+        Resolves the actual install dir (from nile's installed.json
+        or a default ``<base>/<game_id>`` fallback), locates the
+        executable via fuel.json, fetches the title from the
+        library, and persists the unifideck manifest.
+
+        Args:
+            game_id: Amazon game identifier.
+            base: Install base path.
+
+        Returns:
+            ``InstallResult`` — ``success=False`` if the install
+            dir couldn't be located.
+        """
         install_path = await self._resolve_install_path(game_id, base)
         if not install_path:
             return InstallResult(
@@ -109,7 +157,16 @@ class AmazonInstaller:
         game_id: str,
         progress_cb: ProgressCallback | None,
     ) -> int:
-        """Run install."""
+        """Spawn the nile install subprocess and wait for it (timeout-bounded).
+
+        Args:
+            base: Install base path.
+            game_id: Amazon game identifier.
+            progress_cb: Optional progress callback.
+
+        Returns:
+            Subprocess exit code (-1 on spawn failure).
+        """
         cmd = self._build_install_cmd(base, game_id)
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -124,7 +181,15 @@ class AmazonInstaller:
         return await self._wait_with_timeout(proc)
 
     def _build_install_cmd(self, base: str, game_id: str) -> list[str]:
-        """Build install cmd."""
+        """Build the ``nile install`` argv.
+
+        Args:
+            base: Install base path.
+            game_id: Amazon game identifier.
+
+        Returns:
+            argv list ready for ``asyncio.create_subprocess_exec``.
+        """
         return [
             self._cli_path or 'nile', 'install', game_id,
             '--base-path', base,
@@ -137,13 +202,27 @@ class AmazonInstaller:
         game_id: str,
         progress_cb: ProgressCallback | None,
     ) -> None:
-        """Drain install output."""
+        """Pipe nile stdout through ``_handle_install_line`` line-by-line.
+
+        Args:
+            proc: Live subprocess.
+            game_id: Amazon game identifier.
+            progress_cb: Optional progress callback.
+        """
         async def _handler(line_str: str) -> None:
+            """Per-line handler dispatching Nile install output to the progress parser."""
             await self._handle_install_line(line_str, game_id, progress_cb)
         await drain_install_output(proc, _handler)
 
     async def _wait_with_timeout(self, proc: Any) -> int:
-        """Wait with timeout."""
+        """Wait for the install subprocess with the configured timeout.
+
+        Args:
+            proc: Live subprocess.
+
+        Returns:
+            Final exit code, or a synthetic error code on timeout.
+        """
         return await wait_with_timeout(
             proc, timeout_seconds=self._install_timeout_seconds,
             log_prefix='[amazon_install]',
@@ -155,7 +234,14 @@ class AmazonInstaller:
         game_id: str,
         progress_cb: ProgressCallback | None,
     ) -> None:
-        """Handle install line."""
+        """Parse one nile output line for a progress percentage and emit DOWNLOAD_PROGRESS.
+
+        Args:
+            line: Raw stdout line.
+            game_id: Amazon game identifier.
+            progress_cb: Optional callback called with the parsed
+                percentage (callback errors are swallowed).
+        """
         if not line:
             return
         percent = parse_progress_line(line, _PROGRESS_RE)
@@ -172,7 +258,18 @@ class AmazonInstaller:
     async def _resolve_install_path(
         self, game_id: str, base: str,
     ) -> str | None:
-        """Resolve install path."""
+        """Resolve the install directory from nile's state or a sensible fallback.
+
+        First reads ``installed.json``; falls back to ``<base>/<game_id>``
+        if no entry exists.
+
+        Args:
+            game_id: Amazon game identifier.
+            base: Install base path.
+
+        Returns:
+            Absolute path string, or ``None`` if neither resolves.
+        """
         installed = await self._library.read_installed_ids()
         info = installed.get(game_id)
         if isinstance(info, dict):
@@ -188,7 +285,18 @@ class AmazonInstaller:
     async def _resolve_executable(
         self, install_path: str | None, game_id: str,
     ) -> str | None:
-        """Resolve executable."""
+        """Resolve the playable executable for a game.
+
+        Tries fuel.json first, then the generic ``_find_exe``
+        callback if available.
+
+        Args:
+            install_path: Game install directory.
+            game_id: Amazon game identifier.
+
+        Returns:
+            Absolute exe path, or ``None`` on failure.
+        """
         if not install_path:
             return None
         exe = amazon_fuel.find_exe_from_fuel(install_path)
@@ -202,7 +310,14 @@ class AmazonInstaller:
         return None
 
     async def _resolve_title(self, game_id: str) -> str:
-        """Resolve title."""
+        """Look up the game's display title from the owned-games list.
+
+        Args:
+            game_id: Amazon game identifier.
+
+        Returns:
+            Title string, falling back to ``game_id``.
+        """
         owned = await self._library.read_owned_games()
         for game in owned:
             if game.game_id == game_id:
@@ -210,7 +325,20 @@ class AmazonInstaller:
         return game_id
 
     async def uninstall_game(self, game_id: str) -> Result:
-        """Uninstall game."""
+        """Run ``nile uninstall`` and clean the install directory.
+
+        Spawns nile with a timeout. On rc=0, also rmtree's the
+        install dir (best-effort) since nile sometimes leaves
+        shells behind.
+
+        Args:
+            game_id: Amazon game identifier.
+
+        Returns:
+            ``Result`` with ``data={"game_id": ...}`` on success;
+            error codes ``nile_not_found``, ``uninstall_timeout``,
+            ``spawn_failed:...``, ``nile_rc:N`` otherwise.
+        """
         if not self._cli_path:
             return Result(success=False, error='nile_not_found')
         installed = await self._library.read_installed_ids()

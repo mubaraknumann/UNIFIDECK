@@ -30,10 +30,21 @@ _SILENT_INSTALL_FLAG = "/S"
 
 
 class _PrefixHelpers:
-    """Prefix helpers."""
+    """Grab-bag helpers used by the prefix builders.
+
+    Covers prefix cloning (rsync from template), fresh installs
+    (via the cached UPC installer), background template seeding,
+    the ``pfx`` symlink quirk, bootstrap marker writing, and
+    auth-state injection wiring.
+    """
 
     def __init__(self, parent: UbisoftPrefixManager) -> None:
-        """Initialize the instance."""
+        """Bind the prefix-helpers to their parent prefix manager.
+
+        Args:
+            parent: Owning ``UbisoftPrefixManager`` instance
+                (provides config + paths + bootstrap marker).
+        """
         self._parent = parent
 
     async def clone_prefix_from_template(
@@ -41,7 +52,18 @@ class _PrefixHelpers:
         space_id: str,
         prefix_path: str,
     ) -> bool:
-        """Clone prefix from template."""
+        """Rsync the template prefix into a fresh per-game prefix.
+
+        On success, writes the bootstrap marker and injects auth
+        state.
+
+        Args:
+            space_id: UPC space_id (for marker and logs).
+            prefix_path: Destination prefix directory.
+
+        Returns:
+            True iff the rsync succeeded.
+        """
         logger.info(
             "[UbisoftPrefixManager] cloning template for %s",
             space_id,
@@ -82,7 +104,19 @@ class _PrefixHelpers:
         space_id: str,
         prefix_path: str,
     ) -> bool:
-        """Create prefix from fresh install."""
+        """Build a per-game prefix by running the UPC installer fresh.
+
+        Used as a fallback when no template is available. On success,
+        writes the marker, injects auth state, and seeds the template
+        from this prefix for future installs.
+
+        Args:
+            space_id: UPC space_id (for marker and logs).
+            prefix_path: Destination prefix directory.
+
+        Returns:
+            True iff the installer ran successfully and produced upc.exe.
+        """
         logger.info(
             "[UbisoftPrefixManager] fresh install for %s",
             space_id,
@@ -130,7 +164,14 @@ class _PrefixHelpers:
         self,
         game_prefix: str,
     ) -> None:
-        """Create template from game prefix."""
+        """Seed the template prefix by rsync-cloning an existing game prefix.
+
+        Used after a fresh install when no template exists yet — much
+        cheaper than re-running the UPC installer.
+
+        Args:
+            game_prefix: Source game prefix to clone from.
+        """
         template_dir = self._parent._config.template_dir_expanded
         logger.info(
             "[UbisoftPrefixManager] creating template from first game prefix",
@@ -164,7 +205,17 @@ class _PrefixHelpers:
         gameid: str,
         store_game_id: str | None = None,
     ) -> bool:
-        """Run silent installer."""
+        """Run the UPC installer in /S unattended mode inside a prefix.
+
+        Args:
+            prefix_dir: Target Wine prefix.
+            installer_path: Cached installer .exe.
+            gameid: ``GAMEID`` env var for umu.
+            store_game_id: Optional ``UMU_STORE_ID`` for telemetry.
+
+        Returns:
+            True iff the installer subprocess exited 0.
+        """
         umu_run = self._parent._binaries.find_umu_run()
         if not umu_run:
             logger.error(
@@ -204,7 +255,17 @@ class _PrefixHelpers:
     async def _await_installer_completion(
         proc: asyncio.subprocess.Process,
     ) -> bool:
-        """Await installer completion."""
+        """Wait up to 15 min for the installer subprocess to exit.
+
+        Times out and kills the process if it stalls. Logs the first
+        500 bytes of stderr on non-zero exit.
+
+        Args:
+            proc: The installer subprocess.
+
+        Returns:
+            True iff exit code is 0.
+        """
         try:
             _stdout, stderr = await asyncio.wait_for(
                 proc.communicate(),
@@ -243,7 +304,17 @@ class _PrefixHelpers:
         *,
         exclude_games: bool,
     ) -> bool:
-        """Rsync clone."""
+        """Recursively clone one prefix to another via ``rsync -a``.
+
+        Args:
+            src: Source directory.
+            dst: Destination directory.
+            exclude_games: When True, skips the ``games/`` subdir
+                (template/auth use cases).
+
+        Returns:
+            True iff rsync exited 0 within the 30-minute timeout.
+        """
         args: list[str] = ["rsync", "-a"]
         if exclude_games:
             args.append("--exclude=games")
@@ -286,7 +357,15 @@ class _PrefixHelpers:
 
     @staticmethod
     def fix_pfx_symlink(prefix_dir: str) -> None:
-        """Fix pfx symlink."""
+        """Repair the ``<prefix>/pfx`` self-symlink some Proton versions expect.
+
+        If ``pfx`` exists as a symlink but doesn't point to ``.`` or
+        the prefix itself, replace it with a symlink to the prefix
+        root (modern layout).
+
+        Args:
+            prefix_dir: Wine prefix directory.
+        """
         pfx_link = os.path.join(prefix_dir, "pfx")
         if not os.path.islink(pfx_link):
             return
@@ -313,7 +392,17 @@ class _PrefixHelpers:
         source: str,
         space_id: str | None,
     ) -> None:
-        """Write bootstrap marker."""
+        """Write the ``<config.bootstrap_marker>`` flag inside a prefix.
+
+        The marker records the source (``cloned_from_template``,
+        ``fresh_install``, ``template``, …), optional game id, and
+        creation timestamp. Failures are logged but not raised.
+
+        Args:
+            prefix_dir: Wine prefix directory.
+            source: Free-form source label.
+            space_id: Optional game ID to embed (omit for template / auth).
+        """
         marker_path = os.path.join(
             prefix_dir,
             self._parent._config.bootstrap_marker,
@@ -339,7 +428,11 @@ class _PrefixHelpers:
         self,
         prefix_paths: list[str],
     ) -> None:
-        """Try inject auth state."""
+        """Best-effort dispatch to the auth-state injector.
+
+        Args:
+            prefix_paths: Prefix directories to inject into.
+        """
         if not prefix_paths:
             return
         try:

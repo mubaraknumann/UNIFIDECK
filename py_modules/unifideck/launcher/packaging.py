@@ -1,3 +1,5 @@
+"""Filesystem packaging helpers — restores executable bits on shipped launcher binaries after extraction."""
+
 from __future__ import annotations
 import logging
 import os
@@ -13,7 +15,22 @@ def ensure_executable_files(
  plugin_dir: Path,
  files: Iterable[str] = LAUNCHER_EXECUTABLE_FILES,
 ) -> int:
-    """Ensure executable files."""
+    """Restore +x bits on shipped launcher binaries after extraction.
+
+    Some plugin installation flows (notably Decky's ZIP
+    extraction) strip the executable bit. Iterates the
+    configured files under ``plugin_dir``, chmodding any that
+    lack the world/group/user exec bits.
+
+    Args:
+        plugin_dir: Plugin root directory.
+        files: Iterable of relative paths to fix
+            (defaults to ``LAUNCHER_EXECUTABLE_FILES``).
+
+    Returns:
+        Number of files chmodded (already-executable files
+        are not counted).
+    """
     fixed = 0
     for rel_path in files:
         target = plugin_dir / rel_path

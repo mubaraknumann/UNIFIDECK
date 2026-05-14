@@ -30,6 +30,7 @@ async def load_queue(queue_file: str) -> list[DownloadItem]:
         return []
 
     def _read_sync() -> list[DownloadItem]:
+        """Blocking JSON read of the persisted download queue."""
         try:
             with open(queue_file, encoding="utf-8") as f:
                 data = json.load(f)
@@ -68,6 +69,7 @@ async def save_queue(
     disk state.
     """
     def _write_sync() -> None:
+        """Blocking atomic write of the download queue."""
         try:
             parent = os.path.dirname(queue_file)
             if parent:

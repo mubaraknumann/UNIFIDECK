@@ -118,6 +118,14 @@ class AccountService:
             
         try:
             def read_file() -> str:
+                """Blocking text read of Steam's ``loginusers.vdf``.
+
+                Wrapped via ``asyncio.to_thread`` by the caller to keep
+                the event loop responsive.
+
+                Returns:
+                    Full file content as a UTF-8 string.
+                """
                 with open(self._loginusers_path, "r", encoding="utf-8") as f:
                     return f.read()
                     

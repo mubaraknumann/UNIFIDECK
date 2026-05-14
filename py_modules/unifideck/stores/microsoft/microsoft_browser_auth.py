@@ -1,3 +1,5 @@
+"""Browser-based Microsoft OAuth flow — drives Edge via AuthOrchestrator to capture the authorization code."""
+
 from __future__ import annotations
 import logging
 import urllib.parse
@@ -12,7 +14,13 @@ from .tokens import MicrosoftTokenManager
 logger = logging.getLogger(__name__)
 _MS_AUTH_URL_FILE = "~/.local/share/unifideck/ms_auth_url.txt"
 class MicrosoftBrowserAuth:
-    """Microsoft browser auth."""
+    """Microsoft OAuth flow driven through Edge + AuthOrchestrator.
+
+    Builds the OAuth URL with the user's locale, hands it to
+    the orchestrator (which launches Edge and watches for the
+    redirect), and exchanges the captured code for tokens via
+    ``MicrosoftTokenManager``.
+    """
     def __init__(
     self,
     bus: EventBus,
@@ -21,7 +29,17 @@ class MicrosoftBrowserAuth:
     config: MicrosoftConfig,
     config_manager: Any,
     ) -> None:
-        """Initialize the instance."""
+        """Wire dependencies for the browser-driven Microsoft OAuth flow.
+
+        Args:
+            bus: Event bus.
+            orchestrator: Auth orchestrator (drives the higher-level
+                OAuth state machine).
+            tokens: Microsoft token manager (receives the OAuth
+                access + refresh tokens once captured).
+            config: Microsoft store config (endpoints, scopes).
+            config_manager: Plugin-wide ConfigManager.
+        """
         self._bus = bus
         self._orch = orchestrator
         self._tokens = tokens
@@ -29,7 +47,17 @@ class MicrosoftBrowserAuth:
         self._config_manager = config_manager
     @audit_auth_flow(store="microsoft", method="oauth_browser")
     async def start_auth(self) -> AuthResult:
-        """Start auth."""
+        """Kick off the Microsoft OAuth flow in the background.
+
+        Validates the config, then delegates to ``run_flow`` —
+        which is responsible for launching Edge against the URL,
+        watching for a redirect, capturing the code, and feeding
+        it to ``_exchange_code``.
+
+        Returns:
+            ``AuthResult`` — ``config_invalid`` if the configured
+            OAuth endpoints/scope are missing or empty.
+        """
         if not self._config.is_valid():
             return AuthResult(
                 success=False,
@@ -46,7 +74,12 @@ class MicrosoftBrowserAuth:
             write_url_file=_MS_AUTH_URL_FILE,
         )
     async def _build_auth_url(self) -> str:
-        """Build auth URL."""
+        """Build the Microsoft OAuth authorization URL with the user's locale.
+
+        Returns:
+            Authorization URL string (always with
+            ``response_type=code`` and the configured scope).
+        """
         locale = get_unifideck_locale(self._config_manager)
         params = {
         "client_id": self._config.client_id,
@@ -65,7 +98,15 @@ class MicrosoftBrowserAuth:
 
     async def _exchange_code(self, code: str) -> AuthResult:
 
-        """Exchange code."""
+        """Exchange the captured OAuth code for an access + refresh token.
+
+        Args:
+            code: OAuth code from the redirect.
+
+        Returns:
+            ``AuthResult`` — ``token_exchange_failed`` if the
+            token endpoint rejected the code.
+        """
         ok = await self._tokens.exchange_code(code)
         if ok:
             logger.info(
@@ -78,7 +119,11 @@ class MicrosoftBrowserAuth:
             store="microsoft",
         )
     async def logout(self) -> Result:
-        """Logout."""
+        """Cancel any pending background flow, clear tokens, emit STORE_LOGOUT.
+
+        Returns:
+            ``Result`` (always success=True).
+        """
         self._orch.cancel_background()
         await self._tokens.clear()
         await self._bus.emit(

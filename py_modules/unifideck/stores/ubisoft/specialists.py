@@ -41,7 +41,24 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class UbisoftSpecialists:
-    """Ubisoft specialists."""
+    """Frozen bundle of every per-domain specialist used by the Ubisoft store.
+
+    Built by ``build_ubisoft_specialists`` and stored as a
+    single attribute on ``UbisoftStore``; the store unpacks
+    the relevant fields onto its own attributes for direct use.
+
+    Attributes:
+        config: Frozen Ubisoft configuration.
+        paths: Wine prefix path helpers.
+        binaries: UPC binary resolver.
+        id_map: Space_id ↔ install_id mapping store.
+        session: Session payload propagator.
+        installer_cache: Cached UPC installer downloader.
+        prefix_mgr: Wine prefix lifecycle manager.
+        library: Library facade (detector + id map).
+        installer: Install/uninstall pipeline.
+        auth: Auth flow orchestrator.
+    """
 
     config: UbisoftConfig
     paths: UbisoftPrefixPaths
@@ -57,7 +74,17 @@ class UbisoftSpecialists:
 
 @dataclass(frozen=True)
 class _UbisoftFoundations:
-    """Ubisoft foundations."""
+    """Layer-0 bundle: dependencies that need only the ConfigManager + plugin_dir.
+
+    Built first by the factory so every later layer can depend
+    on these without circular references.
+
+    Attributes:
+        ubi_config: Frozen Ubisoft configuration snapshot.
+        paths: Wine prefix path helpers.
+        binaries: UPC binary resolver.
+        id_map: Space_id ↔ install_id mapping store.
+    """
 
     ubi_config: UbisoftConfig
     paths: UbisoftPrefixPaths
@@ -67,7 +94,13 @@ class _UbisoftFoundations:
 
 @dataclass(frozen=True)
 class _UbisoftRuntimeChain:
-    """Ubisoft runtime chain."""
+    """Layer-1 bundle: runtime services layered on top of the foundations.
+
+    Attributes:
+        session: Session payload propagator.
+        installer_cache: Cached UPC installer downloader.
+        prefix_mgr: Wine prefix lifecycle manager.
+    """
 
     session: UbisoftSession
     installer_cache: UbisoftInstallerCache
@@ -78,7 +111,19 @@ def _build_ubisoft_foundations(
     config_mgr: Any,
     plugin_dir: str | None,
 ) -> _UbisoftFoundations:
-    """Build UBISOFT foundations."""
+    """Construct the foundation layer (config, paths, binaries, id_map).
+
+    These four objects depend only on the ConfigManager and the
+    plugin directory; everything else in the Ubisoft sub-package
+    is layered on top.
+
+    Args:
+        config_mgr: ConfigManager.
+        plugin_dir: Plugin root directory (for bundled binaries).
+
+    Returns:
+        A ``_UbisoftFoundations`` bundle.
+    """
     ubi_config = UbisoftConfig.from_config_manager(config_mgr)
     logger.info("[UbisoftStore] %s", ubi_config.describe())
     paths = UbisoftPrefixPaths(ubi_config)
@@ -95,7 +140,17 @@ def _build_ubisoft_foundations(
 def _build_ubisoft_runtime_chain(
     f: _UbisoftFoundations,
 ) -> _UbisoftRuntimeChain:
-    """Build UBISOFT runtime chain."""
+    """Construct the runtime layer (session, installer_cache, prefix_mgr).
+
+    These three depend on the foundations and on each other —
+    ``prefix_mgr`` consumes ``session`` for auth-state injection.
+
+    Args:
+        f: The previously-built foundations bundle.
+
+    Returns:
+        A ``_UbisoftRuntimeChain`` bundle.
+    """
     session = UbisoftSession(
         config=f.ubi_config,
         paths=f.paths,
@@ -125,7 +180,19 @@ def _build_ubisoft_auth(
     shortcut_service: Any | None,
     steamgriddb: Any | None,
 ) -> UbisoftAuth:
-    """Build UBISOFT auth."""
+    """Build the ``UbisoftAuth`` orchestrator from its dependencies.
+
+    Args:
+        bus: Event bus.
+        foundations: Layer-0 dependencies.
+        runtime: Layer-1 dependencies.
+        plugin_dir: Plugin root directory.
+        shortcut_service: Steam shortcut service (optional).
+        steamgriddb: SteamGridDB client (optional).
+
+    Returns:
+        A ready-to-use ``UbisoftAuth``.
+    """
     return UbisoftAuth(
         bus=bus,
         state=UbisoftAuthState(
@@ -152,7 +219,19 @@ def build_ubisoft_specialists(
     shortcut_service: Any | None,
     steamgriddb: Any | None,
 ) -> UbisoftSpecialists:
-    """Build UBISOFT specialists."""
+    """Build the full sub-package object graph for ``UbisoftStore``.
+
+    Layered construction: foundations → runtime chain → auth →
+    library / installer (which depend on auth). Returns a single
+    frozen container the store unwraps into its instance attributes.
+
+    Args:
+        Various dependencies (bus, config_mgr, plugin_dir,
+        shortcut_service, steamgriddb) supplied by the caller.
+
+    Returns:
+        A populated ``UbisoftSpecialists``.
+    """
     f = _build_ubisoft_foundations(config_mgr, plugin_dir)
     r = _build_ubisoft_runtime_chain(f)
     library = UbisoftLibrary(

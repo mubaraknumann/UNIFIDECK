@@ -40,14 +40,29 @@ _STEAM_TITLE_PREFIXES_TO_SKIP = (
 
 
 class UbisoftIdMap:
-    """Ubisoft ID map."""
+    """Persistent UPC space_id ↔ Unifideck install_id bidirectional lookup table.
+
+    Loaded eagerly at construction from the on-disk JSON cache and
+    written atomically (temp + ``os.replace``) after every mutation.
+    Also resolves partial IDs by scanning the local install directory
+    and walking the configurations cache via ``_IdMapSources``.
+    """
 
     def __init__(
         self,
         config: UbisoftConfig,
         paths: UbisoftPrefixPaths,
     ) -> None:
-        """Initialize the instance."""
+        """Build the ID-map cache from the on-disk map file.
+
+        Loads the persisted ``space_id ↔ install_id ↔ launch_id``
+        mapping and wires the source helpers used to enrich it on
+        demand.
+
+        Args:
+            config: Ubisoft store config.
+            paths: Ubisoft prefix paths (holds the map file location).
+        """
         self._config = config
         self._paths = paths
         self._cache: dict[str, dict[str, Any]] = {}
@@ -55,7 +70,11 @@ class UbisoftIdMap:
         self._sources = _IdMapSources(self)
 
     def _load(self) -> None:
-        """Load."""
+        """Read the JSON cache from disk into ``self._cache`` (best-effort).
+
+        No-op if the file doesn't exist. Read/decode errors fall back
+        to an empty cache with a warning.
+        """
         path = self._config.id_map_file_expanded
         if not os.path.isfile(path):
             return
@@ -76,7 +95,11 @@ class UbisoftIdMap:
             self._cache = {}
 
     def _save(self) -> None:
-        """Save."""
+        """Atomically persist the in-memory cache to disk.
+
+        Writes to a ``.tmp`` sibling first, then ``os.replace`` into
+        place. Failures are logged but not raised.
+        """
         path = self._config.id_map_file_expanded
         try:
             os.makedirs(
@@ -97,7 +120,17 @@ class UbisoftIdMap:
         self,
         space_id: str,
     ) -> str | None:
-        """Resolve install ID."""
+        """Return the persistent install ID associated with a UPC space_id.
+
+        Prefers the newer ``ubisoftconnect_game_id`` key when present;
+        otherwise falls back to the legacy ``install_id`` key.
+
+        Args:
+            space_id: UPC space_id (GUID-like string).
+
+        Returns:
+            The install ID, or ``None`` if the space_id is unknown.
+        """
         entry = self._cache.get(space_id, {})
         if "ubisoftconnect_game_id" in entry:
             return entry.get("ubisoftconnect_game_id")
@@ -107,7 +140,17 @@ class UbisoftIdMap:
         self,
         space_id: str,
     ) -> str | None:
-        """Resolve launch ID."""
+        """Return the launch ID associated with a UPC space_id.
+
+        Prefers the newer ``ubisoftconnect_game_id`` key when present;
+        otherwise falls back to the legacy ``launch_id`` key.
+
+        Args:
+            space_id: UPC space_id.
+
+        Returns:
+            The launch ID, or ``None`` if the space_id is unknown.
+        """
         entry = self._cache.get(space_id, {})
         if "ubisoftconnect_game_id" in entry:
             return entry.get("ubisoftconnect_game_id")
@@ -119,7 +162,16 @@ class UbisoftIdMap:
         install_id: str,
         launch_id: str,
     ) -> None:
-        """Update."""
+        """Overwrite the entry for one space_id and persist.
+
+        Replaces any existing entry — use ``merge_entry`` to preserve
+        other keys.
+
+        Args:
+            space_id: UPC space_id.
+            install_id: Persistent install identifier.
+            launch_id: Launch identifier (UPC URL fragment).
+        """
         self._cache[space_id] = {
             "install_id": install_id,
             "launch_id": launch_id,
@@ -130,7 +182,14 @@ class UbisoftIdMap:
         self,
         mapping: dict[str, dict[str, Any]],
     ) -> None:
-        """Update bulk."""
+        """Merge a batch of entries into the cache; persist once if any changed.
+
+        Per-space_id semantics: new keys are added, existing keys are
+        overwritten by the supplied values, untouched keys are kept.
+
+        Args:
+            mapping: ``{space_id: fields_dict}``.
+        """
         changed = False
         for space_id, entry in mapping.items():
             existing = self._cache.get(space_id, {})
@@ -146,7 +205,15 @@ class UbisoftIdMap:
         space_id: str,
         fields: dict[str, Any],
     ) -> bool:
-        """Merge entry."""
+        """Shallow-merge ``fields`` into the entry for ``space_id``; save if it changed.
+
+        Args:
+            space_id: UPC space_id.
+            fields: Fields to merge into the existing entry.
+
+        Returns:
+            True iff anything actually changed and was persisted.
+        """
         existing = self._cache.get(space_id, {})
         merged = {**existing, **fields}
         if merged == existing:
@@ -159,18 +226,43 @@ class UbisoftIdMap:
         self,
         space_id: str,
     ) -> dict[str, Any]:
-        """Get entry."""
+        """Return a defensive copy of the entry for one space_id.
+
+        Args:
+            space_id: UPC space_id.
+
+        Returns:
+            A copy of the entry dict (empty dict if unknown).
+        """
         return dict(self._cache.get(space_id, {}))
 
     def in_cache(self, space_id: str) -> bool:
-        """In cache."""
+        """Check whether a space_id has a cached entry.
+
+        Args:
+            space_id: UPC space_id.
+
+        Returns:
+            True iff the space_id is present in the cache.
+        """
         return space_id in self._cache
 
     async def refresh_from_configurations(
         self,
         space_id: str | None = None,
     ) -> bool:
-        """Refresh from configurations."""
+        """Refresh entries by scanning the UPC ``configurations`` cache.
+
+        Delegates to ``_IdMapSources``. When ``space_id`` is provided,
+        only that entry is refreshed; otherwise every visible cache
+        entry is rebuilt.
+
+        Args:
+            space_id: Optional single space_id to target.
+
+        Returns:
+            True iff at least one entry was updated.
+        """
         return await self._sources.refresh_from_configurations(
             space_id,
         )
@@ -178,14 +270,30 @@ class UbisoftIdMap:
     async def fetch_game_id_database(
         self,
     ) -> list[tuple[str, str]]:
-        """Fetch game ID database."""
+        """Fetch (and cache) the iArtorias GitHub UPC game-ID database.
+
+        Delegates to ``_IdMapSources``. Refreshes when the local file
+        is older than ``UbisoftConfig.game_id_db_max_age_seconds``.
+
+        Returns:
+            List of ``(game_name, game_id)`` tuples.
+        """
         return await self._sources.fetch_game_id_database()
 
     async def lookup_game_id_by_name(
         self,
         game_name: str,
     ) -> str | None:
-        """Lookup game ID by name."""
+        """Resolve a UPC game ID by (normalized) game name.
+
+        Delegates to ``_IdMapSources``.
+
+        Args:
+            game_name: Display name to look up.
+
+        Returns:
+            UPC game ID string, or ``None`` if no name match.
+        """
         return await self._sources.lookup_game_id_by_name(
             game_name,
         )
@@ -194,12 +302,29 @@ class UbisoftIdMap:
     def extract_game_id_from_registry(
         prefix_path: str,
     ) -> str | None:
-        """Extract game ID from registry."""
+        """Pull the UPC install ID out of the prefix's system.reg.
+
+        Delegates to ``id_map_sources.extract_game_id_from_registry``.
+
+        Args:
+            prefix_path: Path to the Wine prefix.
+
+        Returns:
+            The install ID, or ``None`` if no UPC install key is found.
+        """
         return _extract_game_id_from_registry(prefix_path)
 
     @staticmethod
     def get_steam_library_titles() -> set[str]:
-        """Get steam library titles."""
+        """Return the user's Steam library titles, normalized for matching.
+
+        Filters out Proton / Steam Linux Runtime / Steamworks entries
+        that aren't real games. Returns an empty set when the Steam
+        library module isn't importable or scanning fails.
+
+        Returns:
+            Normalized title set suitable for cross-reference matching.
+        """
         try:
             from ...steam.library import get_steam_library_names
         except ImportError:
@@ -232,7 +357,17 @@ class UbisoftIdMap:
 
     @staticmethod
     def _normalize_for_matching(name: str) -> str:
-        """Normalize for matching."""
+        """Normalize a title for fuzzy match against the Steam library.
+
+        Lowercases, replaces ``_`` with space, strips trademark/punctuation
+        characters, and collapses whitespace runs.
+
+        Args:
+            name: Raw title.
+
+        Returns:
+            Normalized form for case-insensitive equality.
+        """
         name = name.lower()
         name = name.replace("_", " ")
         name = re.sub(
@@ -243,5 +378,12 @@ class UbisoftIdMap:
         return " ".join(name.split())
 
     def normalize_for_matching(self, name: str) -> str:
-        """Normalize for matching."""
+        """Instance-method alias for ``_normalize_for_matching``.
+
+        Args:
+            name: Raw title.
+
+        Returns:
+            Normalized form.
+        """
         return self._normalize_for_matching(name)

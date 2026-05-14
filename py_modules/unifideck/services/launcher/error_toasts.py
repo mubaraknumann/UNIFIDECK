@@ -25,7 +25,16 @@ async def emit_launcher_error_toast(
     ctx: LaunchContext,
     err_code: str,
 ) -> None:
-    """Emit a user-facing error toast for a LauncherError."""
+    """Emit a user-facing error toast for a ``LauncherError``.
+
+    Builds a localized toast with a ``Show logs`` action
+    deep-linking to the current launch ID (when available).
+
+    Args:
+        svc: LauncherService (provides the bus).
+        ctx: Launch context (for store + game_id).
+        err_code: Stable error code surfaced to the UI.
+    """
     from ...core.types.events import Events
     from .circuit_breaker import get_launch_id_or_none
 

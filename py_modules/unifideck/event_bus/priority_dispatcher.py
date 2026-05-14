@@ -98,7 +98,7 @@ class PriorityDispatcher:
         await dispatcher.stop()
     """
 
-    def __init__(  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(
         self,
         bus: EventBus,
         *,
@@ -108,6 +108,7 @@ class PriorityDispatcher:
         replay_buffer: EventReplayBuffer | None = None,
         batch_dispatcher: BatchDispatcher | None = None,
     ) -> None:
+        """Initialize the dispatcher with per-priority handler buckets."""
         self._bus = bus
         self._background_cap = background_cap
         self._watchdog = watchdog
@@ -137,7 +138,12 @@ class PriorityDispatcher:
         )
 
     async def stop(self) -> None:
-        """Drain the queue and stop the worker. Idempotent."""
+        """Drain the queue and stop the worker task (idempotent).
+
+        Pushes a CRITICAL-priority poison-pill sentinel so the
+        worker wakes up even if the queue is empty, then awaits
+        the task with a 5 s grace period before cancelling it.
+        """
         self._stopping = True
         if self._worker_task is None:
             return
@@ -269,7 +275,19 @@ class PriorityDispatcher:
         kwargs: dict[str, Any],
         coalesce_map_key: tuple[str, str] | None = None,
     ) -> None:
-        """Push a fresh item onto the queue."""
+        """Push a fresh ``_QueueItem`` onto the priority queue.
+
+        Increments the per-dispatcher sequence number, builds
+        the item, enqueues it, and registers it in the
+        coalesce map when the event declares a coalesce key.
+
+        Args:
+            event: Event identifier.
+            prio: Priority bucket.
+            kwargs: Event payload.
+            coalesce_map_key: Pre-computed coalesce key, or
+                ``None`` to compute it from the payload.
+        """
         self._seq += 1
         item = _QueueItem(
             priority=int(prio),

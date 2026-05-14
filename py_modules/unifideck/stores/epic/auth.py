@@ -28,7 +28,14 @@ _AUTH_URL_MARKERS = ('epicgames.com',)
 
 
 class EpicAuthFlow:
-    """Epic auth flow."""
+    """Epic Games OAuth flow driven by the ``legendary`` CLI.
+
+    Spawns ``legendary auth``, scrapes the login URL out of
+    its stdout, hands the URL to the AuthOrchestrator for the
+    browser leg, then mints tokens by calling
+    ``legendary auth --code <code>`` once the orchestrator
+    delivers the OAuth redirect code.
+    """
 
     def __init__(
         self,
@@ -37,7 +44,14 @@ class EpicAuthFlow:
         cli_path: str | None,
         cli_timeout_seconds: int = 30,
     ) -> None:
-        """Initialize the instance."""
+        """Wire dependencies for the Legendary CLI-driven Epic auth flow.
+
+        Args:
+            bus: Event bus.
+            orchestrator: Auth orchestrator.
+            cli_path: Path to the bundled ``legendary`` binary.
+            cli_timeout_seconds: Hard timeout for the CLI call.
+        """
         self._bus = bus
         self._orchestrator = orchestrator
         self._cli_path = cli_path
@@ -45,7 +59,18 @@ class EpicAuthFlow:
 
     @audit_auth_flow(store='epic', method='oauth_cli')
     async def start_auth(self) -> AuthResult:
-        """Start auth."""
+        """Kick off the Epic OAuth flow.
+
+        Steps: spawn legendary auth → scrape the login URL out of
+        its stdout (with timeout) → terminate legendary → hand the
+        URL to the orchestrator with ``_register_code`` as the
+        completion callback.
+
+        Returns:
+            ``AuthResult`` — ``success=True`` only means the browser
+            was launched; actual token minting happens later in
+            ``_register_code``.
+        """
         if not self._cli_path:
             return AuthResult(
                 success=False, store='epic', error='legendary_not_found',
@@ -70,7 +95,12 @@ class EpicAuthFlow:
         return AuthResult(success=True, store='epic', redirect_url=url)
 
     async def logout(self) -> Result:
-        """Logout."""
+        """Invoke ``legendary auth --delete`` and emit STORE_LOGOUT.
+
+        Returns:
+            ``Result`` — ``success=False`` if legendary is missing
+            or the subprocess can't be spawned.
+        """
         if not self._cli_path:
             return Result(success=False, error='legendary_not_found')
         try:
@@ -86,7 +116,17 @@ class EpicAuthFlow:
         return Result(success=True)
 
     async def _fetch_login_url(self) -> str:
-        """Fetch login URL."""
+        """Spawn legendary, scrape the auth URL, and terminate it.
+
+        Wraps the scrape in an asyncio timeout. The temporary
+        subprocess is always terminated, even on timeout.
+
+        Returns:
+            The login URL string (empty if not found).
+
+        Raises:
+            StoreAuthError: scrape timed out.
+        """
         proc = await self._spawn_legendary_auth()
         try:
             url = await asyncio.wait_for(
@@ -102,7 +142,11 @@ class EpicAuthFlow:
         return url or ''
 
     async def _spawn_legendary_auth(self) -> Any:
-        """Spawn LEGENDARY auth."""
+        """Spawn ``legendary auth`` with stdout piped and stderr merged.
+
+        Returns:
+            The live subprocess handle.
+        """
         return await asyncio.create_subprocess_exec(
             self._cli_path, 'auth',
             stdout=asyncio.subprocess.PIPE,
@@ -110,7 +154,15 @@ class EpicAuthFlow:
         )
 
     async def _scrape_url_from_proc(self, proc: Any) -> str | None:
-        """Scrape URL from proc."""
+        """Read legendary stdout line-by-line until an auth URL appears.
+
+        Args:
+            proc: Live legendary subprocess (stdout piped).
+
+        Returns:
+            URL string on first match, or ``None`` on EOF / no
+            stdout stream.
+        """
         if proc.stdout is None:
             return None
         while True:
@@ -124,7 +176,15 @@ class EpicAuthFlow:
 
     @staticmethod
     async def _terminate_legendary(proc: Any) -> None:
-        """Terminate LEGENDARY."""
+        """Terminate the legendary auth subprocess (best-effort).
+
+        Sends SIGTERM, waits 5s for the process to exit, then
+        falls back to SIGKILL. Process-already-gone errors are
+        swallowed.
+
+        Args:
+            proc: Subprocess handle (no-op if already exited).
+        """
         if proc is None or proc.returncode is not None:
             return
         try:
@@ -140,7 +200,18 @@ class EpicAuthFlow:
                 pass
 
     async def _register_code(self, code: str) -> AuthResult:
-        """Register code."""
+        """Feed the captured OAuth code to ``legendary auth --code``.
+
+        Invoked as the AuthOrchestrator's completion callback when
+        the user lands on the Epic redirect URL. Emits
+        STORE_AUTH_COMPLETE / STORE_AUTH_FAILED accordingly.
+
+        Args:
+            code: OAuth code captured from the redirect URL.
+
+        Returns:
+            ``AuthResult``.
+        """
         if not code:
             return AuthResult(
                 success=False, store='epic', error='no_auth_code',
@@ -176,7 +247,15 @@ class EpicAuthFlow:
 
     @staticmethod
     def _extract_url(line: str) -> str | None:
-        """Extract URL."""
+        """Extract the first ``https://...epicgames.com...`` URL from one line.
+
+        Args:
+            line: One line of legendary stdout.
+
+        Returns:
+            The matched URL (with trailing ``)``, ``,``, ``.``
+            stripped), or ``None`` if no match.
+        """
         if 'https://' not in line:
             return None
         for word in line.split():

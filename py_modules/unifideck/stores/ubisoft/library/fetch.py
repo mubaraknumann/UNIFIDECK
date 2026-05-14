@@ -31,7 +31,13 @@ logger = logging.getLogger(__name__)
 
 
 class _LibraryFetcher:
-    """Library fetcher."""
+    """Fetch the owned-games catalog from UPC's local binaries.
+
+    Orchestrates the data loader (configurations + ownership) and
+    the game builder (filtering, deduplication). Returns ``None``
+    from ``fetch_local_binaries`` when no usable data is on disk
+    yet (typically before first auth).
+    """
 
     def __init__(
         self,
@@ -39,7 +45,14 @@ class _LibraryFetcher:
         paths: UbisoftPrefixPaths,
         id_map: UbisoftIdMap,
     ) -> None:
-        """Initialize the instance."""
+        """Build the library fetcher with its loader and game-builder sub-objects.
+
+        Args:
+            config: Ubisoft store config.
+            paths: Ubisoft prefix paths (cache locations).
+            id_map: Ubisoft ID map (used to enrich raw rows with
+                canonical IDs).
+        """
         self._config = config
         self._paths = paths
         self._id_map = id_map
@@ -53,7 +66,20 @@ class _LibraryFetcher:
         self,
         installed: dict[str, Any],
     ) -> list[Game] | None:
-        """Fetch local binaries."""
+        """Load and build the owned-games list from UPC's local binaries.
+
+        Pipeline: import parser → load configurations → load ownership
+        → build per-ID lookup → cross-reference ownership → filter
+        Steam-linked → build display-ready ``Game`` records.
+
+        Args:
+            installed: Per-space_id install metadata (drives the
+                ``installed=True`` flag on records).
+
+        Returns:
+            List of ``Game`` records, or ``None`` if any required
+            source is missing.
+        """
         parser_funcs = self._import_ubisoft_parser()
         if parser_funcs is None:
             return None
@@ -90,7 +116,12 @@ class _LibraryFetcher:
     def _import_ubisoft_parser() -> (
         tuple[ParseConfigurationsFn, ParseOwnershipFn] | None
     ):
-        """Import UBISOFT parser."""
+        """Try to import the parser functions at runtime.
+
+        Returns:
+            ``(parse_configurations, parse_ownership)`` tuple, or
+            ``None`` if the parser module isn't importable.
+        """
         try:
             from ..parser import (
                 parse_configurations,

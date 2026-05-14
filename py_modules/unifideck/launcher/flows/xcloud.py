@@ -1,3 +1,5 @@
+"""xCloud launch flow — drives Edge through the CDP injection layer to stream a Game Pass title."""
+
 from __future__ import annotations
 import asyncio
 import contextlib
@@ -15,7 +17,15 @@ _POLL_INTERVAL_SECONDS = 5.0
 _XCLOUD_CDP_PORT = 9223
 _CDP_INJECT_TIMEOUT = 60.0
 def _read_config_int(key: str, default: int) -> int:
-    """Read config int."""
+    """Cold-start ConfigManager read for an int key.
+
+    Args:
+        key: Dotted config key.
+        default: Default returned if the key is missing.
+
+    Returns:
+        Resolved int value.
+    """
     from ...utils.config_helpers import read_config_int_cold_start
     return read_config_int_cold_start(key, default)
 
@@ -24,7 +34,23 @@ async def launch_xcloud(
     edge_browser: EdgeBrowser,
 ) -> Result:
 
-    """Launch xcloud."""
+    """Drive an xCloud streaming session through Edge + the CDP injector.
+
+    Launches Edge against the captured xCloud URL, schedules
+    the CDP browser-shim injection in the background, then
+    waits up to ``launcher.xcloud_max_seconds`` for the
+    browser to exit.
+
+    Args:
+        ctx: Launch context (``work_dir`` carries the URL).
+        edge_browser: Edge wrapper.
+
+    Returns:
+        A ``Result`` — success when Edge eventually exits.
+
+    Raises:
+        DependencyMissingError: Edge flatpak not installed.
+    """
     target_url = str(ctx.work_dir)
     logger.info(
         "[launcher.xcloud] launching: %s", target_url[:80],
@@ -66,7 +92,13 @@ async def launch_xcloud(
     )
     return Result(success=True, store=ctx.store)
 async def _wait_for_session_end(edge_browser: EdgeBrowser) -> None:
-    """Wait for session end."""
+    """Block until Edge exits or the session timeout expires.
+
+    Polls every 5 s if no process handle is available.
+
+    Args:
+        edge_browser: Edge wrapper.
+    """
     max_seconds = _read_config_int(
         "launcher.xcloud_max_seconds", _MAX_SESSION_SECONDS,
     )

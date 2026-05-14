@@ -30,17 +30,36 @@ logger = logging.getLogger(__name__)
 
 
 class _LauncherInstall:
-    """Launcher install."""
+    """Wraps the "open UPC pointed at the install URL" flow.
+
+    Used when the user prefers to drive the install via UPC's
+    real GUI instead of through our manual-UI driver. Bootstraps
+    the prefix, builds the launch env, spawns UPC against
+    ``uplay://install/<launch_id>``, and tracks the PID for cancellation.
+    """
 
     def __init__(self, parent: UbisoftInstaller) -> None:
-        """Initialize the instance."""
+        """Bind the launcher-install helper to its parent installer.
+
+        Args:
+            parent: Owning ``UbisoftInstaller`` instance.
+        """
         self._parent = parent
 
     async def open_launcher_for_install(
         self,
         game_id: str,
     ) -> Result:
-        """Open launcher for install."""
+        """Spawn UPC against the install URL for one game.
+
+        Args:
+            game_id: UPC space_id.
+
+        Returns:
+            A ``Result`` (``prefix_bootstrap_failed`` or env-build error
+            on prep failure, ``launcher_spawn_exception`` on subprocess
+            failure, otherwise success once UPC has started).
+        """
         try:
             logger.info(
                 "[UbisoftInstaller] open_launcher_for_install for %s",
@@ -99,7 +118,22 @@ class _LauncherInstall:
         game_id: str,
         prefix_path: str,
     ) -> Result:
-        """Spawn and monitor UPC."""
+        """Spawn UPC and schedule the post-exit monitor task.
+
+        After spawn, waits 2 s and reports failure if UPC has already
+        exited (rc surfaced in the error code). Otherwise registers
+        the PID in the parent installer and dispatches the async
+        ``monitor_after_exit`` task.
+
+        Args:
+            cmd: argv for the subprocess.
+            env: Environment dict.
+            game_id: UPC space_id.
+            prefix_path: Prefix path (for post-exit credential propagation).
+
+        Returns:
+            A ``Result`` (success when UPC is still alive at the 2 s mark).
+        """
         logger.info(
             "[UbisoftInstaller] launch cmd: %s",
             " ".join(cmd),
@@ -151,7 +185,18 @@ class _LauncherInstall:
         proc: asyncio.subprocess.Process,
         prefix_path: str,
     ) -> None:
-        """Monitor after exit."""
+        """Background task — wait for UPC to exit, then propagate credentials.
+
+        Captures and logs UPC stderr (truncated to 2 KB), then attempts
+        a credential capture + propagation from the prefix. Removes
+        the PID from the active-install registry if it's still ours.
+
+        Args:
+            game_id: UPC space_id.
+            spawned_pid: PID at spawn time (for ownership check).
+            proc: Subprocess to monitor.
+            prefix_path: Prefix path for credential capture.
+        """
         try:
             _stdout, stderr = await proc.communicate()
             rc = proc.returncode

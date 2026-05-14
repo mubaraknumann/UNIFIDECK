@@ -29,7 +29,11 @@ class SyncRPCMixin:
         return self.sync_service.get_progress()
 
     async def cancel_sync(self) -> Any:
-        """Cancel an in-flight sync."""
+        """Cancel an in-flight library sync.
+
+        Returns:
+            Whatever the sync service returns from ``cancel``.
+        """
         return await self.sync_service.cancel()
 
     async def get_all_unifideck_games(self) -> Any:

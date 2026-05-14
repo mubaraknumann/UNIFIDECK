@@ -37,7 +37,18 @@ _ORPHAN_SHORTCUT_NAMES = frozenset(
 
 
 def _prune_orphan_shortcuts(shortcuts: dict[str, Any]) -> int:
-    """Prune orphan shortcuts."""
+    """Remove orphaned ``upc.exe`` / ``ubisoft connect`` Steam shortcuts (in-place).
+
+    Targets entries with no exe path and no launch options — 
+    remnants of older Unifideck installs.
+
+    Args:
+        shortcuts: ``shortcuts`` sub-dict of the parsed VDF
+            (mutated).
+
+    Returns:
+        Number of entries removed.
+    """
     orphan_ids = [
         idx
         for idx, s in shortcuts.items()
@@ -59,7 +70,15 @@ def _prune_orphan_shortcuts(shortcuts: dict[str, Any]) -> int:
 def _prune_legacy_template_shortcuts(
     shortcuts: dict[str, Any],
 ) -> int:
-    """Prune legacy template shortcuts."""
+    """Remove entries left over from the ``ubisoft:.template`` flow (in-place).
+
+    Args:
+        shortcuts: ``shortcuts`` sub-dict of the parsed VDF
+            (mutated).
+
+    Returns:
+        Number of entries removed.
+    """
     legacy_ids = [
         idx
         for idx, s in shortcuts.items()
@@ -75,14 +94,33 @@ def _prune_legacy_template_shortcuts(
 
 
 class _AuthShortcut:
-    """Auth shortcut."""
+    """Manage the Ubisoft Connect Steam shortcut used by the auth flow.
+
+    Owns creation, validation, and re-creation of the
+    non-Steam shortcut that launches UPC inside the dedicated
+    auth Wine prefix. The shortcut's store_id
+    (``ubisoft:upc-auth``) keys it in Unifideck's registry so
+    later runs can find and reuse it across Steam restarts.
+    """
 
     def __init__(self, parent: UbisoftAuth) -> None:
-        """Initialize the instance."""
+        """Bind the shortcut-helper to its parent auth orchestrator.
+
+        Args:
+            parent: Owning ``UbisoftAuth`` instance (provides
+                config and plugin_dir for path resolution).
+        """
         self._parent = parent
 
     def get_launcher_path(self) -> str:
-        """Get launcher path."""
+        """Resolve the absolute path to the launcher dispatcher entry script.
+
+        Falls back to a path derived from this file's location
+        when the parent flow has no ``plugin_dir`` set.
+
+        Returns:
+            Absolute path to ``launcher/dispatcher.py``.
+        """
         plugin_dir = self._parent._plugin_dir
         if not plugin_dir:
             plugin_dir = str(
@@ -97,14 +135,33 @@ class _AuthShortcut:
         )
 
     def build_auth_launch_options(self) -> str:
-        """Build auth launch options."""
+        """Build the Steam launch-options string for the auth shortcut.
+
+        Encodes both the auth shortcut store_id and the
+        dedicated prefix name (consumed by the dispatcher).
+
+        Returns:
+            Launch-options string ready to write into the VDF.
+        """
         return _AUTH_LAUNCH_OPTIONS_TEMPLATE.format(
             store_id=(self._parent._config.auth_shortcut_store_id),
             prefix_name=self._parent._config.auth_prefix_name,
         )
 
     async def ensure_auth_shortcut(self) -> int | None:
-        """Ensure auth shortcut."""
+        """Ensure a usable auth Steam shortcut exists, creating one if needed.
+
+        Reuses the registry entry when present and valid, falls
+        back to recreating the VDF entry if the registry knows
+        an appid we can no longer find in Steam's VDF, and
+        creates fresh entries (registry + VDF + artwork) as a
+        last resort.
+
+        Returns:
+            Unsigned appid of the auth shortcut, or ``None`` if
+            no shortcut service was wired (or the operation
+            failed).
+        """
         if self._parent._shortcut_service is None:
             logger.debug(
                 "[UbisoftAuth] no shortcut_service; skipping auth shortcut creation",
@@ -135,7 +192,20 @@ class _AuthShortcut:
         sm: ShortcutService,
         store_id: str,
     ) -> int | None:
-        """Try existing shortcut."""
+        """Reuse an existing auth shortcut from the registry if possible.
+
+        Validates the VDF entry first. When the registry knows
+        the appid but the VDF entry is missing, recreates the
+        VDF entry and force-fetches artwork.
+
+        Args:
+            sm: ShortcutService.
+            store_id: Registry key (``ubisoft:upc-auth``).
+
+        Returns:
+            Unsigned appid, or ``None`` if no registry entry
+            exists or it can't be repaired.
+        """
         registry = await self._parent._load_registry(sm)
         if store_id not in registry:
             return None
@@ -169,7 +239,20 @@ class _AuthShortcut:
         sm: ShortcutService,
         store_id: str,
     ) -> int | None:
-        """Create new auth shortcut."""
+        """Create a fresh auth shortcut (VDF + registry + artwork).
+
+        Generates a deterministic appid from the launcher path
+        and shortcut name, prunes orphan / legacy entries from
+        the VDF, inserts the new canonical entry, then registers
+        and clears compat-tool state.
+
+        Args:
+            sm: ShortcutService.
+            store_id: Registry key.
+
+        Returns:
+            Unsigned appid of the new shortcut.
+        """
         launcher_path = self.get_launcher_path()
         appid = sm.generate_app_id(
             launcher_path,
@@ -206,7 +289,13 @@ class _AuthShortcut:
         appid: int,
         unsigned_id: int,
     ) -> None:
-        """Finalize new shortcut."""
+        """Finalize a newly-created auth shortcut: register, cleanup, artwork.
+
+        Args:
+            sm: ShortcutService.
+            appid: Signed appid.
+            unsigned_id: Unsigned appid for artwork.
+        """
         await self._parent._register_shortcut(
             sm,
             appid,
@@ -223,7 +312,18 @@ class _AuthShortcut:
         appid: int,
         unsigned_id: int,
     ) -> bool:
-        """Add canonical if missing."""
+        """Append the canonical auth-shortcut entry to the VDF if not already present.
+
+        Args:
+            shortcuts: ``shortcuts`` sub-dict of the parsed VDF
+                (mutated).
+            launcher_path: Absolute path to the dispatcher.
+            appid: Signed appid.
+            unsigned_id: Unsigned appid (for logs).
+
+        Returns:
+            True iff the entry was added.
+        """
         if self.shortcut_in_vdf(shortcuts):
             return False
         existing_indices = [int(k) for k in shortcuts if k.isdigit()]
@@ -246,7 +346,21 @@ class _AuthShortcut:
         return True
 
     async def validate_auth_shortcut(self, sm: ShortcutService) -> bool:
-        """Validate auth shortcut."""
+        """Verify the on-disk VDF matches our expected fields; repair drift.
+
+        Looks for the entry by store_id (extracted from
+        LaunchOptions). When found, repairs any drift in
+        LaunchOptions / exe / StartDir / appid in place; if not
+        found, logs a warning and returns False.
+
+        Args:
+            sm: ShortcutService.
+
+        Returns:
+            True iff the shortcut exists in the VDF (regardless
+            of whether it was repaired). Returns True on any
+            unexpected exception (graceful degradation).
+        """
         try:
             launcher_path = self.get_launcher_path()
             expected_launch_options = self.build_auth_launch_options()
@@ -304,7 +418,17 @@ class _AuthShortcut:
         expected_launch_options: str,
         expected_appid: int,
     ) -> bool:
-        """Fix shortcut fields."""
+        """Repair drift in one VDF shortcut entry (in-place).
+
+        Args:
+            entry: One shortcut entry from the parsed VDF.
+            launcher_path: Expected absolute launcher path.
+            expected_launch_options: Expected LaunchOptions string.
+            expected_appid: Expected signed appid.
+
+        Returns:
+            True iff any field was modified.
+        """
         changed = False
         if entry.get("LaunchOptions", "") != expected_launch_options:
             logger.info(
@@ -329,7 +453,13 @@ class _AuthShortcut:
         return changed
 
     async def auth_shortcut_exists_in_vdf(self) -> bool:
-        """Auth shortcut exists in VDF."""
+        """Check whether the auth shortcut is present in Steam's VDF.
+
+        Returns True (no-op) when no shortcut service is wired.
+
+        Returns:
+            True iff an entry with the matching store_id exists.
+        """
         if self._parent._shortcut_service is None:
             return True
         try:
@@ -352,7 +482,14 @@ class _AuthShortcut:
         sm: ShortcutService,
         appid: int,
     ) -> None:
-        """Add shortcut to VDF."""
+        """Insert the canonical auth-shortcut entry into the VDF and persist it.
+
+        No-op when the entry already exists.
+
+        Args:
+            sm: ShortcutService.
+            appid: Signed appid for the entry.
+        """
         launcher_path = self.get_launcher_path()
         launch_options = self.build_auth_launch_options()
         shortcuts_data = await sm.read_shortcuts()
@@ -378,7 +515,14 @@ class _AuthShortcut:
         self,
         shortcuts: dict[str, Any],
     ) -> bool:
-        """Shortcut in VDF."""
+        """Return True iff the parsed VDF already contains the auth shortcut.
+
+        Args:
+            shortcuts: ``shortcuts`` sub-dict of the parsed VDF.
+
+        Returns:
+            True iff a matching store_id is present.
+        """
         target = self._parent._config.auth_shortcut_store_id
         for s in shortcuts.values():
             full_id = self.extract_store_id(
@@ -390,7 +534,17 @@ class _AuthShortcut:
 
     @staticmethod
     def extract_store_id(launch_options: str) -> str:
-        """Extract store ID."""
+        """Pull the leading store_id token out of a LaunchOptions string.
+
+        The store_id is always the first whitespace-separated
+        token (the dispatcher reads it positionally).
+
+        Args:
+            launch_options: VDF LaunchOptions value.
+
+        Returns:
+            The store_id token (empty string when no input).
+        """
         if not launch_options:
             return ""
         return launch_options.split(maxsplit=1)[0]

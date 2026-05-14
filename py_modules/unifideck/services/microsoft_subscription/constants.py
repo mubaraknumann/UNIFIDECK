@@ -1,3 +1,5 @@
+"""Static constants for the Microsoft subscription service (cache key prefix, probe URL)."""
+
 from __future__ import annotations
 _CACHE_STORE_NAME = "microsoft_subscription"
 _CACHE_KEY_PREFIX = "ms_sub_"

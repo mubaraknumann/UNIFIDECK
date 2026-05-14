@@ -18,7 +18,18 @@ import math
 
 
 def _convert_data(data: int) -> int:
-    """Convert data."""
+    """Strip continuation bits from a multi-byte varint-style value.
+
+    UPC's binary catalog encodes integers as little-endian byte
+    sequences where each byte carries a continuation marker in
+    its top bit. This helper subtracts the marker contribution.
+
+    Args:
+        data: Accumulated raw value before normalization.
+
+    Returns:
+        Decoded integer.
+    """
     if data > 256 * 256:
         data -= 128 * 256 * math.ceil(data / (256 * 256))
         data -= 128 * math.ceil(data / 256)
@@ -32,7 +43,20 @@ def parse_record_size(
     offset: int,
     second_eight: bool,
 ) -> tuple[int, int, int]:
-    """Parse record size."""
+    """Walk the size-prefix bytes of a binary record header.
+
+    Two scanning modes are supported via ``second_eight``: the
+    first reads until the first non-``0x08`` byte; the second
+    tolerates a doubled ``0x08 0x08`` separator.
+
+    Args:
+        header: Raw record header bytes.
+        offset: Cursor into ``header``.
+        second_eight: Pick the secondary scanning mode.
+
+    Returns:
+        Tuple ``(record_size, new_offset, consumed_bytes)``.
+    """
     multiplier = 1
     record_size = 0
     tmp_size = 0
@@ -56,7 +80,15 @@ def parse_record_size(
 
 
 def parse_install_id(header: bytes, offset: int) -> tuple[int, int]:
-    """Parse install ID."""
+    """Decode the install-ID varint preceding a ``0x10`` separator.
+
+    Args:
+        header: Raw record bytes.
+        offset: Cursor into ``header``.
+
+    Returns:
+        Tuple ``(install_id, new_offset)``.
+    """
     multiplier = 1
     install_id = 0
     while header[offset] != 0x10 or header[offset + 1] == 0x10:
@@ -69,7 +101,15 @@ def parse_install_id(header: bytes, offset: int) -> tuple[int, int]:
 
 
 def parse_launch_id(header: bytes, offset: int) -> tuple[int, int]:
-    """Parse launch ID."""
+    """Decode the launch-ID varint preceding a ``0x1A`` separator.
+
+    Args:
+        header: Raw record bytes.
+        offset: Cursor into ``header``.
+
+    Returns:
+        Tuple ``(launch_id, new_offset)``.
+    """
     multiplier = 1
     launch_id = 0
     while header[offset] != 0x1A or (
@@ -83,7 +123,20 @@ def parse_launch_id(header: bytes, offset: int) -> tuple[int, int]:
 
 
 def parse_ownership_record(chunk: bytes) -> tuple | None:
-    """Parse ownership record."""
+    """Decode one ownership record chunk from the binary catalog.
+
+    Reads, in order: the size prefix, the first launch ID, and
+    the second launch ID. Any decoding failure returns ``None``
+    so the caller can skip a malformed record without aborting
+    the whole parse.
+
+    Args:
+        chunk: Raw record bytes (must start at the size prefix).
+
+    Returns:
+        Tuple ``(rec_size, tmp_size, lid1, lid2)``, or ``None``
+        on any decoding error.
+    """
     try:
         pos = 1
         multiplier = 1

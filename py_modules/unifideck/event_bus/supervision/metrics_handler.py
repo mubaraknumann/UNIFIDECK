@@ -106,7 +106,8 @@ class HandlerLatencyCollector:
         snapshot = collector.get_snapshot()  # for RPC response
     """
 
-    def __init__(self) -> None:  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(self) -> None:
+        """Initialize per-handler latency accumulators."""
         self._stats: dict[str, HandlerLatencyStats] = {}
 
     def record(self, handler_name: str, duration_ms: float) -> None:

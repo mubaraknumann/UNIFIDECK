@@ -26,7 +26,13 @@ logger = logging.getLogger(__name__)
 
 
 class _AuthSessionMonitor:
-    """Auth session monitor."""
+    """Background poller that signals sign-in completion.
+
+    Polls the auth prefix every 2 s for the appearance of UPC's
+    credential files. On capture, propagates credentials to all
+    prefixes and queues the post-auth asset-ensure pass. Times
+    out silently after 30 min.
+    """
 
     def __init__(
         self,
@@ -35,7 +41,14 @@ class _AuthSessionMonitor:
         session: Any,
         queue_auth_assets_ensure: Callable[[str], None],
     ) -> None:
-        """Initialize the instance."""
+        """Wire dependencies for the post-sign-in session monitor.
+
+        Args:
+            config: Ubisoft store config.
+            session: Ubisoft session state to watch.
+            queue_auth_assets_ensure: Callback enqueueing
+                auth-assets propagation once a session is captured.
+        """
         self._config = config
         self._session = session
         self._queue_auth_assets_ensure = queue_auth_assets_ensure
@@ -43,7 +56,14 @@ class _AuthSessionMonitor:
         self._session_captured = False
 
     async def start(self) -> Result:
-        """Start."""
+        """Start (or restart) the background monitor task.
+
+        Cancels and replaces any prior task so callers can re-arm the
+        monitor without bookkeeping.
+
+        Returns:
+            A successful ``Result``.
+        """
         if self._monitor_task is not None and not self._monitor_task.done():
             self._monitor_task.cancel()
             try:
@@ -63,7 +83,12 @@ class _AuthSessionMonitor:
         return Result(success=True)
 
     async def _loop(self) -> None:
-        """Loop."""
+        """Main monitor loop — poll until capture or timeout (30 min).
+
+        On capture: invokes ``session.propagate_all_to_all`` and
+        queues a post-capture asset-ensure pass. On timeout: logs
+        a warning and returns.
+        """
         auth_dir = self._config.auth_prefix_dir_expanded
         elapsed = 0.0
         while elapsed < _AUTH_MONITOR_TIMEOUT_S:
@@ -86,7 +111,13 @@ class _AuthSessionMonitor:
         )
 
     def status(self) -> dict[str, Any]:
-        """Status."""
+        """Return the current monitor state.
+
+        Returns:
+            Dict ``{captured, monitoring}`` — whether credentials
+            have been captured at least once, and whether the
+            monitor task is currently alive.
+        """
         monitoring = self._monitor_task is not None and not self._monitor_task.done()
         return {
             "captured": self._session_captured,

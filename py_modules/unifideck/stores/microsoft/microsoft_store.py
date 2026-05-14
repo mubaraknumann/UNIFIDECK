@@ -1,3 +1,5 @@
+"""MicrosoftStore — entry point implementing the Store protocol for the xCloud / Xbox backend."""
+
 from __future__ import annotations
 import logging
 from pathlib import Path
@@ -29,7 +31,14 @@ if TYPE_CHECKING:
     )
 logger = logging.getLogger(__name__)
 class MicrosoftStore(StoreBase):
-    """Microsoft store."""
+    """Microsoft / xCloud store backend (``StoreBase`` implementation).
+
+    Bridges the Edge browser (for the OAuth flow), the
+    Microsoft token manager (XBL/XSTS chain), the catalog
+    reader, and the Game Pass subscription service into a
+    cohesive façade. Does not actually install/uninstall —
+    Microsoft games run via xCloud streaming through Edge.
+    """
     store_info = StoreInfo(
         name="microsoft",
         display_name="Microsoft",
@@ -51,7 +60,24 @@ class MicrosoftStore(StoreBase):
         subscription_service: MicrosoftSubscriptionService | None = None,
     ) -> None:
 
-        """Initialize the instance."""
+        """Build the Microsoft store specialists (config, tokens, auth, subscription).
+
+        Reads Microsoft-specific config, builds the token manager
+        (with the user's locale plumbed in), then wires the Edge
+        browser, subscription service, and remaining specialists.
+
+        Args:
+            bus: Event bus.
+            cache: Cache manager.
+            plugin_dir: Plugin root directory.
+            config: ConfigManager.
+            browser_monitor: Optional OAuth browser monitor.
+            shortcut_service: Optional shortcut service.
+            edge_browser: Optional Edge browser wrapper (required
+                for xCloud + OAuth flow).
+            subscription_service: Optional Game Pass subscription
+                probe service.
+        """
         super().__init__(bus, cache, plugin_dir, config)
         self._ms_config: MicrosoftConfig = (
             MicrosoftConfig.from_config_manager(config)
@@ -93,7 +119,14 @@ class MicrosoftStore(StoreBase):
         else:
             self._auth = None
     async def is_available(self) -> bool:
-        """Check whether available."""
+        """Return True iff the config is valid AND tokens load successfully.
+
+        Token-load failure (missing file, malformed JSON,
+        expired refresh token) returns False without raising.
+
+        Returns:
+            True iff Microsoft is usable.
+        """
         if not self._ms_config.is_valid():
             self._cached_available = False
             return False
@@ -103,7 +136,18 @@ class MicrosoftStore(StoreBase):
 
     async def start_auth(self, **kwargs) -> AuthResult:
 
-        """Start auth."""
+        """Drive the Microsoft OAuth flow through Edge.
+
+        Refuses if no browser monitor was wired (returns
+        ``auth_not_configured``) or if Edge is not installed
+        (returns ``edge_not_installed`` — the UI shows the
+        install prompt). Ensures Edge has controller
+        permissions and registers the auth Steam shortcut
+        before delegating to the flow.
+
+        Returns:
+            ``AuthResult``.
+        """
         if self._auth is None:
             return AuthResult(
                 success=False,
@@ -128,7 +172,15 @@ class MicrosoftStore(StoreBase):
     async def complete_auth(
         self, code: str = "", **kwargs,
     ) -> AuthResult:
-        """Complete auth."""
+        """Probe whether tokens are now valid after an external auth.
+
+        Args:
+            code: Reserved for parity; unused (Edge captures
+                the code internally).
+
+        Returns:
+            ``AuthResult`` reflecting ``is_available``.
+        """
         if await self.is_available():
             return AuthResult(success=True, store="microsoft")
         return AuthResult(
@@ -137,7 +189,15 @@ class MicrosoftStore(StoreBase):
             store="microsoft",
         )
     async def logout(self) -> Result:
-        """Logout."""
+        """Clear tokens, remove the cached auth URL file, and reset Edge state.
+
+        Cancels any pending auth flow, removes
+        ``~/.local/share/unifideck/ms_auth_url.txt``, kills
+        Edge, clears its cookies, and wipes its profile data.
+
+        Returns:
+            ``Result``.
+        """
         if self._auth is not None:
             result = await self._auth.logout()
         else:
@@ -173,7 +233,17 @@ class MicrosoftStore(StoreBase):
 
     async def get_library(self) -> list[Game] | None:
 
-        """Get library."""
+        """Fetch the xCloud catalog as a list of ``Game`` records.
+
+        Pipeline: verify auth → refresh tokens if stale →
+        check the Game Pass subscription gate → build the
+        XBL chain → fetch the catalog. Returns an empty list
+        (not ``None``) on any failure to avoid masking the
+        store from the rest of the UI.
+
+        Returns:
+            Catalog ``Game`` list, or empty on any failure.
+        """
         if not await self.is_available():
             logger.info(
                 "[MicrosoftStore] not authenticated; "
@@ -206,7 +276,20 @@ class MicrosoftStore(StoreBase):
 
     async def _check_subscription_gate(self) -> bool:
 
-        """Check subscription gate."""
+        """Skip catalog fetch when the user has no active Game Pass tier.
+
+        Emits SYNC_SKIPPED with one of:
+          * ``subscription_check_error`` (probe raised)
+          * ``no_active_subscription`` (tier=NONE)
+          * ``subscription_tier_unknown`` (tier=ACTIVE_UNKNOWN)
+
+        Returns ``True`` (gate passed) when no subscription
+        service is wired — legacy behavior so isolation tests
+        still work.
+
+        Returns:
+            True iff catalog fetch should proceed.
+        """
         if self._subscription_service is None:
             logger.debug(
                 "[MicrosoftStore] no subscription_service "
@@ -266,7 +349,17 @@ class MicrosoftStore(StoreBase):
         progress_cb: Any = None,
         **kwargs: Any,
     ) -> InstallResult:
-        """Install game."""
+        """No-op for Microsoft / xCloud (games stream, they don't install).
+
+        Args:
+            game_id: xCloud product ID.
+            base_path: Ignored.
+            progress_cb: Ignored.
+
+        Returns:
+            ``InstallResult`` with ``success=True`` and a null
+            install_path.
+        """
         return InstallResult(
             success=True,
             store="microsoft",
@@ -276,7 +369,14 @@ class MicrosoftStore(StoreBase):
     async def uninstall_game(
         self, game_id: str, **kwargs: Any,
     ) -> Result:
-        """Uninstall game."""
+        """No-op for Microsoft / xCloud.
+
+        Args:
+            game_id: xCloud product ID.
+
+        Returns:
+            ``Result`` with ``success=True``.
+        """
         return Result(success=True)
 
     async def update_game(
@@ -286,22 +386,46 @@ class MicrosoftStore(StoreBase):
         **kwargs: Any,
     ) -> InstallResult:
 
-        """Update game."""
+        """No-op for Microsoft / xCloud (catalog updates server-side).
+
+        Args:
+            game_id: xCloud product ID.
+            progress_cb: Ignored.
+
+        Returns:
+            ``InstallResult`` with ``success=True``.
+        """
         return InstallResult(
             success=True,
             store="microsoft",
             game_id=game_id,
         )
     async def check_for_updates(self) -> list[str]:
-        """Check for updates."""
+        """Always returns an empty list — xCloud titles update server-side.
+
+        Returns:
+            Empty list.
+        """
         return []
     async def get_game_size(
         self, game_id: str,
     ) -> int | None:
-        """Get game size."""
+        """Always ``None`` for streamed Microsoft / xCloud titles.
+
+        Args:
+            game_id: xCloud product ID.
+
+        Returns:
+            ``None``.
+        """
         return None
     async def install_edge(self) -> Result:
-        """Install edge."""
+        """Install the Edge flatpak via the bundled installer.
+
+        Returns:
+            ``Result`` — ``edge_browser_not_configured`` if no
+            EdgeBrowser was injected.
+        """
         if self._edge is None:
             return Result(
                 success=False,
@@ -313,13 +437,23 @@ class MicrosoftStore(StoreBase):
             error=raw.get("error"),
         )
     def is_edge_installed(self) -> bool:
-        """Check whether edge installed."""
+        """Return True iff Edge is configured and installed.
+
+        Returns:
+            True iff the EdgeBrowser is wired and reports installed.
+        """
         return (
             self._edge is not None
             and self._edge.is_installed
         )
     async def _ensure_auth_shortcut(self) -> None:
-        """Ensure auth shortcut."""
+        """Register the Steam auth shortcut that launches our dispatcher.
+
+        Required for Microsoft because the OAuth flow runs in
+        Edge as a non-Steam shortcut. Skips silently when no
+        shortcut service is wired or the dispatcher file is
+        missing.
+        """
         if self._shortcut_service is None:
             logger.debug(
                 "[MicrosoftStore] no shortcut_service "

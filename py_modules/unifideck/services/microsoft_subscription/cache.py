@@ -1,3 +1,5 @@
+"""TTL-bound cache entries for Microsoft subscription detection — stored under an end-of-month-UTC expiration."""
+
 from __future__ import annotations
 import time
 from dataclasses import dataclass
@@ -13,7 +15,12 @@ class _CachedEntry:
         """Check whether fresh."""
         return (now if now is not None else time.time()) < self.expires_at
     def to_dict(self) -> dict[str, Any]:
-        """To dict."""
+        """Serialise the entry to a JSON-compatible dict.
+
+        Returns:
+            Dict ``{tier, expires_at, detected_at}`` ready for the
+            CacheManager.
+        """
         return {
             "tier": self.tier.value,
             "expires_at": self.expires_at,
@@ -23,7 +30,15 @@ class _CachedEntry:
     def from_dict(
         cls, raw: dict[str, Any],
     ) -> _CachedEntry | None:
-        """From dict."""
+        """Build a ``_CachedEntry`` from a previously-serialised dict.
+
+        Args:
+            raw: Dict produced by ``to_dict``.
+
+        Returns:
+            A fresh entry, or ``None`` if the dict is malformed
+            (missing keys, wrong types).
+        """
         try:
             return cls(
                 tier=SubscriptionTier(raw["tier"]),

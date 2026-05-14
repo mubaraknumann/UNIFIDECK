@@ -20,7 +20,19 @@ logger = logging.getLogger(__name__)
 
 
 async def get_launch_id_or_none(svc: LauncherService) -> str | None:
-    """Return the current launch correlation ID, or None."""
+    """Return the current launch correlation ID, or ``None`` if unset.
+
+    Convenience accessor returning ``None`` rather than the
+    ``"-"`` sentinel that ``get_launch_id`` returns when no
+    launch is active.
+
+    Args:
+        svc: LauncherService (provides launch_history).
+
+    Returns:
+        Launch ID string, or ``None`` if no launch is active
+        or the launch_history service is unavailable.
+    """
     if not svc._launch_history:
         return None
     try:

@@ -1,3 +1,5 @@
+"""Launch option parsing — wrappers, env tokens, LSFG keys, and Proton flags from the raw argv string."""
+
 from __future__ import annotations
 import os
 import re
@@ -8,13 +10,40 @@ _ENV_TOKEN_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
 _LSFG_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)$")
 @dataclass
 class ParsedOptions:
-    """Parsed options."""
+    """Result of parsing the Steam ``%command%`` style options string.
+
+    Attributes:
+        wrappers: Tokens that appear BEFORE ``%command%``
+            (gamemoderun, mangohud, …).
+        game_args: Tokens that appear AFTER ``%command%``.
+        env_overrides: ``KEY=VALUE`` tokens lifted out of the
+            argv into a dict (applied as environment).
+        lsfg_requested: True iff an ``lsfg`` wrapper script
+            or ``LSFG=1`` / ``ENABLE_LSFG=1`` env was set.
+    """
     wrappers: list[str] = field(default_factory=list)
     game_args: list[str] = field(default_factory=list)
     env_overrides: dict[str, str] = field(default_factory=dict)
     lsfg_requested: bool = False
 def parse_launch_options(raw: str) -> ParsedOptions:
-    """Parse launch options."""
+    """Parse the raw options string into wrappers / game args / env / LSFG flag.
+
+    Token rules:
+      * ``KEY=VALUE`` (key matching ``[A-Z_][A-Z0-9_]*``) →
+        ``env_overrides``
+      * Tokens ending in ``/lsfg`` (after ``~`` expansion) →
+        set ``lsfg_requested`` and are dropped
+      * Tokens before ``%command%`` → ``wrappers``; after →
+        ``game_args``. ``#%command%`` is dropped.
+      * If no ``%command%`` was seen, all positional tokens
+        are treated as game args.
+
+    Args:
+        raw: Raw options string (typically ``" ".join(argv[2:])``).
+
+    Returns:
+        A ``ParsedOptions``.
+    """
     result = ParsedOptions()
     if not raw or not raw.strip():
         return result
@@ -51,7 +80,12 @@ def _split_tokens_around_command(
     tokens: list[str], result: ParsedOptions,
 ) -> None:
 
-    """Split tokens around command."""
+    """Split positional tokens on ``%command%`` into wrappers vs game args.
+
+    Args:
+        tokens: Positional tokens (already filtered).
+        result: Output ``ParsedOptions`` (mutated).
+    """
     found_cmd = False
     for tok in tokens:
         if tok == "%command%":
@@ -74,7 +108,21 @@ def apply_lsfg_env(
     opts: ParsedOptions,
     lsfg_script: Path | None = None,
 ) -> dict[str, str]:
-    """Apply lsfg env."""
+    """Compute the LSFG env-overlay by parsing the user's ``~/lsfg`` script.
+
+    Returns an empty dict when LSFG wasn't requested or the
+    script is missing. Otherwise pulls every ``export KEY=VALUE``
+    line out of the script (quotes stripped, KEY matching
+    ``[A-Za-z_][A-Za-z0-9_]*``).
+
+    Args:
+        opts: Parsed options (``lsfg_requested`` is checked).
+        lsfg_script: Override the script path (defaults to ``~/lsfg``).
+
+    Returns:
+        Dict of env-var overlays (always includes ``ENABLE_LSFG=1``
+        when LSFG is active).
+    """
     if not opts.lsfg_requested:
         return {}
     if lsfg_script is None:

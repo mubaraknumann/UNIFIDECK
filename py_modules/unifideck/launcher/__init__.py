@@ -1,3 +1,5 @@
+"""Launcher subpackage — public exports for game launch orchestration."""
+
 from __future__ import annotations
 from .types.context import LaunchContext
 from .types.errors import (

@@ -1,3 +1,5 @@
+"""Epic-prefix repair routines — resolves Wine binary location and applies the Epic Games Launcher compatibility tweaks."""
+
 from __future__ import annotations
 import asyncio
 import logging
@@ -12,7 +14,14 @@ _PROTON_FALLBACK_WINE_PATHS: list[str] = [
     "~/.steam/steam/steamapps/common/Proton 9.0 (Beta)/files/bin/wine",
 ]
 def normalize_prefix_root(prefix_path: Path) -> Path:
-    """Normalize prefix root."""
+    """Strip trailing ``pfx`` segments to return the canonical prefix root.
+
+    Args:
+        prefix_path: Any path inside (or equal to) the Wine prefix.
+
+    Returns:
+        The resolved prefix root.
+    """
     p = prefix_path.resolve()
     while p.name == "pfx":
         p = p.parent
@@ -24,7 +33,21 @@ def _copy_wrapper_to_drive_c(
     label: str,
 ) -> bool:
 
-    """Copy wrapper to drive c."""
+    """Drop the EpicGamesLauncher.exe wrapper into the Wine drive_c.
+
+    Copies the bundled stub to both ``Program Files (x86)/Epic
+    Games/Launcher/Portal/Binaries/Win32/`` and
+    ``windows/command/`` (Legendary sets
+    ``LEGENDARY_WRAPPER_EXE`` to the latter as a fallback).
+
+    Args:
+        drive_c: Wine ``drive_c`` directory inside the prefix.
+        bundled_wrapper: Source wrapper binary shipped with the plugin.
+        label: Free-form label for logs (``"root"`` / ``"pfx"``).
+
+    Returns:
+        True iff at least one of the two destinations was written.
+    """
     if not bundled_wrapper.is_file():
         logger.warning(
             "[epic_prefix_fix] bundled wrapper missing at %s",
@@ -80,7 +103,15 @@ def _copy_wrapper_to_drive_c(
         )
     return copied
 def _find_wine_binary() -> Path | None:
-    """Find WINE binary."""
+    """Locate a usable Wine binary.
+
+    Tries, in order: ``$PROTONPATH/files/bin/wine``, several
+    well-known Proton install paths under ``~/.steam/``, then
+    the system ``wine`` via ``shutil.which``.
+
+    Returns:
+        Path to the binary or ``None`` if nothing was found.
+    """
     proton_env = os.environ.get("PROTONPATH")
     if proton_env:
         candidate = Path(proton_env) / "files" / "bin" / "wine"
@@ -99,7 +130,18 @@ def _select_registry_prefix(
     prefix_root: Path,
 ) -> Path:
 
-    """Select registry prefix."""
+    """Pick the directory to point ``WINEPREFIX`` at for reg-add calls.
+
+    If ``pfx`` is a symlink back to the prefix root → root.
+    Else if ``pfx/drive_c`` exists → ``pfx``.
+    Else → root.
+
+    Args:
+        prefix_root: Canonical prefix root.
+
+    Returns:
+        Path suitable for WINEPREFIX.
+    """
     pfx_candidate = prefix_root / "pfx"
     if not pfx_candidate.exists():
         return prefix_root
@@ -116,7 +158,15 @@ async def _run_registry_inject(
     wine_bin: Path,
     wineprefix: Path,
 ) -> bool:
-    """Run registry inject."""
+    """Add the Epic-launcher URL-scheme registry key (30s timeout).
+
+    Args:
+        wine_bin: Path to the Wine binary.
+        wineprefix: Path to set as WINEPREFIX for the call.
+
+    Returns:
+        True iff the ``wine reg add`` call exited 0.
+    """
     env = dict(os.environ)
     env["WINEPREFIX"] = str(wineprefix)
     try:
@@ -156,7 +206,12 @@ async def _run_registry_inject(
         )
         return False
 async def _kill_wineserver(wine_bin: Path, wineprefix: Path) -> None:
-    """Kill wineserver."""
+    """Best-effort ``wineserver --kill`` to flush the prefix.
+
+    Args:
+        wine_bin: Path to the Wine binary (used to find ``wineserver``).
+        wineprefix: Path passed as WINEPREFIX to the kill call.
+    """
     wineserver = wine_bin.parent / "wineserver"
     if not wineserver.is_file():
         return
@@ -181,7 +236,21 @@ async def apply_epic_launcher_fix(
     bundled_wrapper: Path,
 ) -> bool:
 
-    """Apply EPIC launcher fix."""
+    """Install the Epic-launcher wrapper and seed the registry key.
+
+    Steps: normalize prefix → copy the wrapper into both
+    drive_c locations (root and ``pfx``) → locate Wine →
+    select the active prefix → inject the registry key →
+    kill wineserver.
+
+    Args:
+        prefix_path: Path to the Wine prefix (any subpath).
+        bundled_wrapper: Bundled wrapper binary to install.
+
+    Returns:
+        True if the wrapper was copied (registry injection is
+        best-effort and does not affect the return value).
+    """
     prefix_root = normalize_prefix_root(prefix_path)
     root_drive_c = prefix_root / "drive_c"
     pfx_drive_c = prefix_root / "pfx" / "drive_c"

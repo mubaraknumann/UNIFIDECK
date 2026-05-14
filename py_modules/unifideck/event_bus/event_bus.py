@@ -53,7 +53,8 @@ class EventBus:
     await bus.emit(Events.STORE_AUTH_COMPLETE, store="epic").
     """
 
-    def __init__(self) -> None:  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(self) -> None:
+        """Initialize an empty event bus."""
         # Map Events.value -> list of handlers (str key avoids enum
         # identity issues across module reloads)
         self._handlers: dict[str, list[Handler]] = {}

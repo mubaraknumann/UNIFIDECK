@@ -70,7 +70,17 @@ _UBI_CONFIG_PREFIX = "stores.ubisoft"
 
 @dataclass(frozen=True)
 class UbisoftConfig:
-    """Ubisoft config."""
+    """Frozen dataclass holding every tunable parameter of the Ubisoft sub-package.
+
+    Built from the user's ``stores.ubisoft.*`` config namespace via
+    ``from_config_manager`` (each field falls back to a hard-coded
+    default if missing or malformed in config). Raw fields keep the
+    ``~`` and are expanded lazily by the ``*_expanded`` properties
+    so a ``$HOME`` change mid-session is picked up correctly.
+
+    ``frozen=True``: mutations require a new instance, normally
+    obtained by re-running ``from_config_manager``.
+    """
 
     _FIELD_SPECS: ClassVar[tuple]
     data_dir: str = _DEFAULT_DATA_DIR
@@ -153,27 +163,47 @@ class UbisoftConfig:
 
     @property
     def data_dir_expanded(self) -> str:
-        """Data dir expanded."""
+        """Resolve ``data_dir`` with environment variables and ``~`` expanded.
+
+        Returns:
+            Absolute path string.
+        """
         return os.path.expanduser(self.data_dir)
 
     @property
     def id_map_file_expanded(self) -> str:
-        """Id map file expanded."""
+        """Resolve the id_map JSON path with expansion applied.
+
+        Returns:
+            Absolute path string.
+        """
         return os.path.expanduser(self.id_map_file)
 
     @property
     def visible_games_file_expanded(self) -> str:
-        """Visible games file expanded."""
+        """Resolve the visible-games JSON path with expansion applied.
+
+        Returns:
+            Absolute path string.
+        """
         return os.path.expanduser(self.visible_games_file)
 
     @property
     def prefixes_dir_expanded(self) -> str:
-        """Prefixes dir expanded."""
+        """Resolve the prefixes directory path with expansion applied.
+
+        Returns:
+            Absolute path string.
+        """
         return os.path.expanduser(self.prefixes_dir)
 
     @property
     def template_dir_expanded(self) -> str:
-        """Template dir expanded."""
+        """Resolve the template-prefix directory path with expansion applied.
+
+        Returns:
+            Absolute path string.
+        """
         return os.path.join(
             self.prefixes_dir_expanded,
             self.template_prefix_name,
@@ -181,7 +211,11 @@ class UbisoftConfig:
 
     @property
     def auth_prefix_dir_expanded(self) -> str:
-        """Auth prefix dir expanded."""
+        """Resolve the auth-prefix directory path with expansion applied.
+
+        Returns:
+            Absolute path string.
+        """
         return os.path.join(
             self.prefixes_dir_expanded,
             self.auth_prefix_name,
@@ -189,26 +223,50 @@ class UbisoftConfig:
 
     @property
     def installer_cache_dir_expanded(self) -> str:
-        """Installer cache dir expanded."""
+        """Resolve the installer-cache directory path with expansion applied.
+
+        Returns:
+            Absolute path string.
+        """
         return os.path.expanduser(self.installer_cache_dir)
 
     @property
     def upc_session_file_expanded(self) -> str:
-        """Upc session file expanded."""
+        """Resolve the UPC session JSON path with expansion applied.
+
+        Returns:
+            Absolute path string.
+        """
         return os.path.expanduser(self.upc_session_file)
 
     @property
     def game_id_db_file_expanded(self) -> str:
-        """Game ID db file expanded."""
+        """Resolve the game-id DB path with expansion applied.
+
+        Returns:
+            Absolute path string.
+        """
         return os.path.expanduser(self.game_id_db_file)
 
     @property
     def default_install_base_expanded(self) -> str:
-        """Default install base expanded."""
+        """Resolve the default install base path with expansion applied.
+
+        Returns:
+            Absolute path string.
+        """
         return os.path.expanduser(self.default_install_base)
 
     def iter_game_prefix_paths(self) -> list[str]:
-        """Iter game prefix paths."""
+        """List every per-game prefix path under the configured prefixes dir.
+
+        Skips hidden entries (those starting with ``.``, which include
+        the template and auth prefixes) and non-directories.
+
+        Returns:
+            List of absolute paths (empty if the prefixes dir doesn't
+            exist or can't be read).
+        """
         prefixes_dir = self.prefixes_dir_expanded
         if not os.path.isdir(prefixes_dir):
             return []
@@ -230,7 +288,16 @@ class UbisoftConfig:
         key: str,
         default: str,
     ) -> str:
-        """Parse str."""
+        """Parse one string-valued config field.
+
+        Args:
+            config_mgr: ConfigManager.
+            key: Dotted config key.
+            default: Value to return if the key is missing or wrong type.
+
+        Returns:
+            Parsed string value.
+        """
         val = get_cfg(
             config,
             f"{_UBI_CONFIG_PREFIX}.{key}",
@@ -244,7 +311,18 @@ class UbisoftConfig:
         key: str,
         default: int,
     ) -> int:
-        """Parse int."""
+        """Read a config key as int with hard-coded fallback.
+
+        Catches ``TypeError`` / ``ValueError`` from ``int(...)``.
+
+        Args:
+            config: ConfigManager (may be ``None``).
+            key: Sub-key inside the ``stores.ubisoft`` namespace.
+            default: Fallback when the key is absent or malformed.
+
+        Returns:
+            Parsed integer (or ``default``).
+        """
         val = get_cfg(
             config,
             f"{_UBI_CONFIG_PREFIX}.{key}",
@@ -261,7 +339,19 @@ class UbisoftConfig:
         key: str,
         default: tuple[str, ...],
     ) -> tuple[str, ...]:
-        """Parse tuple."""
+        """Read a config key as a tuple of non-empty strings.
+
+        Falls back to ``default`` when the key is absent, is not a list,
+        or yields an empty filtered result.
+
+        Args:
+            config: ConfigManager (may be ``None``).
+            key: Sub-key inside the ``stores.ubisoft`` namespace.
+            default: Fallback tuple.
+
+        Returns:
+            Tuple of strings (or ``default``).
+        """
         val = get_cfg(
             config,
             f"{_UBI_CONFIG_PREFIX}.{key}",
@@ -278,7 +368,20 @@ class UbisoftConfig:
         key: str,
         default: bool,
     ) -> bool:
-        """Parse bool."""
+        """Read a config key as bool with permissive string parsing.
+
+        Accepts native bools as-is. Strings ``true``/``1``/``yes``/``on``
+        (case-insensitive) are True; ``false``/``0``/``no``/``off`` are
+        False. Anything else falls back to ``default``.
+
+        Args:
+            config: ConfigManager (may be ``None``).
+            key: Sub-key inside the ``stores.ubisoft`` namespace.
+            default: Fallback when no recognized value is present.
+
+        Returns:
+            Parsed boolean (or ``default``).
+        """
         val = get_cfg(
             config,
             f"{_UBI_CONFIG_PREFIX}.{key}",
@@ -299,14 +402,29 @@ class UbisoftConfig:
         cls,
         config: ConfigManager | None,
     ) -> UbisoftConfig:
-        """From config manager."""
+        """Build a populated ``UbisoftConfig`` from a ``ConfigManager``.
+
+        Walks ``_FIELD_SPECS`` and applies the per-field parser, then
+        constructs the frozen dataclass.
+
+        Args:
+            config: ConfigManager (may be ``None`` — defaults are used).
+
+        Returns:
+            A new ``UbisoftConfig`` instance.
+        """
         kwargs: dict[str, Any] = {}
         for field_name, key, parser, default in cls._FIELD_SPECS:
             kwargs[field_name] = parser(config, key, default)
         return cls(**kwargs)
 
     def describe(self) -> str:
-        """Describe."""
+        """Return a short human-readable summary for logs.
+
+        Returns:
+            Single-line representation showing prefixes_dir,
+            install_base, and a truncated installer_url.
+        """
         return (
             f"UbisoftConfig("
             f"prefixes_dir={self.prefixes_dir}, "

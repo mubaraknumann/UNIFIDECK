@@ -1,3 +1,5 @@
+"""Ubisoft Connect store backend — UPC session injection, prefix templating, library + installer pipelines."""
+
 # OP-55 | stores/ubisoft/__init__.py | Depends: OP-55a
 from .store import UbisoftStore
 

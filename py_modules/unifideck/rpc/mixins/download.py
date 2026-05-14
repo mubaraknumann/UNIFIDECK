@@ -30,11 +30,36 @@ class DownloadRPCMixin:
         return svc
 
     async def install_game(self, store: str, game_id: str, **kw: Any) -> Any:
-        """Install a game via the responsible store connector."""
+        """Install a game via the responsible store adapter.
+
+        Args:
+            store: Store identifier.
+            game_id: Per-store game identifier.
+            **kw: Store-specific install options forwarded verbatim.
+
+        Returns:
+            The adapter's install result.
+
+        Raises:
+            RpcError: ``store_not_found`` when no adapter is
+                registered for ``store``.
+        """
         return await self._require_store(store).install(game_id, **kw)
 
     async def uninstall_game(self, store: str, game_id: str) -> Any:
-        """Uninstall a game via the responsible store connector."""
+        """Uninstall a game via the responsible store adapter.
+
+        Args:
+            store: Store identifier.
+            game_id: Per-store game identifier.
+
+        Returns:
+            The adapter's uninstall result.
+
+        Raises:
+            RpcError: ``store_not_found`` when no adapter is
+                registered for ``store``.
+        """
         return await self._require_store(store).uninstall(game_id)
 
     async def check_game_update(self, store: str, game_id: str) -> Any:
@@ -42,7 +67,19 @@ class DownloadRPCMixin:
         return await self._require_store(store).check_update(game_id)
 
     async def cancel_download(self, download_id: str) -> Any:
-        """Cancel an in-progress download."""
+        """Cancel an in-progress download.
+
+        Args:
+            download_id: Identifier returned at enqueue time.
+
+        Returns:
+            Whatever the download service returns from ``cancel``
+            (no-op if the id is unknown).
+
+        Raises:
+            RpcError: ``service_unavailable`` when the download
+                service isn't wired.
+        """
         return await self._require_download().cancel(download_id)
 
     async def get_download_queue(self) -> Any:

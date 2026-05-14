@@ -1,3 +1,5 @@
+"""Ubisoft-store Proton launch handler — applies the Epic-wrapper fix and routes through UMU."""
+
 from __future__ import annotations
 import logging
 import os
@@ -7,7 +9,14 @@ from ..infrastructure.core import ProtonLaunchPlan
 from ..infrastructure.umu_runtime import run_umu_with_retry
 logger = logging.getLogger(__name__)
 async def _apply_epic_wrapper_fix(plan: ProtonLaunchPlan) -> None:
-    """Apply EPIC wrapper fix."""
+    """Install the EpicGamesLauncher wrapper inside the Ubisoft prefix.
+
+    Pre-requisite for the Legendary fallback path. Logs and
+    swallows errors so launch can still proceed via UPC.
+
+    Args:
+        plan: Launch plan.
+    """
     from ..fixes.epic_prefix_fix import apply_epic_launcher_fix
     bundled_wrapper = (
     plan.context.plugin_dir / "bin" / "EpicGamesLauncher.exe"
@@ -32,7 +41,14 @@ async def _apply_epic_wrapper_fix(plan: ProtonLaunchPlan) -> None:
             "[launcher.proton.ubisoft] Epic launcher wrapper fix failed",
         )
 async def _inject_registry_keys(plan: ProtonLaunchPlan) -> bool:
-    """Inject registry keys."""
+    """Run the Epic-registry injection for the Ubisoft prefix.
+
+    Args:
+        plan: Launch plan.
+
+    Returns:
+        True iff the injection succeeded.
+    """
     from ..fixes.epic_registry import setup_registry
     legendary_config = Path("~/.config/legendary").expanduser()
     try:
@@ -50,7 +66,14 @@ async def _inject_registry_keys(plan: ProtonLaunchPlan) -> bool:
 
 def _find_upc_exe(plan: ProtonLaunchPlan) -> Path | None:
 
-    """Find UPC exe."""
+    """Locate ``upc.exe`` inside the Wine prefix.
+
+    Args:
+        plan: Launch plan.
+
+    Returns:
+        Path to upc.exe, or ``None`` if not present.
+    """
     active_prefix = os.environ.get("ACTIVE_WINEPREFIX")
     candidates: list[Path] = []
     if active_prefix:
@@ -75,7 +98,23 @@ def _find_upc_exe(plan: ProtonLaunchPlan) -> Path | None:
             return c
     return None
 async def ubisoft_launch(plan: ProtonLaunchPlan) -> int:
-    """Ubisoft launch."""
+    """Launch a Ubisoft Connect title through UMU.
+
+    Preferred path: wrapper + registry injection → direct launch
+    via ``upc.exe uplay://launch/<id>/0``. Fallback when upc.exe
+    or UPLAY_ID is missing: Legendary with the EpicGamesLauncher
+    wrapper and stripped Epic auth args.
+
+    Args:
+        plan: Launch plan.
+
+    Returns:
+        Game exit code on success.
+
+    Raises:
+        UmuRuntimeError: UMU returned 2 or 74.
+        GameFailedError: Game exited non-zero (other codes).
+    """
     logger.info(
         "[launcher.proton.ubisoft] launching %s",
         plan.context.game_key,
@@ -119,7 +158,11 @@ async def ubisoft_launch(plan: ProtonLaunchPlan) -> int:
 
 def _apply_language_setup(plan: ProtonLaunchPlan) -> None:
 
-    """Apply language setup."""
+    """Apply the Ubisoft language setup (best-effort).
+
+    Args:
+        plan: Launch plan.
+    """
     try:
         from ....config.config_manager import ConfigManager
         from ..language_setup import apply_ubisoft_language
@@ -139,7 +182,17 @@ def _apply_language_setup(plan: ProtonLaunchPlan) -> None:
 def _build_legendary_fallback_argv(
     plan: ProtonLaunchPlan,
 ) -> tuple[list[str], dict[str, str]]:
-    """Build LEGENDARY fallback argv."""
+    """Build argv + env for the Legendary fallback Ubisoft launch path.
+
+    Used when upc.exe or ``UPLAY_ID`` is missing — Legendary
+    drives the launch through the EpicGamesLauncher wrapper.
+
+    Args:
+        plan: Launch plan.
+
+    Returns:
+        Tuple ``(argv, env)`` ready for UMU.
+    """
     env = dict(plan.env)
     env["LEGENDARY_WRAPPER_EXE"] = (
         "C:\\windows\\command\\EpicGamesLauncher.exe"
@@ -169,7 +222,16 @@ def _build_legendary_fallback_argv(
         )
     return argv, env
 def _raise_for_umu_rc(rc: int, plan: ProtonLaunchPlan) -> None:
-    """Raise for UMU rc."""
+    """Translate a non-zero UMU exit code into the appropriate exception.
+
+    Args:
+        rc: Subprocess exit code (non-zero).
+        plan: Launch plan (for context).
+
+    Raises:
+        UmuRuntimeError: ``rc`` is 2 or 74.
+        GameFailedError: any other non-zero code.
+    """
     if rc in {2, 74}:
         raise UmuRuntimeError(
             f"umu-run failed with unrecoverable code {rc}",

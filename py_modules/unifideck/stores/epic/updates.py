@@ -25,7 +25,14 @@ ProgressCallback = Callable[[float], Awaitable[None]] | None
 
 
 class EpicUpdateChecker:
-    """Epic update checker."""
+    """Update detection and per-game size lookup via the legendary CLI.
+
+    ``check_for_updates`` parses legendary's plaintext
+    ``list-installed --check-updates`` output because the
+    ``--json`` variant drops the ``update_available`` field
+    due to an upstream bug. ``get_game_size`` caches results
+    per game for ``size_cache_ttl`` seconds (default 300).
+    """
 
     def __init__(
         self,
@@ -36,7 +43,19 @@ class EpicUpdateChecker:
         size_cache_ttl: int,
         info_timeout: float,
     ) -> None:
-        """Initialize the instance."""
+        """Wire dependencies and initialise the per-game size cache.
+
+        Args:
+            bus: Event bus.
+            cli_path: Path to the ``legendary`` binary.
+            library: Epic library reader.
+            list_updates_timeout: Hard timeout for the
+                ``legendary list-installed --check-updates`` call.
+            size_cache_ttl: TTL (seconds) for the in-memory
+                update-size cache.
+            info_timeout: Hard timeout for per-game
+                ``legendary info`` size probes.
+        """
         self._bus = bus
         self._cli_path = cli_path
         self._library = library
@@ -46,7 +65,15 @@ class EpicUpdateChecker:
         self._size_cache: dict[str, tuple[int, float]] = {}
 
     async def check_for_updates(self) -> list[str]:
-        """Check for updates."""
+        """List game IDs with a pending Epic update.
+
+        Runs ``legendary list-installed --check-updates`` and
+        parses the resulting plaintext.
+
+        Returns:
+            List of app names with pending updates; empty on
+            failure (spawn / timeout / non-zero exit).
+        """
         if not self._cli_path:
             return []
         try:
@@ -83,7 +110,18 @@ class EpicUpdateChecker:
 
     @staticmethod
     def _parse_update_output(text: str) -> list[str]:
-        """Parse update output."""
+        """Parse the plaintext block emitted by ``list-installed --check-updates``.
+
+        Walks line-by-line, tracking the current ``App name:`` and
+        emitting it when the next ``-> Update available!`` line
+        appears.
+
+        Args:
+            text: Captured legendary stdout.
+
+        Returns:
+            List of app names with pending updates.
+        """
         updates: list[str] = []
         current_app: str | None = None
         for line in text.splitlines():
@@ -104,7 +142,21 @@ class EpicUpdateChecker:
         installer: Any,
         progress_cb: ProgressCallback = None,
     ) -> InstallResult:
-        """Update game."""
+        """Run ``legendary update <id> --with-dlcs --yes`` and stream output.
+
+        Bus-emits DOWNLOAD_PROGRESS for every non-empty stdout line.
+        Invalidates the installed-games cache regardless of rc.
+
+        Args:
+            game_id: Epic game identifier.
+            installer: Reserved for parity (unused).
+            progress_cb: Reserved for parity (unused — progress is
+                delivered exclusively via DOWNLOAD_PROGRESS).
+
+        Returns:
+            ``InstallResult`` — error codes ``legendary_not_found``,
+            ``spawn_failed:...``, ``legendary_rc:N``.
+        """
         if not self._cli_path:
             return InstallResult(
                 success=False, store='epic', game_id=game_id,
@@ -135,7 +187,12 @@ class EpicUpdateChecker:
         )
 
     async def _stream_update_output(self, proc: Any, game_id: str) -> None:
-        """Stream update output."""
+        """Pipe legendary update stdout to the bus, one DOWNLOAD_PROGRESS per line.
+
+        Args:
+            proc: Live subprocess (stdout piped).
+            game_id: Epic game identifier.
+        """
         if proc.stdout is None:
             return
         while True:
@@ -151,7 +208,15 @@ class EpicUpdateChecker:
             )
 
     async def get_game_size(self, game_id: str) -> int | None:
-        """Get game size."""
+        """Return the download size for one game (cached per ``size_cache_ttl``).
+
+        Args:
+            game_id: Epic game identifier.
+
+        Returns:
+            Download size in bytes, or ``None`` if the CLI can't
+            resolve it.
+        """
         now = time.time()
         cached = self._size_cache.get(game_id)
         if cached and (now - cached[1]) < self._size_cache_ttl:
@@ -162,7 +227,14 @@ class EpicUpdateChecker:
         return size
 
     async def _load_game_size_from_cli(self, game_id: str) -> int | None:
-        """Load game size from CLI."""
+        """Fetch and parse ``manifest.download_size`` from legendary info.
+
+        Args:
+            game_id: Epic game identifier.
+
+        Returns:
+            Size in bytes, or ``None`` on any failure.
+        """
         info = await self._fetch_info(game_id)
         if not isinstance(info, dict):
             return None
@@ -176,7 +248,14 @@ class EpicUpdateChecker:
             return None
 
     async def _fetch_info(self, game_id: str) -> dict[str, Any] | None:
-        """Fetch info."""
+        """Wrap ``legendary info`` with the configured info_timeout.
+
+        Args:
+            game_id: Epic game identifier.
+
+        Returns:
+            Parsed manifest dict, or ``None``.
+        """
         if not self._cli_path:
             return None
         return await fetch_info(

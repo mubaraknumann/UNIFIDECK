@@ -60,15 +60,38 @@ class LaunchHistoryService(_FailuresMixin, _BypassMixin):
             self._bus.auto_wire(self)
 
     def threshold(self) -> int:
-        """Live read of ``circuit_breaker.failures_threshold``."""
+        """Live-read ``circuit_breaker.failures_threshold`` from config.
+
+        Resolved on every call so config edits take effect without
+        restarting the service.
+
+        Returns:
+            The current threshold (number of failures before
+            opening the breaker).
+        """
         return read_threshold(self._config)
 
     def window_seconds(self) -> float:
-        """Live read of ``circuit_breaker.window_seconds``."""
+        """Live-read ``circuit_breaker.window_seconds`` from config.
+
+        Resolved on every call so config edits take effect without
+        restarting the service.
+
+        Returns:
+            The current sliding-window length in seconds.
+        """
         return read_window_seconds(self._config)
 
     def fast_boot_seconds(self) -> float:
-        """Live read of ``circuit_breaker.fast_boot_seconds``."""
+        """Live-read ``circuit_breaker.fast_boot_seconds`` from config.
+
+        Resolved on every call so config edits take effect without
+        restarting the service.
+
+        Returns:
+            The current fast-boot threshold (a successful launch
+            shorter than this is treated as a launch failure).
+        """
         return read_fast_boot_seconds(self._config)
 
     def _emit_state(self, game_key: str, trigger: str) -> None:
@@ -82,6 +105,7 @@ class LaunchHistoryService(_FailuresMixin, _BypassMixin):
             return  # No running loop
             
         async def _emit() -> None:
+            """Background emit of the current circuit state for one game key."""
             try:
                 is_open, count = self.is_circuit_open(game_key)
                 store, game_id = game_key.split(":", 1)

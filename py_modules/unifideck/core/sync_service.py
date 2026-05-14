@@ -64,7 +64,8 @@ class SyncService:
         registry: StoreRegistry,
         bus: EventBus,
         config: ConfigManager | None = None,
-    ) -> None:  # noqa: D107 — class docstring documents the constructor's contract
+    ) -> None:
+        """Initialize the service with the event bus and store registry."""
         self._registry = registry
         self._bus = bus
         self._config = config

@@ -1,3 +1,5 @@
+"""Phase timing telemetry — emits LAUNCH_PHASE_TIMING events for each launch milestone."""
+
 from __future__ import annotations
 import logging
 import time
@@ -8,7 +10,16 @@ from .correlation import get_launch_id
 logger = logging.getLogger(__name__)
 LAUNCH_PHASE_TIMING_EVENT = "LAUNCH_PHASE_TIMING"
 class PhaseTimer:
-    """Phase timer."""
+    """Async context manager that emits a LAUNCH_PHASE_TIMING event on exit.
+
+    Records the wall-clock duration of the wrapped block and
+    emits ``{phase, duration_ms, launch_id, success, **extra}``
+    regardless of whether the block raised. Emit failures are
+    swallowed (logged as exceptions).
+
+    Attributes:
+        None publicly — internal state only.
+    """
     __slots__ = ("_bus", "_phase", "_extra", "_t0")
     def __init__(
         self,
@@ -16,19 +27,36 @@ class PhaseTimer:
         phase: str,
         extra: dict | None = None,
     ) -> None:
-        """Initialize the instance."""
+        """Capture the event bus, phase name, and any extra payload.
+
+        Args:
+            bus: Event bus (may be ``None`` to disable emission).
+            phase: Phase identifier (free-form string).
+            extra: Optional extra payload merged into the event
+                (copied defensively).
+        """
         self._bus = bus
         self._phase = phase
         self._extra = dict(extra) if extra else {}
         self._t0 = 0.0
     async def __aenter__(self) -> PhaseTimer:
-        """Aenter."""
+        """Start the timer.
+
+        Returns:
+            Self.
+        """
         self._t0 = time.monotonic()
         return self
     async def __aexit__(
         self, exc_type: Any, _exc_val: Any, _exc_tb: Any,
     ) -> None:
-        """Aexit."""
+        """Stop the timer and emit the LAUNCH_PHASE_TIMING event.
+
+        Args:
+            exc_type: Exception type if the block raised, else ``None``.
+            _exc_val: Unused.
+            _exc_tb: Unused.
+        """
         duration_ms = int((time.monotonic() - self._t0) * 1000)
         payload = {
             "phase": self._phase,

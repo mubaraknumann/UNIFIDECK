@@ -1,3 +1,5 @@
+"""Strip Epic-specific authentication args from the command line before passing them to UMU (Epic does not accept them)."""
+
 from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
@@ -9,7 +11,20 @@ _STRIP_PREFIXES: tuple[str, ...] = (
     "-AUTH_PASSWORD=",
 )
 def strip_epic_auth_args(args: list[str]) -> tuple[list[str], list[str]]:
-    """Strip EPIC auth args."""
+    """Filter Epic auth args (``-AUTH_TYPE=``, ``-AUTH_PASSWORD=``) out of an argv list.
+
+    Ubisoft games launched through the Epic-wrapper fallback
+    would otherwise pass these Epic-only flags to UPC, which
+    rejects them.
+
+    Args:
+        args: argv list to filter.
+
+    Returns:
+        Tuple ``(filtered_args, stripped_args)``. Both keep
+        original ordering. Stripped values are logged with
+        secrets redacted.
+    """
     filtered: list[str] = []
     stripped: list[str] = []
     for arg in args:
@@ -25,7 +40,17 @@ def strip_epic_auth_args(args: list[str]) -> tuple[list[str], list[str]]:
         )
     return filtered, stripped
 def should_strip_for_launch_context(ctx: LaunchContext) -> bool:
-    """Check whether strip for launch context."""
+    """Decide whether the auth-args stripper applies to a given launch.
+
+    Currently only Ubisoft titles whose exe path contains
+    ``UplayLaunch`` need the strip.
+
+    Args:
+        ctx: Launch context.
+
+    Returns:
+        True iff stripping applies.
+    """
     try:
         store = getattr(ctx, "store", "")
         exe_path = str(getattr(ctx, "exe_path", ""))

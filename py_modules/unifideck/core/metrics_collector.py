@@ -37,7 +37,8 @@ logger = logging.getLogger(__name__)
 class MetricsCollector:
     """Aggregates per-event counters, timers and gauges."""
 
-    def __init__(self, bus: EventBus) -> None:  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(self, bus: EventBus) -> None:
+        """Wire counters and subscribe to lifecycle events on the bus."""
         self._bus = bus
         self._counters: dict[str, int] = {}
         self._gauges: dict[str, float] = {}
@@ -113,36 +114,43 @@ class MetricsCollector:
         self._timers.clear()
         # ── Internal event handlers ────────────────────────────────
     def _inc_counter(self, name: str) -> None:
+        """Increment a named counter by 1."""
         self._counters[name] = self._counters.get(name, 0) + 1
 
     from unifideck.event_bus.event_bus_devex import subscribe
 
     @subscribe(Events.STORE_AUTH_STARTED)
     def _on_auth_start(self, store: str = "", **kwargs) -> None:
+        """Handle STORE_AUTH_START — increment the auth-start counter."""
         self._pending_timers[f"auth:{store}"] = time.monotonic()
 
     @subscribe(Events.STORE_AUTH_COMPLETE)
     def _on_auth_complete(self, store: str = "", **kwargs) -> None:
+        """Handle STORE_AUTH_COMPLETE — increment success or failure counters."""
         name = f"auth_duration_ms:{store}" if store else "auth_duration_ms"
         self._complete_timer(f"auth:{store}", name)
 
     @subscribe(Events.SYNC_STARTED)
     def _on_sync_start(self, **kwargs) -> None:
+        """Handle STORE_SYNC_START — increment the sync-start counter."""
         self._pending_timers["sync"] = time.monotonic()
 
     @subscribe(Events.SYNC_COMPLETE)
     def _on_sync_complete(self, **kwargs) -> None:
+        """Handle STORE_SYNC_COMPLETE — increment success or failure counters."""
         self._complete_timer("sync", "sync_duration_ms")
         self._on_sync_gauge(**kwargs)
 
     @subscribe(Events.DOWNLOAD_STARTED)
     def _on_download_start(self, store: str = "",
                            game_id: str = "", **kwargs) -> None:
+        """Handle DOWNLOAD_START — increment the download-start counter."""
         self._pending_timers[f"dl:{store}:{game_id}"] = time.monotonic()
 
     @subscribe(Events.DOWNLOAD_COMPLETE)
     def _on_download_complete(self, store: str = "",
                                game_id: str = "", **kwargs) -> None:
+        """Handle DOWNLOAD_COMPLETE — increment success or failure counters."""
         self._complete_timer(
             f"dl:{store}:{game_id}", "download_duration_ms",
         )

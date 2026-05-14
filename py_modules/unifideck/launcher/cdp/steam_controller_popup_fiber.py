@@ -1,3 +1,5 @@
+"""Fiber-tree introspection helpers for the Steam controller popup — locate React handlers and trigger config previews."""
+
 from __future__ import annotations
 import contextlib
 import logging
@@ -9,7 +11,22 @@ async def _click_handler_object_id(
     websocket: aiohttp.ClientWebSocketResponse,
     msg_id: int,
 ) -> str:
-    """Click handler object ID."""
+    """Locate the React onClick handler that opens the configurator preview.
+
+    Walks the React fiber tree up from the ``View Layout`` button
+    looking for an onClick whose source string mentions
+    ``ControllerConfigurator.Summary``.
+
+    Args:
+        websocket: Popup CDP websocket.
+        msg_id: CDP message ID for this call.
+
+    Returns:
+        CDP remote object ID of the onClick function.
+
+    Raises:
+        RuntimeError: Button or matching onClick not found.
+    """
     resp = await cdp_command(
         websocket,
         msg_id,
@@ -52,7 +69,19 @@ async def _scopes_object_id(
     msg_id: int,
 ) -> str:
 
-    """Scopes object ID."""
+    """Get the ``[[Scopes]]`` internal property handle of the onClick closure.
+
+    Args:
+        websocket: Popup CDP websocket.
+        on_click_object: Object ID of the onClick function.
+        msg_id: CDP message ID.
+
+    Returns:
+        Remote object ID of the scopes array.
+
+    Raises:
+        RuntimeError: ``[[Scopes]]`` not found on the function.
+    """
     resp = await cdp_command(
         websocket,
         msg_id,
@@ -79,7 +108,17 @@ async def _scope1_object_id(
     scopes_object: str,
     msg_id: int,
 ) -> str:
-    """Scope1 object ID."""
+    """Return the object ID of the first scope in a ``[[Scopes]]`` array.
+
+    Args:
+        websocket: Popup CDP websocket.
+        scopes_object: Object ID of the scopes array.
+        msg_id: CDP message ID.
+
+    Returns:
+        Remote object ID of scope[1] (the closure scope
+        containing the configurator object).
+    """
     resp = await cdp_command(
         websocket,
         msg_id,
@@ -106,7 +145,19 @@ async def _scope1_h_object_id(
     scope1_object: str,
     msg_id: int,
 ) -> str:
-    """Scope1 h object ID."""
+    """Return the object ID of the ``h`` (configurator) attribute in scope[1].
+
+    Args:
+        websocket: Popup CDP websocket.
+        scope1_object: Object ID of scope[1].
+        msg_id: CDP message ID.
+
+    Returns:
+        Remote object ID of the ``h`` value.
+
+    Raises:
+        RuntimeError: ``h`` not found in the scope.
+    """
     resp = await cdp_command(
         websocket,
         msg_id,
@@ -133,7 +184,23 @@ async def _h_v3_object_id(
     msg_id: int,
 ) -> tuple[str, int]:
 
-    """H v3 object ID."""
+    """Resolve the ``h.v3`` sub-object handle and the controller slot index.
+
+    After fetching the ``v3`` property of ``h`` it also probes
+    for the active controller index used by the configurator
+    (defaults to 0 if probing fails).
+
+    Args:
+        websocket: Popup CDP websocket.
+        h_object: Object ID of ``h``.
+        msg_id: CDP message ID.
+
+    Returns:
+        Tuple ``(v3_object, controller_index)``.
+
+    Raises:
+        RuntimeError: ``v3`` not found on ``h``.
+    """
     resp = await cdp_command(
         websocket,
         msg_id,
@@ -172,7 +239,21 @@ async def _h_v3_object_id(
 async def resolve_popup_preview_context(
     websocket: aiohttp.ClientWebSocketResponse,
 ) -> tuple[str, int]:
-    """Resolve popup preview context."""
+    """Resolve the configurator scope and controller index handles.
+
+    Walks: button → onClick → ``[[Scopes]]`` → scope[1] → reads
+    the ``h`` (configurator) and ``v`` (controller index) values.
+
+    Args:
+        websocket: Popup CDP websocket.
+
+    Returns:
+        Tuple ``(h_v3_object, controller_index)`` — the
+        configurator scope object handle and the controller slot.
+
+    Raises:
+        RuntimeError: Any step fails to locate its target.
+    """
     on_click = await _click_handler_object_id(websocket, 1000)
     scopes = await _scopes_object_id(websocket, on_click, 1001)
     scope1 = await _scope1_object_id(websocket, scopes, 1002)
@@ -187,7 +268,19 @@ async def preview_popup_config(
     *,
     msg_id: int,
 ) -> None:
-    """Preview popup config."""
+    """Trigger a non-destructive preview of one controller-config URL.
+
+    Calls ``EnsureEditingConfiguration`` then
+    ``ApplyConfigurationFromURL`` on the configurator.
+
+    Args:
+        websocket: Popup CDP websocket.
+        h_v3_object: Configurator scope handle.
+        appid: AppID to preview the config for.
+        controller_index: Controller slot index.
+        config_url: Template URL (e.g. ``template://controller_neptune_*.vdf``).
+        msg_id: CDP message ID.
+    """
     await cdp_command(
         websocket,
         msg_id,
@@ -220,7 +313,20 @@ async def set_active_popup_config(
     msg_id: int,
 ) -> None:
 
-    """Set active popup config."""
+    """Save one controller-config URL as the active config for an AppID.
+
+    Calls ``SetActiveConfigForApp`` + ``SaveEditingConfiguration``
+    and clears any cached selection — the new config persists
+    across Steam restarts.
+
+    Args:
+        websocket: Popup CDP websocket.
+        h_v3_object: Configurator scope handle.
+        appid: AppID to apply the config to.
+        controller_index: Controller slot index.
+        config_url: Template URL to save as active.
+        msg_id: CDP message ID.
+    """
     await cdp_command(
         websocket,
         msg_id,
@@ -254,7 +360,20 @@ async def inspect_popup_state(
     msg_id: int,
 ) -> dict[str, Any]:
 
-    """Inspect popup state."""
+    """Sample the current popup state (active template URL + title).
+
+    Walks the React fiber tree from a heuristic-matched
+    summary element to its ``props.config`` and serializes
+    the interesting fields.
+
+    Args:
+        websocket: Popup CDP websocket.
+        msg_id: CDP message ID.
+
+    Returns:
+        Dict with ``body``, ``title``, ``url``, ``progenitor``,
+        ``usesMouse``, ``usesKeyboard``, ``usesGamepad``.
+    """
     state_resp = await cdp_command(
         websocket,
         msg_id,

@@ -1,3 +1,5 @@
+"""Subscription probe → event emission mixin — wraps probe results into typed SUBSCRIPTION events."""
+
 from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
@@ -22,7 +24,20 @@ class _ProbeEmissionMixin:
         self,
         token_manager: MicrosoftTokenManager,
     ) -> SubscriptionProbeResult:
-        """Run probe."""
+        """Probe the Microsoft subscription endpoint and return the parsed tier.
+
+        Builds the GSSV-specific XBL chain (reusing the cached
+        standard chain's xbl token when available) and calls
+        ``probe_subscription`` against the configured URL.
+
+        Args:
+            token_manager: Microsoft token manager.
+
+        Returns:
+            A ``SubscriptionProbeResult``. When the GSSV chain
+            fails, returns a NONE tier with
+            ``error="gssv_chain_failed"``.
+        """
         from ...core.types import SubscriptionTier
         from ...stores.microsoft.microsoft_subscription import (
             SubscriptionProbeResult,
@@ -46,7 +61,13 @@ class _ProbeEmissionMixin:
             endpoint_url=self._probe_url(),
         )
     def _probe_url(self) -> str:
-        """Probe URL."""
+        """Resolve the subscription probe URL from config or the default.
+
+        Reads ``stores.microsoft.subscription_check_url``.
+
+        Returns:
+            URL string.
+        """
         if self._config is None:
             return _DEFAULT_PROBE_URL
         try:
@@ -63,7 +84,15 @@ class _ProbeEmissionMixin:
         tier: SubscriptionTier,
     ) -> None:
 
-        """Emit state change."""
+        """Emit SUBSCRIPTION_DETECTED / SUBSCRIPTION_EXPIRED if the tier changed.
+
+        Suppresses redundant emissions when the tier hasn't moved
+        since the last broadcast for this cache key.
+
+        Args:
+            cache_key: Cache key (per-account scope).
+            tier: Newly-detected subscription tier.
+        """
         from ...core.types import Events, SubscriptionTier
         last = self._last_emitted.get(cache_key)
         if last == tier:

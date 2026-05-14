@@ -1,3 +1,5 @@
+"""Proton version selector — finds a compatible Python interpreter and resolves the active Proton install path."""
+
 from __future__ import annotations
 import logging
 import re
@@ -14,7 +16,19 @@ PYTHON_CANDIDATES: list[str] = [
 ]
 ACCEPTED_VERSIONS = {"3.10", "3.11", "3.12", "3.13", "3.14"}
 def find_python_3_10_plus() -> Path:
-    """Find python 3 10 plus."""
+    """Locate a Python interpreter compatible with umu-run.
+
+    Tries each candidate in ``PYTHON_CANDIDATES`` (most recent
+    first); each candidate is probed to read its actual
+    ``sys.version_info`` and only accepted if in
+    ``ACCEPTED_VERSIONS`` (3.10–3.14).
+
+    Returns:
+        Path to the chosen interpreter.
+
+    Raises:
+        DependencyMissingError: No suitable interpreter found.
+    """
     for candidate in PYTHON_CANDIDATES:
         path = Path(candidate)
         if not path.is_file():
@@ -50,7 +64,17 @@ STEAM_LIBRARY_ROOTS: list[str] = [
 ]
 UNIFIDECK_COMPAT_DIR = "~/.local/share/unifideck/compat-tools"
 def resolve_proton_path(tool_id: str) -> Path | None:
-    """Resolve PROTON path."""
+    """Resolve the ``proton`` script for one tool ID across known roots.
+
+    Search order: Unifideck's own compat-tools dir → Steam's
+    ``compatibilitytools.d`` → Steam library ``common`` dirs.
+
+    Args:
+        tool_id: Proton tool identifier (e.g. ``"GE-Proton9-22"``).
+
+    Returns:
+        Path to the ``proton`` script, or ``None`` if not found.
+    """
     if not tool_id:
         return None
     unifideck_path = Path(UNIFIDECK_COMPAT_DIR).expanduser() / tool_id / "proton"
@@ -66,7 +90,15 @@ def resolve_proton_path(tool_id: str) -> Path | None:
             return candidate
     return None
 def get_unifideck_proton_tool() -> str | None:
-    """Get unifideck PROTON tool."""
+    """Read the user's preferred Proton tool from the Unifideck config.
+
+    Reads ``compat.proton_tool`` from
+    ``~/.local/share/unifideck/config.json``.
+
+    Returns:
+        Tool ID string, or ``None`` if the config is missing,
+        unreadable, or the key is empty.
+    """
     config_path = Path("~/.local/share/unifideck/config.json").expanduser()
     if not config_path.is_file():
         return None
@@ -83,7 +115,20 @@ _COMPAT_TOOL_RE = re.compile(
     re.S,
 )
 def get_steam_compat_tool_override(app_id: str) -> str | None:
-    """Get steam compat tool override."""
+    """Parse Steam's per-user ``localconfig.vdf`` for a compat-tool override.
+
+    Steam stores per-game compat tool selections in each
+    user's ``localconfig.vdf``. Walks every user under
+    ``~/.steam/root/userdata/`` and matches the requested
+    AppID.
+
+    Args:
+        app_id: Steam AppID to look up.
+
+    Returns:
+        Tool name from Steam's config, or ``None`` if no
+        user has set an override for this AppID.
+    """
     if not app_id:
         return None
     userdata = Path("~/.steam/root/userdata").expanduser()
@@ -102,7 +147,16 @@ def get_steam_compat_tool_override(app_id: str) -> str | None:
                 return m.group("name")
     return None
 def find_any_ge_proton() -> Path | None:
-    """Find any ge PROTON."""
+    """Locate the newest installed GE-Proton build as a fallback.
+
+    Scans ``compatibilitytools.d`` roots for ``GE-Proton*``
+    directories containing a ``proton`` script, sorts
+    lexicographically, and returns the last (newest).
+
+    Returns:
+        Path to a GE-Proton ``proton`` script, or ``None``
+        if none is installed.
+    """
     candidates: list[Path] = []
     for root in STEAM_COMPAT_ROOTS:
         expanded = Path(root).expanduser()
@@ -122,7 +176,22 @@ def select_proton_version(
     steam_app_id: str | None = None,
 ) -> tuple[Path, str]:
 
-    """Select PROTON version."""
+    """Pick the Proton script + tool ID to use for this launch.
+
+    Resolution order: per-game Steam override → user's
+    Unifideck default → any installed GE-Proton.
+
+    Args:
+        steam_app_id: Optional Steam AppID to consult for an
+            override.
+
+    Returns:
+        Tuple ``(proton_path, tool_id)``.
+
+    Raises:
+        ProtonUnavailableError: No usable Proton found at
+            any tier.
+    """
     tried: list[str] = []
     if steam_app_id:
         steam_tool = get_steam_compat_tool_override(steam_app_id)

@@ -1,3 +1,5 @@
+"""Save-folder inspection tool — enumerates files, sizes, and structure for debugging cloud-save sync issues."""
+
 from __future__ import annotations
 import logging
 import os
@@ -10,7 +12,27 @@ def inspect_save_folder(
     filter_substring: str = "",
     max_files: int = 500,
 ) -> dict[str, Any]:
-    """Inspect save folder."""
+    """Enumerate a save folder and return a structured summary.
+
+    Walks the tree up to ``max_depth`` levels, optionally
+    filters by case-insensitive substring against the relative
+    path, and caps the returned file list at ``max_files``
+    (largest first). Beyond the cap, only the truncated count
+    and total size are reported.
+
+    Args:
+        root: Path to inspect.
+        max_depth: Maximum walk depth (use -1 for unlimited).
+        filter_substring: Optional substring filter on the
+            relative path.
+        max_files: Cap on the size of the returned ``files`` list.
+
+    Returns:
+        Dict with ``path``, ``exists``, ``total_files``,
+        ``total_size``, ``files`` (list of
+        ``{rel_path, size, mtime}``), ``truncated_count``,
+        ``truncated_size``.
+    """
     result: dict[str, Any] = {
         "path": root,
         "exists": False,
@@ -35,7 +57,16 @@ def _collect_file_entries(
     root: str, max_depth: int, substr: str,
 ) -> list[dict[str, Any]]:
 
-    """Collect file entries."""
+    """Walk a directory tree collecting filtered file entries.
+
+    Args:
+        root: Path to walk.
+        max_depth: Maximum walk depth (use -1 for unlimited).
+        substr: Lower-cased substring filter (empty means no filter).
+
+    Returns:
+        List of ``{rel_path, size, mtime}`` dicts.
+    """
     entries: list[dict[str, Any]] = []
     try:
         for dirpath, dirnames, filenames in os.walk(root):
@@ -70,7 +101,13 @@ def _apply_file_cap(
     max_files: int,
     result: dict[str, Any],
 ) -> None:
-    """Apply file cap."""
+    """Truncate the file list in-place if it exceeds ``max_files``.
+
+    Args:
+        entries: Sorted file entries.
+        max_files: Cap.
+        result: Output dict being assembled (mutated).
+    """
     if len(entries) > max_files:
         result["files"] = entries[:max_files]
         dropped = entries[max_files:]

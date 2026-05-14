@@ -22,14 +22,30 @@ logger = logging.getLogger(__name__)
 
 
 class _ShortcutRegistryOps:
-    """Shortcut registry ops."""
+    """Thin async wrapper around ``ShortcutService`` for the auth flow.
+
+    Hides the sync-or-async dual API of the shortcut service: every
+    method awaits the result only if it's a coroutine. Also handles
+    the legacy ``ubisoft:.template`` store-id cleanup.
+    """
 
     def __init__(self, *, config: UbisoftConfig) -> None:
-        """Initialize the instance."""
+        """Bind the shortcut-registry helper to its config snapshot.
+
+        Args:
+            config: Frozen ``UbisoftConfig``.
+        """
         self._config = config
 
     async def load(self, sm: ShortcutService) -> dict[str, Any]:
-        """Load."""
+        """Load the shortcuts registry as a dict (best-effort).
+
+        Args:
+            sm: Shortcut service.
+
+        Returns:
+            The registry dict, or ``{}`` on missing API / error.
+        """
         try:
             if hasattr(sm, "load_shortcuts_registry"):
                 result = sm.load_shortcuts_registry()
@@ -50,7 +66,13 @@ class _ShortcutRegistryOps:
         appid: int,
         name: str,
     ) -> None:
-        """Register."""
+        """Register the auth shortcut under the configured store_id.
+
+        Args:
+            sm: Shortcut service.
+            appid: Steam shortcut AppID.
+            name: Display name.
+        """
         try:
             if hasattr(sm, "register_shortcut"):
                 result = sm.register_shortcut(
@@ -71,7 +93,15 @@ class _ShortcutRegistryOps:
         sm: ShortcutService,
         appid: int,
     ) -> None:
-        """Clear compat."""
+        """Clear the Proton compatibility setting for one shortcut AppID.
+
+        Required so Steam picks our managed compat tool the next time
+        the auth shortcut is launched.
+
+        Args:
+            sm: Shortcut service.
+            appid: Steam shortcut AppID.
+        """
         try:
             if hasattr(sm, "_clear_proton_compatibility"):
                 result = sm._clear_proton_compatibility(appid)
@@ -84,7 +114,15 @@ class _ShortcutRegistryOps:
             )
 
     async def cleanup_legacy(self, sm: ShortcutService) -> None:
-        """Cleanup legacy."""
+        """Remove the legacy ``ubisoft:.template`` entry from the registry.
+
+        Older Unifideck versions stored the auth shortcut under the
+        template store_id. We migrate to ``ubisoft:upc-auth`` and
+        drop the old entry here so it doesn't shadow the new one.
+
+        Args:
+            sm: Shortcut service.
+        """
         try:
             if not hasattr(sm, "load_shortcuts_registry"):
                 return

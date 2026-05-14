@@ -61,7 +61,13 @@ _PLACEHOLDER_LITERALS = frozenset({"a ubisoft game"})
 
 
 class _GameBuilder:
-    """Game builder."""
+    """Build display-ready ``Game`` records from UPC catalog + install state.
+
+    Merges the parsed UPC owned-games catalog with the install
+    registry, applies Steam-linked filtering, drops DLC / placeholder
+    / non-Latin titles, deduplicates by normalized name, and
+    updates the id_map in bulk to capture the latest mappings.
+    """
 
     def __init__(
         self,
@@ -69,7 +75,14 @@ class _GameBuilder:
         config: UbisoftConfig,
         id_map: UbisoftIdMap,
     ) -> None:
-        """Initialize the instance."""
+        """Bind the game-builder to its config + id_map + library facade.
+
+        Args:
+            config: Frozen ``UbisoftConfig``.
+            id_map: Space_id ↔ install_id mapping store.
+            library: Owning ``UbisoftLibrary`` facade (for delegated
+                artwork / metadata lookups).
+        """
         self._config = config
         self._id_map = id_map
 
@@ -77,7 +90,15 @@ class _GameBuilder:
     def build_config_lookup(
         configs: list[GameConfig],
     ) -> dict[int, GameConfig]:
-        """Build config lookup."""
+        """Index parsed configs by both install_id and launch_id.
+
+        Args:
+            configs: Parsed UPC owned-games entries.
+
+        Returns:
+            ``{numeric_id: config}`` covering install and launch IDs
+            (when they differ).
+        """
         config_by_id: dict[int, GameConfig] = {}
         for cfg in configs:
             config_by_id[cfg.install_id] = cfg
@@ -91,7 +112,20 @@ class _GameBuilder:
         config_by_id: dict[int, GameConfig],
         owned_set: set[int] | None,
     ) -> list[GameConfig]:
-        """Cross reference ownership."""
+        """Filter the parsed configs against the ownership-binary owned set.
+
+        When the ownership binary couldn't be loaded, falls back to
+        every named config (less reliable but better than nothing).
+
+        Args:
+            configs: All parsed configs (untouched fallback list).
+            config_by_id: Numeric-ID lookup from ``build_config_lookup``.
+            owned_set: Numeric IDs from the ownership binary, or
+                ``None`` to disable the cross-reference.
+
+        Returns:
+            Filtered list of configs the user actually owns.
+        """
         if owned_set is not None:
             return [
                 config_by_id[oid]
@@ -109,7 +143,14 @@ class _GameBuilder:
         self,
         configs: list[GameConfig],
     ) -> list[GameConfig]:
-        """Apply steam filter."""
+        """Drop games already on Steam if cross-store filtering is enabled.
+
+        Args:
+            configs: Owned configs.
+
+        Returns:
+            Filtered list (unchanged if the toggle is off).
+        """
         if not self._config.filter_steam_linked:
             return configs
         before_count = len(configs)
@@ -126,7 +167,14 @@ class _GameBuilder:
         self,
         configs: list[GameConfig],
     ) -> list[GameConfig]:
-        """Filter steam linked configs."""
+        """Dispatch to the shared steam_filter module.
+
+        Args:
+            configs: Owned configs.
+
+        Returns:
+            Configs not linked to Steam.
+        """
         return filter_steam_linked_configs(
             configs,
             self._config.steam_library_cross_ref,
@@ -138,7 +186,19 @@ class _GameBuilder:
         matched_configs: list[GameConfig],
         installed: dict[str, Any],
     ) -> list[Game]:
-        """Build games from configs."""
+        """Build ``Game`` records from matched configs and the install map.
+
+        Sorts alphabetically by lowered name, dedupes by normalized
+        name, drops placeholder/blacklisted titles, and accumulates
+        id_map updates for a single bulk write at the end.
+
+        Args:
+            matched_configs: Configs the user owns.
+            installed: Per-space_id install metadata.
+
+        Returns:
+            Sorted, deduplicated list of ``Game`` records.
+        """
         games: list[Game] = []
         seen_norms: set[str] = set()
         id_map_updates: dict[str, dict[str, Any]] = {}
@@ -165,7 +225,23 @@ class _GameBuilder:
         seen_norms: set[str],
         id_map_updates: dict[str, dict[str, Any]],
     ) -> Game | None:
-        """Build one game."""
+        """Convert one config + install state into a ``Game`` record.
+
+        Cleans the title, applies the skip filter, dedupes against
+        ``seen_norms``, builds the id_map update, and assembles the
+        final ``Game``.
+
+        Args:
+            cfg: UPC config entry.
+            installed: Per-space_id install map.
+            seen_norms: Set of already-emitted normalized names
+                (mutated).
+            id_map_updates: Accumulated id_map updates (mutated).
+
+        Returns:
+            A ``Game``, or ``None`` if the title should be skipped
+            or is a duplicate.
+        """
         title = self._clean_launcher_title(cfg.name)
         if self._should_skip_launcher_title(title):
             return None
@@ -201,7 +277,14 @@ class _GameBuilder:
 
     @staticmethod
     def _clean_launcher_title(title: Any) -> str:
-        """Clean launcher title."""
+        """Strip surrounding quotes and fix common mojibake in a UPC title.
+
+        Args:
+            title: Raw title (any type — non-strings yield ``""``).
+
+        Returns:
+            Cleaned title.
+        """
         if not isinstance(title, str):
             return ""
         cleaned = title.strip().strip('"').strip("'")
@@ -210,7 +293,17 @@ class _GameBuilder:
         return cleaned
 
     def _is_launcher_placeholder_title(self, title: str) -> bool:
-        """Is launcher placeholder title."""
+        """Return True if the title is a known UPC placeholder.
+
+        Matches: empty/blank strings, ``"a ubisoft game"``, and pure
+        identifier-style strings (``L42``, ``GAME_FOO``).
+
+        Args:
+            title: Title to inspect.
+
+        Returns:
+            True iff the title should be hidden from the library.
+        """
         cleaned = self._clean_launcher_title(title)
         if not cleaned:
             return True
@@ -222,7 +315,19 @@ class _GameBuilder:
         return bool(_PLACEHOLDER_L_PATTERN.fullmatch(cleaned))
 
     def _should_skip_launcher_title(self, title: str) -> bool:
-        """Should skip launcher title."""
+        """Composite skip predicate covering every drop reason.
+
+        Drops: empty/too-short titles, placeholders, anything with
+        ``[STEAM]`` / ``[Uplay`` markers, test/beta/DLC keywords,
+        or Cyrillic characters (placeholder Russian rows in the
+        config).
+
+        Args:
+            title: Cleaned title.
+
+        Returns:
+            True iff the title should not appear in the library.
+        """
         cleaned = self._clean_launcher_title(title)
         if not cleaned or len(cleaned.strip()) <= 2:
             return True

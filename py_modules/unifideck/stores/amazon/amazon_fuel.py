@@ -25,7 +25,18 @@ _SKIP_EXE_PATTERNS: tuple[str, ...] = (
 
 
 def candidate_fuel_dirs(install_path: str) -> list[str]:
-    """Candidate fuel dirs."""
+    """Enumerate directories that might hold a ``fuel.json``.
+
+    Inspects the install root, the conventional ``game``/``Game``
+    subdirs, then every first-level subdirectory.
+
+    Args:
+        install_path: Absolute install directory.
+
+    Returns:
+        List of candidate directories preserving insertion order
+        (empty if the install dir doesn't exist).
+    """
     if not install_path or not os.path.isdir(install_path):
         return []
     candidates: list[str] = [install_path]
@@ -44,7 +55,15 @@ def candidate_fuel_dirs(install_path: str) -> list[str]:
 
 
 def parse_fuel_json_content(content: str) -> dict | None:
-    """Parse fuel JSON content."""
+    """Parse fuel.json text, stripping ``//`` line comments first.
+
+    Args:
+        content: Raw file contents.
+
+    Returns:
+        Parsed JSON dict, or ``None`` on empty input / decode
+        error / non-dict result.
+    """
     if not content:
         return None
     cleaned = _COMMENT_RE.sub('', content)
@@ -57,7 +76,14 @@ def parse_fuel_json_content(content: str) -> dict | None:
 
 
 def extract_main_command(fuel_data: dict) -> str | None:
-    """Extract main command."""
+    """Extract ``Main.Command`` (the playable exe relative path) from fuel.json.
+
+    Args:
+        fuel_data: Parsed fuel.json dict.
+
+    Returns:
+        The command string, or ``None`` if missing / wrong type.
+    """
     if not isinstance(fuel_data, dict):
         return None
     main = fuel_data.get('Main')
@@ -68,12 +94,19 @@ def extract_main_command(fuel_data: dict) -> str | None:
 
 
 def find_exe_from_fuel(install_path: str) -> str | None:
-    """Find exe from fuel.
+    """Resolve a game's executable from its fuel.json manifest, with fallback.
 
-    Tries every candidate dir in turn; first directory with a parsable
-    ``fuel.json`` whose ``Main.Command`` points at an existing file
-    wins. Falls back to the largest non-installer .exe in the install
-    tree (rooted at ``install_path``) when no manifest resolves.
+    Walks every candidate dir, parsing each ``fuel.json`` and
+    verifying that ``Main.Command`` resolves to an existing file.
+    If no manifest resolves, falls back to the largest non-
+    installer .exe in the install tree.
+
+    Args:
+        install_path: Absolute install directory.
+
+    Returns:
+        Absolute path to the resolved exe, or ``None`` if both
+        strategies failed.
     """
     if not install_path:
         return None
@@ -106,7 +139,18 @@ def find_exe_from_fuel(install_path: str) -> str | None:
 
 
 def _find_largest_exe(install_path: str) -> str | None:
-    """Find largest exe fallback."""
+    """Pick the largest .exe under ``install_path`` that isn't an installer.
+
+    Skips files whose basename contains any of ``unins``, ``setup``,
+    ``install``, ``crash``, ``redist``, ``vcredist``.
+
+    Args:
+        install_path: Absolute install directory.
+
+    Returns:
+        Path to the largest candidate, or ``None`` if no
+        qualifying .exe exists.
+    """
     if not install_path or not os.path.isdir(install_path):
         return None
     candidates: list[tuple[int, str]] = []

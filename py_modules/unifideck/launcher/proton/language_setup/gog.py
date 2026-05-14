@@ -1,3 +1,5 @@
+"""GOG-store language setup — patches per-game goggame-*.info files with the user's preferred language."""
+
 from __future__ import annotations
 import glob
 import json
@@ -11,7 +13,20 @@ if TYPE_CHECKING:
     from ....config import ConfigManager
 logger = logging.getLogger(__name__)
 def _find_goggame_info(game_id: str, install_dir: str) -> str | None:
-    """Find goggame info."""
+    """Walk up to 4 directory levels looking for ``goggame-<id>.info``.
+
+    First tries the exact filename, then falls back to a glob
+    of ``goggame-*.info`` files that start with the requested
+    id (covers DLC/variants).
+
+    Args:
+        game_id: GOG game identifier.
+        install_dir: Game install directory.
+
+    Returns:
+        Path string to the matching info file, or ``None``
+        if nothing was found.
+    """
     search_dir = install_dir
     for _ in range(4):
         candidate = os.path.join(search_dir, f"goggame-{game_id}.info")
@@ -36,7 +51,21 @@ def apply_gog_language(
     game_id: str, install_dir: str, config: ConfigManager | None = None,
 ) -> bool:
 
-    """Apply GOG language."""
+    """Patch the per-game goggame-*.info to the user's language.
+
+    Resolves the preferred language from config, finds the
+    info file, matches against the languages GOG declares
+    available, and atomically rewrites the file with the
+    single-language list + display name.
+
+    Args:
+        game_id: GOG game identifier.
+        install_dir: Game install directory.
+        config: ConfigManager.
+
+    Returns:
+        True iff the info file was patched.
+    """
     language = get_unifideck_language(config)
     logger.info(
         "[language_setup.gog] applying %s to game=%s dir=%s",

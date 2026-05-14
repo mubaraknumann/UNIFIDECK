@@ -43,7 +43,16 @@ _STABILITY_STABLE_THRESHOLD = 3
 
 
 class _ManualUiInstaller:
-    """Manual UI installer."""
+    """Drive a UPC manual install — launch UPC, watch the filesystem, detect completion.
+
+    UPC has no silent-install flag, so the wizard must be
+    driven by the user. Once the wizard finishes UPC switches
+    to a service-mode background loop with no clean termination
+    signal — this installer snapshots the install destination
+    before launching UPC, polls for new game directories
+    (filtered by ``looks_like_game_install``), then waits for
+    directory-size stability before declaring the install done.
+    """
 
     def __init__(
         self,
@@ -53,7 +62,16 @@ class _ManualUiInstaller:
         session: UbisoftSession,
         active_install_pids: dict[str, int],
     ) -> None:
-        """Initialize the instance."""
+        """Wire dependencies for the manual-UI install fallback.
+
+        Args:
+            config: Ubisoft store config.
+            library: Ubisoft library facade.
+            id_map: Ubisoft ID map.
+            session: Ubisoft session state.
+            active_install_pids: Shared dict tracking in-flight
+                installer PIDs (keyed by space_id).
+        """
         self._config = config
         self._library = library
         self._id_map = id_map
@@ -73,7 +91,25 @@ class _ManualUiInstaller:
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
         install_path: str | None,
     ) -> InstallResult:
-        """Install via UPC UI."""
+        """Run one manual-install cycle: snapshot → spawn UPC → detect → finalize.
+
+        Args:
+            game_id: Ubisoft space_id.
+            game_name: Display title (best-effort).
+            prefix_path: Wine prefix root.
+            upc_path: Path to upc.exe inside the prefix.
+            umu_run: Path to the umu-run wrapper.
+            python_bin: Python interpreter for umu-run.
+            env: Subprocess env (from ``build_umu_env``).
+            progress_cb: Optional async callback receiving
+                ``{status, message, progress}`` dicts.
+            install_path: Optional install-base override; default
+                comes from config.
+
+        Returns:
+            ``InstallResult`` — success only when a new directory
+            was detected AND its size stabilized.
+        """
         logger.info(
             "[UbisoftInstaller] install_id unavailable for %s "
             "— launching UPC for manual install",
@@ -124,7 +160,11 @@ class _ManualUiInstaller:
         env: dict[str, str],
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> asyncio.subprocess.Process:
-        """Notify and spawn UPC."""
+        """Emit the ``waiting`` progress, spawn UPC, and register the PID.
+
+        Returns:
+            Live ``asyncio.subprocess.Process``.
+        """
         if progress_cb:
             await progress_cb(
                 {
@@ -155,7 +195,20 @@ class _ManualUiInstaller:
         install_path: str | None,
         prefix_path: str,
     ) -> tuple[str, set[str], dict[str, set[str]]]:
-        """Snapshot pre install."""
+        """Snapshot the install-base and UPC ``games/`` dir contents pre-install.
+
+        Both snapshots feed the polling loop: the install-base
+        catches games installed to a user-chosen location, the
+        UPC games dir catches games installed to the default
+        in-prefix location.
+
+        Args:
+            install_path: Install-base override.
+            prefix_path: Wine prefix root.
+
+        Returns:
+            Tuple ``(install_base, dirs_before, upc_dirs_before)``.
+        """
         install_base, dirs_before = self._snapshot_install_base(
             install_path,
         )
@@ -166,7 +219,14 @@ class _ManualUiInstaller:
         self,
         prefix_path: str,
     ) -> None:
-        """Capture and propagate session."""
+        """Capture the UPC session from the prefix and propagate to other prefixes.
+
+        Lets multi-prefix Ubisoft installs (one prefix per game)
+        share the same authentication state without re-prompting.
+
+        Args:
+            prefix_path: Prefix that just hosted the install.
+        """
         if self._session.capture(prefix_path):
             self._session.propagate_all_to_all()
 
@@ -174,7 +234,14 @@ class _ManualUiInstaller:
         self,
         install_path: str | None,
     ) -> tuple[str, set]:
-        """Snapshot install base."""
+        """Create the install-base dir if needed and snapshot its current contents.
+
+        Args:
+            install_path: Override, or ``None`` (use config default).
+
+        Returns:
+            Tuple ``(install_base, dirs_before)``.
+        """
         install_base = install_path or self._config.default_install_base_expanded
         os.makedirs(install_base, exist_ok=True)
         dirs_before: set = set()
@@ -189,7 +256,12 @@ class _ManualUiInstaller:
         proc: asyncio.subprocess.Process,
         timeout: float = 15.0,
     ) -> None:
-        """Terminate UPC gracefully."""
+        """Best-effort SIGTERM with timeout, falling back to SIGKILL.
+
+        Args:
+            proc: Live UPC subprocess.
+            timeout: Seconds to wait for graceful exit.
+        """
         if proc.returncode is not None:
             return
         try:
@@ -211,7 +283,17 @@ class _ManualUiInstaller:
         game_name: str | None,
         install_dir: str,
     ) -> InstallResult:
-        """Finalize manual install."""
+        """Post-install: locate exe, write install marker, measure size, refresh id_map.
+
+        Args:
+            game_id: Ubisoft space_id.
+            game_name: Display title.
+            install_dir: Detected install directory.
+
+        Returns:
+            ``InstallResult`` carrying install_path, size_bytes,
+            and ``metadata.executable``.
+        """
         exe = self._library.find_game_executable(install_dir)
         await self._library.write_install_marker(
             space_id=game_id,
@@ -245,7 +327,18 @@ class _ManualUiInstaller:
     def _snapshot_upc_game_dirs(
         prefix_path: str,
     ) -> dict[str, set]:
-        """Snapshot UPC game dirs."""
+        """Snapshot UPC's per-prefix ``games/`` directory contents.
+
+        Checks both root and ``pfx`` layouts so we catch installs
+        regardless of which prefix layout is active.
+
+        Args:
+            prefix_path: Wine prefix root.
+
+        Returns:
+            Dict ``games_dir_path → set of existing entries`` for
+            every UPC games dir that exists.
+        """
         upc_games_rel = os.path.join(
             "drive_c",
             "Program Files (x86)",
@@ -275,7 +368,19 @@ class _ManualUiInstaller:
         upc_dirs_before: dict[str, set],
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> str | None:
-        """Poll for new install."""
+        """Poll the snapshotted directories for a new game install dir.
+
+        Runs every ``_MANUAL_INSTALL_POLL_INTERVAL_S`` seconds up
+        to ``_MANUAL_INSTALL_TIMEOUT_S``. Stops if UPC exits before
+        a new install is detected. Sends periodic ``waiting`` toasts
+        (once per minute) to keep the UI alive. Once a candidate
+        appears, hands off to ``_wait_for_install_completion`` for
+        the stability check.
+
+        Returns:
+            Detected install directory, or ``None`` on timeout /
+            UPC exit.
+        """
         install_dir: str | None = None
         max_polls = int(
             _MANUAL_INSTALL_TIMEOUT_S / _MANUAL_INSTALL_POLL_INTERVAL_S,
@@ -331,7 +436,12 @@ class _ManualUiInstaller:
         install_dir: str,
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> None:
-        """Notify install detected."""
+        """Emit a ``installing`` progress event mentioning the detected directory.
+
+        Args:
+            install_dir: Detected install directory.
+            progress_cb: Optional async callback.
+        """
         if not progress_cb:
             return
         await progress_cb(
@@ -347,7 +457,18 @@ class _ManualUiInstaller:
         base: str,
         before: set,
     ) -> str | None:
-        """Check new dirs."""
+        """Compare the current directory listing against the pre-install snapshot.
+
+        Returns the first directory that wasn't in the snapshot
+        AND passes ``looks_like_game_install``.
+
+        Args:
+            base: Directory to re-list.
+            before: Snapshot taken before the install.
+
+        Returns:
+            Absolute path of a new game install, or ``None``.
+        """
         try:
             now = set(os.listdir(base))
         except OSError:
@@ -364,7 +485,18 @@ class _ManualUiInstaller:
         install_dir: str,
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> None:
-        """Wait for install completion."""
+        """Wait for the new directory's size to stabilize for several consecutive polls.
+
+        Polls every ``_STABILITY_POLL_INTERVAL_S`` for up to
+        ``_STABILITY_WAIT_MAX_POLLS``. Considers the install done
+        when the directory size doesn't change for
+        ``_STABILITY_STABLE_THRESHOLD`` polls in a row. Emits a
+        synthetic 50–90% progress curve while waiting.
+
+        Args:
+            install_dir: Detected install directory.
+            progress_cb: Optional async callback.
+        """
         prev_size = 0
         stable_count = 0
         for _ in range(_STABILITY_WAIT_MAX_POLLS):

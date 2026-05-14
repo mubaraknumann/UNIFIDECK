@@ -27,7 +27,13 @@ _AMAZON_REDIRECT_URIS: list[str] = [
 
 
 class AmazonAuthFlow:
-    """Amazon auth flow."""
+    """Amazon Games OAuth flow driven by the ``nile`` CLI.
+
+    Runs ``nile auth --login --non-interactive`` to obtain the
+    login URL, hands it to the AuthOrchestrator for the browser
+    leg, then completes by feeding the captured code back to
+    ``nile auth --register``.
+    """
 
     def __init__(
         self,
@@ -37,7 +43,18 @@ class AmazonAuthFlow:
         success_markers: list[str],
         cli_timeout_seconds: int = 30,
     ) -> None:
-        """Initialize the instance."""
+        """Wire dependencies for the Nile CLI-driven Amazon auth flow.
+
+        Args:
+            bus: Event bus.
+            orchestrator: Auth orchestrator (drives the higher-level
+                OAuth state machine).
+            cli_path: Path to the bundled ``nile`` binary, or
+                ``None`` if missing.
+            success_markers: Stdout markers that indicate the CLI
+                login completed.
+            cli_timeout_seconds: Hard timeout for the CLI call.
+        """
         self._bus = bus
         self._orchestrator = orchestrator
         self._cli_path = cli_path
@@ -47,7 +64,19 @@ class AmazonAuthFlow:
 
     @audit_auth_flow(store='amazon', method='oauth_cli')
     async def start_auth(self) -> AuthResult:
-        """Start auth."""
+        """Kick off the Amazon OAuth flow.
+
+        Steps: verify the nile binary is available → call nile to
+        get the login URL → start the browser via
+        ``AuthOrchestrator``, registering ``_register_code`` as the
+        code-capture callback.
+
+        Returns:
+            ``AuthResult`` — ``success=True`` only means the
+            browser was successfully launched; the actual auth
+            completes asynchronously when the user finishes the
+            OAuth dance and ``_register_code`` runs.
+        """
         if not self._cli_path:
             return AuthResult(
                 success=False, store='amazon', error='nile_not_found',
@@ -78,7 +107,12 @@ class AmazonAuthFlow:
         return AuthResult(success=True, store='amazon', redirect_url=url)
 
     async def logout(self) -> Result:
-        """Logout."""
+        """Invoke ``nile auth --logout`` and emit ``STORE_LOGOUT``.
+
+        Returns:
+            ``Result`` — ``success=False`` if nile is unavailable or
+            the subprocess can't be spawned.
+        """
         if not self._cli_path:
             return Result(success=False, error='nile_not_found')
         try:
@@ -94,14 +128,26 @@ class AmazonAuthFlow:
         return Result(success=True)
 
     async def _fetch_login_url(self) -> Any:
-        """Fetch login URL."""
+        """Wrap the nile probe in a typed exception path.
+
+        Returns:
+            The parsed login-data dict on success.
+
+        Raises:
+            StoreAuthError: nile failed to produce a login URL.
+        """
         login_data = await self._run_nile_login_probe()
         if login_data is None:
             raise StoreAuthError('nile_login_probe_failed', store='amazon')
         return login_data
 
     async def _run_nile_login_probe(self) -> dict[str, Any] | None:
-        """Run NILE login probe."""
+        """Run ``nile auth --login --non-interactive`` and parse its JSON stdout.
+
+        Returns:
+            Parsed dict with ``url`` and pending-login fields, or
+            ``None`` on timeout, non-zero exit, or malformed JSON.
+        """
         try:
             proc = await asyncio.create_subprocess_exec(
                 self._cli_path, 'auth', '--login', '--non-interactive',
@@ -129,7 +175,18 @@ class AmazonAuthFlow:
         return cast(dict[str, Any], data) if isinstance(data, dict) else None
 
     async def _register_code(self, code: str) -> AuthResult:
-        """Register code."""
+        """Feed the captured OAuth code to ``nile auth --register``.
+
+        Invoked as the AuthOrchestrator's code-capture callback when
+        the user lands on an Amazon redirect URL.
+
+        Args:
+            code: OAuth code captured from the redirect URL.
+
+        Returns:
+            ``AuthResult``. Emits ``STORE_AUTH_COMPLETE`` on success
+            or ``STORE_AUTH_FAILED`` (with the nile stderr) on failure.
+        """
         if not code:
             return AuthResult(
                 success=False, store='amazon', error='no_auth_code',

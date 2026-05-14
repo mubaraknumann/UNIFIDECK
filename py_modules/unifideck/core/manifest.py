@@ -89,7 +89,16 @@ class GameManifest:
     executable_relative: str
     installed_at: str
     platform: str = "windows"
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102 — documentation pending (Sprint D)
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise the manifest to a JSON-compatible dict.
+
+        Mirror of ``from_dict``: every field is emitted verbatim,
+        with no compression or schema-version handling at this
+        layer.
+
+        Returns:
+            Plain dict ready for ``json.dumps``.
+        """
         return {
         "unifideck_version": self.unifideck_version,
         "store": self.store,
@@ -122,7 +131,8 @@ class DiscoveryResult:
     manifests_found: int = 0
     games_registered: int = 0
     errors: list[str] = field(default_factory=list)
-    def to_dict(self) -> dict[str, Any]:  # noqa: D102 — documentation pending (Sprint D)
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the discovery result to a JSON-compatible dict."""
         return {
         "scanned_directories": self.scanned_directories,
         "manifests_found": self.manifests_found,
@@ -188,6 +198,7 @@ async def write_manifest(
     path = Path(install_dir) / filename
 
     def _write_sync() -> None:
+        """Blocking atomic write of the manifest JSON."""
         with path.open("w", encoding="utf-8") as f:
             json.dump(manifest.to_dict(), f, indent=2)
 
@@ -220,6 +231,7 @@ async def read_manifest(
     path = Path(game_dir) / filename
 
     def _read_sync() -> dict[str, Any] | None:
+        """Blocking JSON read of the manifest file."""
         if not path.is_file():
             return None
         try:
@@ -276,6 +288,7 @@ async def _scan_one_root(
     """Walk a single root directory two levels deep looking for manifests."""
 
     def _list(p: str) -> list[str]:
+        """Blocking directory listing of the root."""
         root_path = Path(p)
         return [
             str(entry)

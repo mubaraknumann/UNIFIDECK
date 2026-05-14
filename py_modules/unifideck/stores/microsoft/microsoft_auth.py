@@ -1,3 +1,5 @@
+"""Low-level Microsoft auth primitives — HTTP helpers, XBL/XSTS token chain construction."""
+
 import json
 import logging
 import urllib.error
@@ -14,21 +16,54 @@ __all__ = [
     "ssl_ctx_strict",
 ]
 def http_post(url: str, data: dict, headers: dict) -> dict:
-    """Http post."""
+    """POST URL-encoded form data and parse the JSON response.
+
+    Uses the strict SSL context and a 15s timeout.
+
+    Args:
+        url: Target URL.
+        data: Form fields (will be ``urlencode``-d).
+        headers: Request headers (must include the right
+            Content-Type for form data).
+
+    Returns:
+        Parsed JSON dict.
+    """
     body = urllib.parse.urlencode(data).encode()
     req = urllib.request.Request(
         url, data=body, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=15, context=ssl_ctx_strict()) as r:
         return cast(dict, json.loads(r.read().decode()))
 def http_post_json(url: str, payload: dict, headers: dict) -> dict:
-    """Http post JSON."""
+    """POST a JSON body and parse the JSON response.
+
+    Uses the strict SSL context and a 20s timeout.
+
+    Args:
+        url: Target URL.
+        payload: Body dict (will be ``json.dumps``-d).
+        headers: Request headers.
+
+    Returns:
+        Parsed JSON dict.
+    """
     body = json.dumps(payload).encode()
     req = urllib.request.Request(
         url, data=body, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=20, context=ssl_ctx_strict()) as r:
         return cast(dict, json.loads(r.read().decode()))
 def http_get(url: str, headers: dict) -> dict:
-    """Http get."""
+    """GET a URL and parse the JSON response.
+
+    Uses the strict SSL context and a 15s timeout.
+
+    Args:
+        url: Target URL.
+        headers: Request headers.
+
+    Returns:
+        Parsed JSON dict.
+    """
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=15, context=ssl_ctx_strict()) as r:
         return cast(dict, json.loads(r.read().decode()))
@@ -42,7 +77,28 @@ def build_xbl_chain(
     xsts_relying_party: str = "http://xboxlive.com",
 ) -> dict[str, str] | None:
 
-    """Build XBL chain."""
+    """Build the full XBL → XSTS token chain from a Microsoft access token.
+
+    Steps: obtain an XBL user token (trying several
+    contract-version + RpsTicket prefix combinations to
+    absorb Microsoft's flaky auth surface), extract the
+    user hash, then trade it for an XSTS token bound to
+    the requested relying party.
+
+    Args:
+        access_token: OAuth access token from Microsoft.
+        locale: BCP-47 locale (for ``Accept-Language``).
+        xbl_auth_url: Xbox Live auth endpoint URL.
+        xsts_url: XSTS endpoint URL.
+        xbl_user_agent: User-Agent header value.
+        xsts_relying_party: Relying-party URL
+            (default ``http://xboxlive.com``; use
+            ``http://gssv.xboxlive.com/`` for cloud-gaming).
+
+    Returns:
+        Dict ``{xbl_token, user_hash, xsts_token, xsts_rp,
+        xuid}``, or ``None`` if any step in the chain failed.
+    """
     logger.info("[MS] Building XBL/XSTS token chain")
     try:
         xbl_resp = _obtain_xbl_user_token(
@@ -98,7 +154,18 @@ def request_xsts_token(
     xsts_url: str,
     xbl_user_agent: str,
 ) -> dict | None:
-    """Request XSTS token."""
+    """Public wrapper that delegates to ``_request_xsts_token``.
+
+    Args:
+        xbl_token: XBL user token from ``_obtain_xbl_user_token``.
+        xsts_rp: Relying-party URL.
+        locale: BCP-47 locale.
+        xsts_url: XSTS endpoint URL.
+        xbl_user_agent: User-Agent header value.
+
+    Returns:
+        Parsed XSTS response dict, or ``None`` on failure.
+    """
     return _request_xsts_token(
         xbl_token, xsts_rp, locale, xsts_url, xbl_user_agent,
     )
@@ -110,7 +177,24 @@ def _obtain_xbl_user_token(
     xbl_user_agent: str,
 ) -> dict | None:
 
-    """Obtain XBL user token."""
+    """Try several contract-version / RpsTicket prefix combos until one succeeds.
+
+    Microsoft's XBL endpoint is sensitive to subtle
+    differences between contract version (1 vs 2) and the
+    RpsTicket prefix (``t=`` vs ``d=``). Tries all three
+    known-working combos in order and returns the first
+    non-empty response.
+
+    Args:
+        access_token: OAuth access token.
+        locale: BCP-47 locale.
+        xbl_auth_url: Xbox Live auth endpoint URL.
+        xbl_user_agent: User-Agent header value.
+
+    Returns:
+        Parsed XBL response dict, or ``None`` if all combos
+        failed.
+    """
     candidates = [
         ("2", f"t={access_token}"),
         ("1", f"d={access_token}"),
@@ -137,7 +221,19 @@ def _try_xbl_request(
     xbl_auth_url: str,
     xbl_user_agent: str,
 ) -> dict | None:
-    """Try XBL request."""
+    """Run one XBL auth POST with a specific contract version + RpsTicket prefix.
+
+    Args:
+        contract_v: XBL contract version (``"1"`` or ``"2"``).
+        rps: RpsTicket header (``t=...`` or ``d=...``).
+        locale: BCP-47 locale.
+        xbl_auth_url: Xbox Live auth endpoint URL.
+        xbl_user_agent: User-Agent header value.
+
+    Returns:
+        Parsed response dict on HTTP 200, or ``None`` on
+        any error (HTTP error body is logged at DEBUG).
+    """
     body = {
         "Properties": {
             "AuthMethod": "RPS",
@@ -170,7 +266,14 @@ def _try_xbl_request(
         )
         return None
 def _extract_user_hash(xbl_resp: dict) -> str | None:
-    """Extract user hash."""
+    """Pull the user hash out of an XBL response's DisplayClaims.
+
+    Args:
+        xbl_resp: Parsed XBL response.
+
+    Returns:
+        The ``uhs`` value, or ``None`` if absent.
+    """
     display_claims = xbl_resp.get("DisplayClaims", {})
     xui = display_claims.get("xui", [{}])
     return xui[0].get("uhs") if xui else None
@@ -183,7 +286,19 @@ def _request_xsts_token(
     xbl_user_agent: str,
 ) -> dict | None:
 
-    """Request XSTS token."""
+    """POST to the XSTS endpoint to exchange an XBL token for an XSTS token.
+
+    Args:
+        xbl_token: XBL user token.
+        xsts_rp: Relying party URL.
+        locale: BCP-47 locale.
+        xsts_url: XSTS endpoint URL.
+        xbl_user_agent: User-Agent header value.
+
+    Returns:
+        Parsed XSTS response, or ``None`` on HTTP error /
+        network failure.
+    """
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json",
@@ -219,7 +334,14 @@ def _request_xsts_token(
         )
         return None
 def _log_xsts_xerr(xerr: int) -> None:
-    """Log XSTS xerr."""
+    """Log a human-readable explanation for an XSTS ``XErr`` code.
+
+    Recognized: ``2148916238`` (no Xbox profile),
+    ``2148916233`` (country unsupported).
+
+    Args:
+        xerr: XSTS error code from the response.
+    """
     logger.error("[MS] XSTS error code: %d", xerr)
     if xerr == 2148916238:
         logger.error(
@@ -230,7 +352,14 @@ def _log_xsts_xerr(xerr: int) -> None:
             "[MS] Account is from a country where Xbox is not available",
         )
 def _read_http_error_body(err: urllib.error.HTTPError) -> str:
-    """Read http error body."""
+    """Best-effort read of an HTTPError's body.
+
+    Args:
+        err: The HTTPError instance.
+
+    Returns:
+        Decoded body text, or an empty string on read failure.
+    """
     try:
         return err.read().decode("utf-8", errors="replace")
     except Exception:

@@ -105,14 +105,32 @@ async def sync_saves_and_track_size(
 
 
 def resolve_exit_code(svc: LauncherService, state: RuntimeState) -> int:
-    """Resolve the final exit code."""
+    """Resolve the launcher's final exit code.
+
+    Returns -1 when the launch was cancelled; otherwise returns
+    the runtime state's recorded rc (or 1 if missing).
+
+    Args:
+        svc: LauncherService.
+        state: Runtime state.
+
+    Returns:
+        Final exit code as int.
+    """
     if getattr(svc, "_cancelled", False):
         return -1
     return getattr(state, "rc", 1)
 
 
 def elapsed_since_launch(svc: LauncherService) -> float:
-    """Return time elapsed since launch started."""
+    """Return monotonic time elapsed since the launch began.
+
+    Args:
+        svc: LauncherService.
+
+    Returns:
+        Elapsed seconds (0.0 if no launch is active).
+    """
     if svc._launch_started_at is None:
         return 0.0
     return time.monotonic() - svc._launch_started_at

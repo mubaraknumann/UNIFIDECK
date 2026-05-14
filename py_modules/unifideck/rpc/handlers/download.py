@@ -16,11 +16,28 @@ class DownloadHandlers(RpcHandlerBase):
     """Download queue and storage location operations."""
 
     def _download(self) -> Any:
-        """Return the download service, raising if unavailable."""
+        """Return the download service, raising RpcError if unavailable.
+
+        Returns:
+            The download service.
+
+        Raises:
+            RpcError: ``service_unavailable`` when the download
+                service isn't wired.
+        """
         return self._require(self._services.download, "download")
 
     async def cancel_download(self, store: str, game_id: str) -> Any:
-        """Cancel an in-progress download."""
+        """Cancel an in-progress download for one game.
+
+        Args:
+            store: Store identifier.
+            game_id: Per-store game identifier.
+
+        Returns:
+            Whatever the download service returns from ``cancel``
+            (typically a success/failure record).
+        """
         return await self._download().cancel(store, game_id)
 
     async def get_download_queue(self) -> Any:

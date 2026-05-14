@@ -34,14 +34,36 @@ _DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 
 
 class UbisoftInstallerCache:
-    """Ubisoft installer cache."""
+    """Disk-backed cache for the UPC installer binary.
+
+    Downloads ``UbisoftConnectInstaller.exe`` from Ubisoft's CDN
+    on first need and caches it under
+    ``UbisoftConfig.installer_cache_dir_expanded``. Validation
+    checks file existence, minimum size, and PE magic bytes;
+    corrupted downloads are overwritten on the next call.
+    """
 
     def __init__(self, config: UbisoftConfig) -> None:
-        """Initialize the instance."""
+        """Bind the installer-cache to its config snapshot.
+
+        Args:
+            config: Frozen ``UbisoftConfig`` (provides cache dir,
+                filename, and download URL).
+        """
         self._config = config
 
     async def ensure_cached(self) -> str | None:
-        """Ensure cached."""
+        """Return the path to a valid cached installer, downloading if needed.
+
+        If the cache is already valid (file exists, ≥1 KB, PE magic
+        intact) returns the cached path immediately. Otherwise
+        creates the cache dir and downloads the installer (in a
+        thread, with a 10-minute timeout).
+
+        Returns:
+            Absolute path to the cached file, or ``None`` if
+            download failed.
+        """
         cache_dir = self._config.installer_cache_dir_expanded
         filename = self._config.installer_filename
         cached_path = os.path.join(cache_dir, filename)
@@ -73,7 +95,14 @@ class UbisoftInstallerCache:
 
     @staticmethod
     def _is_cached_valid(cached_path: str) -> bool:
-        """Is cached valid."""
+        """Validate a cached installer file (size + PE magic).
+
+        Args:
+            cached_path: Path to the candidate cached file.
+
+        Returns:
+            True iff the file is at least 1 KB and starts with ``MZ``.
+        """
         if not os.path.isfile(cached_path):
             return False
         try:
@@ -87,7 +116,19 @@ class UbisoftInstallerCache:
 
     @staticmethod
     def _download_sync(url: str, dest_path: str) -> bool:
-        """Download sync."""
+        """Blocking download from ``url`` to ``dest_path`` with atomic replace.
+
+        Streams the response to a ``.tmp`` file, then ``os.replace``
+        into place. Uses ``ssl_ctx_strict()`` to enforce TLS pinning.
+        Partial downloads are cleaned up on error.
+
+        Args:
+            url: Installer URL.
+            dest_path: Final cache file path.
+
+        Returns:
+            True iff the download succeeded and the file was renamed.
+        """
         tmp_path = dest_path + ".tmp"
         try:
             ctx = ssl_ctx_strict()
@@ -127,7 +168,15 @@ class UbisoftInstallerCache:
 
 
 def _stream_to_file(response: Any, path: str) -> int:
-    """Stream to file."""
+    """Stream an HTTP response body into a destination file in 1 MB chunks.
+
+    Args:
+        response: Open urllib response object.
+        path: Destination file path.
+
+    Returns:
+        Total bytes written.
+    """
     total = 0
     with open(path, "wb") as f:
         while True:

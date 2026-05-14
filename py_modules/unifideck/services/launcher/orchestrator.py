@@ -78,7 +78,20 @@ async def launch_native(
     ctx: LaunchContext,
     state: RuntimeState,
 ) -> Result:
-    """Native Linux game launch — simpler path."""
+    """Native Linux launch path (no Proton prefix).
+
+    Three phases: cloud-sync down → spawn the game subprocess
+    with the configured launch path + args → cloud-sync up.
+    Emits ``GAME_LAUNCHED`` before spawn for UI/telemetry.
+
+    Args:
+        svc: LauncherService.
+        ctx: Launch context.
+        state: Runtime state (updated with rc and timings).
+
+    Returns:
+        A ``Result`` summarising the launch outcome.
+    """
     try:
         from ...core.types.events import Events
         store = ctx.game.get("store")

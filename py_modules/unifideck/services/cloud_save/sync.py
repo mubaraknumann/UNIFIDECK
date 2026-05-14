@@ -246,6 +246,7 @@ class _SyncMixin:
     async def _is_modified(self, directory: str, manifest: dict[str, float]) -> bool:
         """Check if any file in `directory` differs from `manifest` mtimes."""
         def _check_sync() -> bool:
+            """Blocking walk of the save directory to detect mtime drifts vs. manifest."""
             if not os.path.exists(directory):
                 return False
 
@@ -278,6 +279,7 @@ class _SyncMixin:
     async def _build_manifest(self, directory: str) -> dict[str, float]:
         """Build a fresh manifest dict of rel_path -> mtime."""
         def _build_sync() -> dict[str, float]:
+            """Blocking walk of the save directory to produce a fresh mtime manifest."""
             manifest = {}
             if not os.path.exists(directory):
                 return manifest
@@ -299,6 +301,7 @@ class _SyncMixin:
     async def _copy_tree(self, src: str, dst: str) -> None:
         """Copy src directory to dst atomically (via tmp)."""
         def _copy_sync() -> None:
+            """Blocking shutil-based copy of the save directory tree."""
             if not os.path.exists(src):
                 return
             

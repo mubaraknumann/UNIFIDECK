@@ -1,3 +1,5 @@
+"""CDP target acquisition for the Steam controller popup workflow."""
+
 from __future__ import annotations
 import asyncio
 import logging
@@ -10,7 +12,18 @@ from .cdp_primitives import (
 logger = logging.getLogger(__name__)
 _STEAM_SHARED_CONTEXT_TITLE = "SharedJSContext"
 async def open_controller_popup(steam_port: int, appid: int) -> None:
-    """Open controller popup."""
+    """Open Steam's Controller Configurator popup for one AppID.
+
+    Evaluates a JS snippet inside Steam's SharedJSContext target
+    that calls ``SteamClient.Apps.ShowControllerConfigurator``.
+
+    Args:
+        steam_port: CDP port of the Steam client.
+        appid: AppID to open the configurator for.
+
+    Raises:
+        RuntimeError: SharedJSContext target not found.
+    """
     shared_target = await wait_for_titled_target(
         steam_port,
         _STEAM_SHARED_CONTEXT_TITLE,
@@ -28,7 +41,17 @@ async def open_controller_popup(steam_port: int, appid: int) -> None:
 async def wait_for_popup_root_ready(
     websocket: aiohttp.ClientWebSocketResponse,
 ) -> bool:
-    """Wait for popup root ready."""
+    """Poll the popup body until the ``View Layout`` button is rendered.
+
+    Indicates that the popup's root page (not a sub-screen) is
+    ready for the bounce sequence. ~15s total (60×0.25s).
+
+    Args:
+        websocket: Popup CDP websocket.
+
+    Returns:
+        True iff the root page rendered within the deadline.
+    """
     for attempt in range(60):
         try:
             resp = await cdp_command(

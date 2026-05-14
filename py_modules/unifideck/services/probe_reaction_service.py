@@ -49,7 +49,17 @@ class ProbeReactionService:
         watchdog: Any,
         config: object | None = None,
     ) -> None:
-        """Store refs, init history deque, auto_wire."""
+        """Wire dependencies and prepare the per-probe history deque.
+
+        Loads the probe→handlers mapping (defaults merged with any
+        ``probes.probe_to_handlers`` config override) and auto-wires
+        bus subscriptions.
+
+        Args:
+            bus: Event bus.
+            watchdog: Handler watchdog (must expose ``force_quarantine``).
+            config: Optional config object exposing ``.get``.
+        """
         self._bus = bus
         self._watchdog = watchdog
         self._mapping = self._load_mapping(config)
@@ -90,6 +100,7 @@ class ProbeReactionService:
         self._quarantine_affected_handlers(probes)
 
     def _record_in_history(self, probes: list[dict[str, Any]]) -> None:
+        """Append the latest probe batch to the in-memory history."""
         import time
         self._history.append({
             "timestamp": time.time(),
@@ -97,6 +108,7 @@ class ProbeReactionService:
         })
 
     def _quarantine_affected_handlers(self, probes: list[dict[str, Any]]) -> None:
+        """Preemptively quarantine handlers when their watchdog probe reports a failure verdict."""
         if not self._watchdog or not hasattr(self._watchdog, "force_quarantine"):
             return
             

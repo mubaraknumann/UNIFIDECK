@@ -70,7 +70,10 @@ class ShortcutService(
         return generate_app_id(exe, title)
 
     async def _load_shortcuts(self) -> None:
-        """Load shortcuts.vdf into memory (idempotent)."""
+        """Load shortcuts.vdf into memory once (idempotent).
+
+        Lazy: re-entry while the cache is populated is a no-op.
+        """
         if self._shortcuts_loaded:
             return
 
@@ -78,7 +81,12 @@ class ShortcutService(
         self._shortcuts_loaded = True
 
     async def _load_games_map(self) -> None:
-        """Load games.map with retry-on-corruption (idempotent)."""
+        """Load games.map into memory once with retry-on-corruption (idempotent).
+
+        Lazy: re-entry while the cache is populated is a no-op.
+        The underlying ``read_games_map`` is responsible for
+        retrying on JSON corruption.
+        """
         if self._games_map_loaded:
             return
 

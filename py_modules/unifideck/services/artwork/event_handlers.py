@@ -122,6 +122,7 @@ class _EventHandlersMixin:
         from .fetcher import has_artwork
 
         async def _process_game(game: Game) -> None:
+            """Fetch missing grid/hero artwork for a single synced game."""
             if not game.launch_path:
                 return
             

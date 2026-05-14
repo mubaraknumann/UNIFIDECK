@@ -1,3 +1,5 @@
+"""MicrosoftSubscriptionService — orchestrates cache, probe, and event emission to surface the user's Game Pass tier."""
+
 from __future__ import annotations
 import asyncio
 import logging
@@ -55,7 +57,23 @@ class MicrosoftSubscriptionService(
         token_manager: MicrosoftTokenManager,
     ) -> SubscriptionTier:
 
-        """Get tier."""
+        """Resolve the user's current Microsoft subscription tier.
+
+        Pipeline (under a service lock):
+          1. resolve a per-account cache key,
+          2. return the cached entry if still fresh,
+          3. otherwise probe the GSSV endpoint,
+          4. on probe success → persist + emit + return,
+          5. on probe failure → fall back to a stale cache entry
+             if one exists, else NONE.
+
+        Args:
+            token_manager: Microsoft token manager.
+
+        Returns:
+            The detected ``SubscriptionTier`` (NONE on probe
+            failure with no cache).
+        """
         cache_key = await self._resolve_cache_key(token_manager)
         async with self._lock:
             cached = self._read_cache(cache_key)
@@ -103,7 +121,11 @@ class MicrosoftSubscriptionService(
         tier = await self.get_tier(token_manager)
         return tier != SubscriptionTier.NONE
     async def invalidate(self) -> None:
-        """Invalidate."""
+        """Drop every cached entry and forget last-emitted tiers.
+
+        Called from the event handlers when the account changes
+        or the user logs out. Cache-clear failures are logged.
+        """
         try:
             self._cache.clear(_CACHE_STORE_NAME)
         except Exception:

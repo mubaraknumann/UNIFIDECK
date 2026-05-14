@@ -54,7 +54,8 @@ class BinaryResolver:
             version = resolver.check_version(tool, path)
     """
 
-    def __init__(self, config=None) -> None:  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(self, config=None) -> None:
+        """Initialize the resolver with a plugin directory."""
         # The version-check timeout is the only tunable knob;
         # loaded once at init so we don't pay the config lookup
         # on every resolve() call.

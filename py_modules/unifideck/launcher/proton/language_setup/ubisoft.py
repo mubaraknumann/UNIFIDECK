@@ -1,3 +1,5 @@
+"""Ubisoft-store language setup — patches the Ubisoft Connect settings file with the user's preferred language."""
+
 from __future__ import annotations
 import json
 import logging
@@ -14,7 +16,18 @@ if TYPE_CHECKING:
     from ....config import ConfigManager
 logger = logging.getLogger(__name__)
 def _load_ubisoft_install_id(space_id: str) -> str | None:
-    """Load UBISOFT install ID."""
+    """Look up the Ubisoft install ID for one space_id.
+
+    Reads ``~/.local/share/unifideck/ubisoft_id_map.json``
+    (populated by the Ubisoft store backend).
+
+    Args:
+        space_id: Ubisoft space_id (a.k.a. game ID).
+
+    Returns:
+        Install ID string, or ``None`` if the map is missing
+        or the space_id isn't recorded.
+    """
     id_map_path = os.path.expanduser(
         "~/.local/share/unifideck/ubisoft_id_map.json",
     )
@@ -31,7 +44,21 @@ def _load_ubisoft_install_id(space_id: str) -> str | None:
 def _patch_upc_language_section(
     content: str, install_id: str, ubi_lang: str,
 ) -> str:
-    """Patch UPC language section."""
+    """Patch ``Language`` under the per-install Ubisoft Launcher section.
+
+    Looks for ``[Software\\WOW6432Node\\Ubisoft\\Launcher\\Installs\\<install_id>]``
+    and patches ``Language`` inside it. Appends the section
+    if missing; appends the key if missing within an existing
+    section.
+
+    Args:
+        content: Full system.reg text.
+        install_id: Ubisoft install ID.
+        ubi_lang: Two-letter Ubisoft language code.
+
+    Returns:
+        Patched system.reg text.
+    """
     section = (
         f"[Software\\\\WOW6432Node\\\\Ubisoft\\\\Launcher\\\\"
         f"Installs\\\\{install_id}]"
@@ -63,7 +90,17 @@ def _apply_ubisoft_upc_language(
     prefix_path: str, space_id: str, language: str,
 ) -> bool:
 
-    """Apply UBISOFT UPC language."""
+    """Write the Ubisoft Connect ``Language`` value into system.reg.
+
+    Args:
+        prefix_path: Registry-bearing prefix directory.
+        space_id: Ubisoft space_id (used to look up install_id).
+        language: BCP-47 tag.
+
+    Returns:
+        True iff system.reg was patched (False on missing
+        install_id, missing system.reg, …).
+    """
     install_id = _load_ubisoft_install_id(space_id)
     if not install_id:
         logger.info(
@@ -94,7 +131,22 @@ def apply_ubisoft_language(
     prefix_path: str, space_id: str = "",
     config: ConfigManager | None = None,
 ) -> bool:
-    """Apply UBISOFT language."""
+    """Apply the Ubisoft language to both Windows locale and UPC settings.
+
+    Steps: resolve the user's language → patch user.reg
+    (Windows Control Panel International) → if a space_id
+    is provided, also patch system.reg under the Ubisoft
+    Launcher install key.
+
+    Args:
+        prefix_path: Any path inside the prefix.
+        space_id: Optional Ubisoft space_id.
+        config: ConfigManager.
+
+    Returns:
+        True iff the Windows locale was applied (the UPC
+        patch is best-effort and doesn't affect the return).
+    """
     language = get_unifideck_language(config)
     logger.info(
         "[language_setup.ubisoft] applying %s to prefix=%s space_id=%s",

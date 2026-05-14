@@ -34,7 +34,13 @@ logger = logging.getLogger(__name__)
 
 
 class UbisoftLibrary:
-    """Ubisoft library."""
+    """Ubisoft Connect library facade — exposes the user's owned/installed games.
+
+    Coordinates three specialists: an install detector
+    (filesystem + registry probes), a library fetcher (online
+    user library), and the visible-manifest processor that
+    merges them into the public game list.
+    """
 
     def __init__(
         self,
@@ -43,7 +49,16 @@ class UbisoftLibrary:
         id_map: UbisoftIdMap,
         queue_template_creation: Callable[[], None],
     ) -> None:
-        """Initialize the instance."""
+        """Wire dependencies and build the library specialists.
+
+        Args:
+            config: Ubisoft store config.
+            paths: Ubisoft prefix paths.
+            id_map: Ubisoft ID translation map (space_id ↔ install_id ↔
+                launch_id).
+            queue_template_creation: Callback enqueueing a template
+                prefix rebuild when the library needs one.
+        """
         self._config = config
         self._paths = paths
         self._id_map = id_map
@@ -64,7 +79,17 @@ class UbisoftLibrary:
         )
 
     async def get_library(self) -> list[Game]:
-        """Get library."""
+        """Build the merged owned + installed library list for the UI.
+
+        Pipeline: detect installed games on disk → fetch the owned
+        list from UPC binaries → optionally override visibility via
+        the manifest → schedule a background template creation when
+        the bootstrap marker is missing.
+
+        Returns:
+            List of ``Game`` records. Empty list on any error
+            (logged and swallowed).
+        """
         try:
             installed = await self._detector.get_installed()
             local_games = await self._fetcher.fetch_local_binaries(
@@ -104,21 +129,43 @@ class UbisoftLibrary:
             return []
 
     async def get_installed(self) -> dict[str, Any]:
-        """Get installed."""
+        """Return the dict of installed Ubisoft games.
+
+        Delegates to the install detector which walks every per-game
+        prefix that bears the bootstrap marker.
+
+        Returns:
+            ``{space_id: install_info}`` for every detected install.
+        """
         return await self._detector.get_installed()
 
     def get_installed_game_info(
         self,
         game_id: str,
     ) -> dict[str, Any] | None:
-        """Get installed game info."""
+        """Return install info for one Ubisoft game (if installed).
+
+        Args:
+            game_id: Ubisoft space_id.
+
+        Returns:
+            Install info dict, or ``None`` if the game isn't installed.
+        """
         return self._detector.get_installed_game_info(game_id)
 
     def find_game_executable(
         self,
         install_path: str,
     ) -> str | None:
-        """Find game executable."""
+        """Locate the game executable inside an install directory.
+
+        Args:
+            install_path: Absolute path to the install directory.
+
+        Returns:
+            Path to the executable, or ``None`` if no candidate
+            could be identified.
+        """
         return self._detector.find_game_executable(install_path)
 
     async def write_install_marker(
@@ -128,7 +175,14 @@ class UbisoftLibrary:
         executable: str,
         game_title: str = "",
     ) -> None:
-        """Write install marker."""
+        """Persist an install marker so the game appears without rescan.
+
+        Args:
+            space_id: Ubisoft space_id.
+            install_path: Windows-style install path inside the prefix.
+            executable: Game executable name.
+            game_title: Display title (used for SteamGridDB lookups).
+        """
         await self._detector.write_install_marker(
             space_id=space_id,
             install_path=install_path,
@@ -138,5 +192,12 @@ class UbisoftLibrary:
 
     @staticmethod
     def get_game_official_url(game_id: str) -> str:
-        """Get game official URL."""
+        """Return the canonical Ubisoft store URL for one game.
+
+        Args:
+            game_id: Ubisoft space_id.
+
+        Returns:
+            Store URL string.
+        """
         return _InstallDetector.get_game_official_url(game_id)

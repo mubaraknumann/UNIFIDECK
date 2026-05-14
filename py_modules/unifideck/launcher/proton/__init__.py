@@ -1,3 +1,5 @@
+"""Proton launch subsystem — UMU runtime orchestration, prefix preparation, and per-store launch handlers."""
+
 from __future__ import annotations
 from .handlers.epic import epic_launch
 from .handlers.generic import generic_launch
@@ -15,7 +17,18 @@ from .infrastructure.umu_runtime import (
     run_umu_with_retry,
 )
 async def dispatch(plan: ProtonLaunchPlan) -> int:
-    """Dispatch."""
+    """Per-store dispatch — route the plan to the appropriate handler.
+
+    ``ubisoft`` → ``ubisoft_launch``, ``epic`` → ``epic_launch``,
+    everything else → ``generic_launch`` (covers GOG, Amazon,
+    and raw exe paths).
+
+    Args:
+        plan: Launch plan.
+
+    Returns:
+        Game exit code returned by the chosen handler.
+    """
     store = plan.context.store
     if store == "ubisoft":
         return await ubisoft_launch(plan)

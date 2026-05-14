@@ -92,7 +92,15 @@ def read_text(path: str) -> str:
 
 
 def write_text(path: str, content: str) -> None:
-    """Write ``content`` to ``path`` as UTF-8 text (overwrite)."""
+    """Synchronously write text to ``path`` with fsync.
+
+    Creates the parent directory if needed and flushes the
+    file to disk to ensure durability.
+
+    Args:
+        path: Destination file path.
+        content: Text to write (UTF-8 encoded).
+    """
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)

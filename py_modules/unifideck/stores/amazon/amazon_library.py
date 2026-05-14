@@ -20,14 +20,30 @@ logger = logging.getLogger(__name__)
 
 
 class AmazonLibraryReader:
-    """Amazon library reader."""
+    """Read owned + installed Amazon Games from nile's local caches.
+
+    Parses ``library.json`` and ``installed.json`` directly
+    rather than shelling out to ``nile`` (the CLI's output is
+    not stable across versions).
+    """
 
     def __init__(self, config_dir: str) -> None:
-        """Initialize the instance."""
+        """Bind the Amazon library to its parent store.
+
+        Args:
+            parent: Owning Amazon store instance (provides config,
+                cache manager, and the SQLite handle).
+        """
         self._config_dir = config_dir
 
     async def read_owned_games(self) -> list[Game]:
-        """Read owned games."""
+        """Read the owned-games library from nile's library.json.
+
+        Returns:
+            List of ``Game`` records (always ``installed=False``;
+            callers cross-reference with ``read_installed_ids``).
+            Empty list on missing / malformed data.
+        """
         path = str(Path(self._config_dir).expanduser() / 'library.json')
         data = await self._read_json(path)
         if not isinstance(data, list):
@@ -65,7 +81,13 @@ class AmazonLibraryReader:
         return games
 
     async def read_installed_ids(self) -> dict[str, dict[str, Any]]:
-        """Read installed ids."""
+        """Read the installed-games map from nile's installed.json.
+
+        Returns:
+            Dict ``game_id → entry dict`` (contains at least
+            ``path`` or ``install_path``). Empty on missing /
+            malformed data.
+        """
         path = str(Path(self._config_dir).expanduser() / 'installed.json')
         data = await self._read_json(path)
         if not isinstance(data, list):
@@ -81,7 +103,18 @@ class AmazonLibraryReader:
         return out
 
     async def get_official_url(self, game_id: str) -> str | None:
-        """Get official URL."""
+        """Build the official store / Amazon.com URL for one game.
+
+        Prefers ASIN (``amazon.com/gp/product/<asin>``) over
+        vendor-SKU slug (``gaming.amazon.com/<slug>``).
+
+        Args:
+            game_id: Amazon game identifier.
+
+        Returns:
+            URL string, or ``None`` if the entry is missing or
+            has no ASIN/slug.
+        """
         if not game_id:
             return None
         path = str(Path(self._config_dir).expanduser() / 'library.json')
@@ -108,7 +141,15 @@ class AmazonLibraryReader:
         return None
 
     async def _read_json(self, path: str) -> Any:
-        """Read JSON."""
+        """Async JSON read with permissive error handling.
+
+        Args:
+            path: File path.
+
+        Returns:
+            Parsed JSON, or ``None`` on missing file / read error /
+            decode error.
+        """
         if not await aio.is_file(path):
             return None
         try:
@@ -128,7 +169,19 @@ class AmazonLibraryReader:
 def merge_install_status(
     owned: list[Game], installed: dict[str, dict[str, Any]],
 ) -> list[Game]:
-    """Merge install status."""
+    """Augment owned-game entries with their install state.
+
+    Sets ``installed=True`` and copies the install path onto
+    every owned game that also appears in the installed map.
+
+    Args:
+        owned: Owned-games list from ``read_owned_games``.
+        installed: Map from ``read_installed_ids``.
+
+    Returns:
+        Augmented list (input may be returned unchanged when
+        nothing is installed).
+    """
     if not installed:
         return owned
     out: list[Game] = []

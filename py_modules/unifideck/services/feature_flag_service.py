@@ -57,7 +57,16 @@ class FeatureFlagService:
     def __init__(
         self, bus: EventBus, config: object | None = None,
     ) -> None:
-        """Merge config-supplied mapping, init flags."""
+        """Build the feature-flag service from the bus and (optionally) ConfigManager.
+
+        Loads the probe→features mapping (defaults merged with any
+        ``probes.probe_to_features`` override in config), seeds
+        every feature as enabled, then auto-wires bus subscriptions.
+
+        Args:
+            bus: Event bus.
+            config: Optional config object exposing ``.get``.
+        """
         self._bus = bus
         self._mapping = self._load_mapping(config)
         

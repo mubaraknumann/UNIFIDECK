@@ -36,7 +36,15 @@ class DownloadService(_WorkerMixin):
         queue_file: str,
         max_concurrent: int = 1,
     ) -> None:
-        """Store refs + queue path, init empty state."""
+        """Wire dependencies and initialize empty queue + worker state.
+
+        Args:
+            bus: Event bus.
+            registry: Store registry (used by the worker to dispatch
+                installs to the right store adapter).
+            queue_file: Path to the persisted-queue JSON file.
+            max_concurrent: Max simultaneous in-flight downloads.
+        """
         self._bus = bus
         self._registry = registry
         self._queue_file = queue_file
@@ -48,7 +56,12 @@ class DownloadService(_WorkerMixin):
         self._task: asyncio.Task | None = None
 
     async def start(self) -> None:
-        """Load persisted queue + start the worker loop task."""
+        """Load the persisted queue and start the worker loop task.
+
+        Re-emits ``DOWNLOAD_QUEUED`` for every item restored from
+        disk so the UI can rehydrate. Idempotent — re-entry while
+        the worker is already running is a no-op.
+        """
         if self._task is not None and not self._task.done():
             return
 

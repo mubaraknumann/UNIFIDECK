@@ -36,7 +36,20 @@ def filter_steam_linked_configs(
     steam_library_cross_ref_enabled: bool,
     id_map: UbisoftIdMap,
 ) -> list[Any]:
-    """Filter steam linked configs."""
+    """Drop Ubisoft configs already owned through Steam (cross-store dedup).
+
+    Each config is classified via ``classify_steam_linked``; entries
+    with a non-None drop-reason are excluded from the result and
+    logged at DEBUG.
+
+    Args:
+        configs: Ubisoft owned-games configs.
+        steam_library_cross_ref_enabled: Toggle for L3 fuzzy matching.
+        id_map: ID map (for title normalization).
+
+    Returns:
+        Filtered list (input order preserved).
+    """
     steam_titles = load_steam_titles_for_cross_ref(
         steam_library_cross_ref_enabled,
     )
@@ -57,7 +70,15 @@ def filter_steam_linked_configs(
 def load_steam_titles_for_cross_ref(
     enabled: bool,
 ) -> set[str]:
-    """Load steam titles for cross ref."""
+    """Load and normalize the user's Steam library titles for cross-ref.
+
+    Args:
+        enabled: Cross-ref toggle. When False, returns an empty set
+            immediately (skips the Steam library scan).
+
+    Returns:
+        Set of normalized titles (empty when disabled or unavailable).
+    """
     if not enabled:
         return set()
     steam_titles = UbisoftIdMap.get_steam_library_titles()
@@ -74,7 +95,22 @@ def classify_steam_linked(
     steam_titles: set[str],
     id_map: UbisoftIdMap,
 ) -> str | None:
-    """Classify steam linked."""
+    """Return the Steam-linkage tier of one Ubisoft config, or ``None``.
+
+    Tiers (most reliable first):
+      * ``L1`` — explicit ``third_party_platform`` mentions Steam.
+      * ``L2`` — UPC YAML config contains Steam markers.
+      * ``L3`` — fuzzy title match against the Steam library.
+
+    Args:
+        cfg: One Ubisoft owned-games config.
+        steam_titles: Normalized Steam-library titles (from
+            ``load_steam_titles_for_cross_ref``).
+        id_map: ID map (for title normalization).
+
+    Returns:
+        Tier string, or ``None`` if the game isn't Steam-linked.
+    """
     tp_platform = (getattr(cfg, "third_party_platform", "") or "").lower()
     if tp_platform and "steam" in tp_platform:
         return "L1"
@@ -89,7 +125,14 @@ def classify_steam_linked(
 
 
 def yaml_has_steam_markers(yaml_raw: str) -> bool:
-    """Yaml has steam markers."""
+    """Return True iff the YAML config text mentions a Steam install.
+
+    Args:
+        yaml_raw: Raw YAML text from the UPC config.
+
+    Returns:
+        True iff any of the known Steam markers appear (case-insensitive).
+    """
     if not yaml_raw:
         return False
     lowered = yaml_raw.lower()

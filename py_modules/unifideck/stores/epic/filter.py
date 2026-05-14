@@ -16,12 +16,26 @@ MOBILE_PLATFORMS: set[str] = {'Android', 'iOS'}
 
 
 def has_ue_namespace(metadata: dict[str, Any]) -> bool:
-    """Has UE namespace."""
+    """Check whether the metadata's ``namespace`` field is ``"ue"``.
+
+    Args:
+        metadata: Game-metadata dict from legendary.
+
+    Returns:
+        True iff the entry is from the UE Marketplace namespace.
+    """
     return metadata.get('namespace') == 'ue'
 
 
 def has_asset_category(metadata: dict[str, Any]) -> bool:
-    """Has asset category."""
+    """Check whether the metadata declares an asset/plugin/project category.
+
+    Args:
+        metadata: Game-metadata dict from legendary.
+
+    Returns:
+        True iff any category path is in ``ASSET_CATEGORIES``.
+    """
     categories = metadata.get('categories') or []
     for cat in categories:
         if isinstance(cat, dict) and cat.get('path') in ASSET_CATEGORIES:
@@ -30,7 +44,14 @@ def has_asset_category(metadata: dict[str, Any]) -> bool:
 
 
 def has_mod_category(metadata: dict[str, Any]) -> bool:
-    """Has mod category."""
+    """Check whether the metadata declares a ``mods`` category.
+
+    Args:
+        metadata: Game-metadata dict from legendary.
+
+    Returns:
+        True iff the entry is tagged as a mod.
+    """
     categories = metadata.get('categories') or []
     for cat in categories:
         if isinstance(cat, dict) and cat.get('path') == 'mods':
@@ -39,7 +60,17 @@ def has_mod_category(metadata: dict[str, Any]) -> bool:
 
 
 def is_mobile_only(metadata: dict[str, Any]) -> bool:
-    """Is mobile only."""
+    """Check whether the entry is published only on mobile platforms.
+
+    Returns False if any release-info entry covers a non-mobile
+    platform.
+
+    Args:
+        metadata: Game-metadata dict from legendary.
+
+    Returns:
+        True iff every ``releaseInfo`` entry targets Android/iOS only.
+    """
     release_info = metadata.get('releaseInfo') or []
     if not release_info:
         return False
@@ -53,7 +84,18 @@ def is_mobile_only(metadata: dict[str, Any]) -> bool:
 
 
 def should_filter_epic_item(game_data: dict[str, Any]) -> bool:
-    """Should filter epic item."""
+    """Decide whether to drop one Epic library entry.
+
+    Filters out UE namespace items, assets/plugins/projects,
+    mods, and mobile-only releases. Mirrors Heroic Games
+    Launcher's library filter.
+
+    Args:
+        game_data: One entry from ``legendary list --json``.
+
+    Returns:
+        True iff the entry should be hidden from the library.
+    """
     metadata = game_data.get('metadata') or {}
     if not isinstance(metadata, dict):
         return False

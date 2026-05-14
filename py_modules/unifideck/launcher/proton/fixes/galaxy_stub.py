@@ -1,3 +1,5 @@
+"""GalaxyCommunication.exe stub installer — drops a minimal stub into the prefix so games that probe for GOG Galaxy don't hang."""
+
 from __future__ import annotations
 import logging
 import os
@@ -11,12 +13,28 @@ _TARGET_SUBPATH = os.path.join(
     "GalaxyCommunication.exe",
 )
 def _resolve_drive_c(prefix_path: str) -> str | None:
-    """Resolve drive c."""
+    """Resolve the ``drive_c`` directory inside a Wine prefix.
+
+    Args:
+        prefix_path: Path to the Wine prefix (any subpath).
+
+    Returns:
+        Absolute path string or ``None`` if no drive_c can be located.
+    """
     from ..infrastructure.prefix_layout import resolve_drive_c
     result = resolve_drive_c(prefix_path)
     return str(result) if result is not None else None
 def _atomic_copy_file(src: Path | str, dst: str) -> None:
-    """Atomic copy file."""
+    """Atomic file copy via ``tempfile.mkstemp`` + ``os.replace``.
+
+    Writes to a temp file alongside ``dst``, fsyncs, then
+    renames into place. Any failure unlinks the temp file
+    before re-raising.
+
+    Args:
+        src: Source file path.
+        dst: Destination file path.
+    """
     target_dir = os.path.dirname(dst)
     os.makedirs(target_dir, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(
@@ -42,7 +60,22 @@ def install_galaxy_stub(
     plugin_dir: Path | None = None,
 ) -> bool:
 
-    """Install galaxy stub."""
+    """Install the bundled GalaxyCommunication.exe stub in the prefix.
+
+    GOG games probe for ``GalaxyCommunication.exe`` under
+    ``ProgramData/GOG.com/Galaxy/redists/``. Without the stub
+    they hang waiting for the real Galaxy client. Idempotent —
+    skips when the stub is already present.
+
+    Args:
+        prefix_path: Path to the Wine prefix (any subpath).
+        plugin_dir: Plugin root directory (auto-resolved if None).
+
+    Returns:
+        True iff the stub is installed (already present or just
+        copied). False on missing source binary, uninitialised
+        prefix, or copy failure.
+    """
     if plugin_dir is None:
         from ....core.paths import resolve_plugin_dir
         plugin_dir = resolve_plugin_dir()

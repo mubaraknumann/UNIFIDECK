@@ -54,7 +54,14 @@ _INSTALL_MARKER_FILENAME = ".unifideck_ubisoft"
 
 
 def load_json_file_safe(path: str) -> Any | None:
-    """Load JSON file safe."""
+    """Load a JSON file with permissive error handling.
+
+    Args:
+        path: Absolute file path.
+
+    Returns:
+        Parsed JSON, or ``None`` on read/parse failure.
+    """
     try:
         return json.loads(
             Path(path).read_text(
@@ -69,7 +76,17 @@ def load_json_file_safe(path: str) -> Any | None:
 def walk_install_candidates(
     roots: list[str],
 ) -> Iterator[tuple[str, str]]:
-    """Walk install candidates."""
+    """Yield ``(absolute_path, name)`` for every first-level subdir under each root.
+
+    Roots that don't exist are skipped silently. Within each
+    root, non-directory entries are filtered out.
+
+    Args:
+        roots: Candidate base directories.
+
+    Yields:
+        Tuple ``(absolute_path, leaf_name)`` for each candidate.
+    """
     for base_dir in roots:
         base = Path(base_dir)
         if not base.is_dir():
@@ -85,7 +102,14 @@ def walk_install_candidates(
 
 
 def in_prefix_game_roots(prefix_path: str) -> list[str]:
-    """In prefix game roots."""
+    """Compute the two possible in-prefix UPC games-dir paths.
+
+    Args:
+        prefix_path: Wine prefix root.
+
+    Returns:
+        List ``[<root>/drive_c/.../games, <root>/pfx/drive_c/.../games]``.
+    """
     prefix = Path(prefix_path)
     return [
         str(prefix / _IN_PREFIX_GAMES_PATH),
@@ -96,7 +120,18 @@ def in_prefix_game_roots(prefix_path: str) -> list[str]:
 def find_game_executable(
     install_path: str,
 ) -> str | None:
-    """Find game executable."""
+    """Scan an install directory for the most plausible game executable.
+
+    Globs ``*.exe`` and ``**/*.exe`` (recursive), drops names
+    matching installer / launcher / redistributable patterns,
+    and picks the largest survivor.
+
+    Args:
+        install_path: Game install directory.
+
+    Returns:
+        Absolute exe path, or ``None`` if nothing plausible.
+    """
     if not install_path or not Path(install_path).is_dir():
         return None
     candidates: list[tuple[str, int]] = []
@@ -130,7 +165,18 @@ def find_game_executable(
 
 
 def looks_like_game_install(path: str) -> bool:
-    """Looks like game install."""
+    """Heuristic check for whether a directory is a real game install.
+
+    True if (a) any .exe is found within 2 levels OR (b) the
+    directory's total size exceeds 100 MiB. Used to filter out
+    transient temp/setup dirs during install detection.
+
+    Args:
+        path: Candidate directory.
+
+    Returns:
+        True iff the directory looks like a real install.
+    """
     try:
         for root, _dirs, files in os.walk(path):
             for f in files:
@@ -159,7 +205,17 @@ async def write_install_marker(
     executable: str,
     game_title: str = "",
 ) -> None:
-    """Write install marker."""
+    """Atomically write the ``.unifideck_ubisoft`` marker into an install directory.
+
+    The marker is what subsequent library scans use to
+    associate a directory with its Ubisoft space_id.
+
+    Args:
+        space_id: Ubisoft space_id.
+        install_path: Game install directory.
+        executable: Resolved absolute exe path.
+        game_title: Display title (best-effort).
+    """
     try:
         marker_data = {
             "space_id": space_id,
@@ -195,7 +251,16 @@ def write_marker_sync(
     space_id: str,
     title: str,
 ) -> None:
-    """Write marker sync."""
+    """Synchronous fallback marker write (no atomic guarantee).
+
+    Used by code paths that can't await — e.g. process-level
+    install hooks. No-op when the marker already exists.
+
+    Args:
+        install_path: Game install directory.
+        space_id: Ubisoft space_id.
+        title: Display title.
+    """
     marker_path = Path(install_path) / _INSTALL_MARKER_FILENAME
     if marker_path.exists():
         return
@@ -214,14 +279,32 @@ def write_marker_sync(
 
 
 class _DetectionHelpers:
-    """Detection helpers."""
+    """Pure helpers attached to ``_InstallDetector`` for filesystem-side scans.
+
+    Resolves the set of external game roots Unifideck should
+    scan: configured defaults, SD card, user-overridden custom
+    path, and any mounted media drives.
+    """
 
     def __init__(self, parent: _InstallDetector) -> None:
-        """Initialize the instance."""
+        """Bind the detector-helpers to their parent install detector.
+
+        Args:
+            parent: Owning ``_InstallDetector`` instance.
+        """
         self._parent = parent
 
     def get_external_game_roots(self) -> list[str]:
-        """Get external game roots."""
+        """Compute the full list of external roots to scan for installed Ubisoft games.
+
+        Combines the configured default install base, SD card,
+        any user-overridden custom path, and every mounted
+        ``/run/media`` drive. Roots are deduplicated by realpath
+        before being returned.
+
+        Returns:
+            List of absolute paths (some may not exist yet).
+        """
         config = self._parent._config
         roots: list[str] = [
             config.default_install_base_expanded,
@@ -236,7 +319,12 @@ class _DetectionHelpers:
         roots: list[str],
         config: Any,
     ) -> None:
-        """Append custom path root."""
+        """Append the user's custom-path override from download_settings.json.
+
+        Args:
+            roots: Output list (mutated).
+            config: UbisoftConfig.
+        """
         if config is None:
             return
         settings_file = str(Path(config.data_dir_expanded) / "download_settings.json")
@@ -254,7 +342,15 @@ class _DetectionHelpers:
 
     @staticmethod
     def _append_mounted_media_roots(roots: list[str]) -> None:
-        """Append mounted media roots."""
+        """Append every plausible Games/Ubisoft path under ``/run/media``.
+
+        Walks all first-level entries under ``/run/media`` (and
+        their immediate children to cover
+        ``/run/media/<user>/<drive>``).
+
+        Args:
+            roots: Output list (mutated).
+        """
         media_base = Path("/run/media")
         if not media_base.is_dir():
             return
@@ -277,7 +373,15 @@ class _DetectionHelpers:
         parent: Path,
         roots: list[str],
     ) -> None:
-        """Append sub mount roots."""
+        """Append ``Games/Ubisoft`` paths inside every subdir of ``parent``.
+
+        Used to cover the case where ``/run/media`` directly contains
+        user dirs containing the actual drives.
+
+        Args:
+            parent: Path under ``/run/media``.
+            roots: Output list (mutated).
+        """
         try:
             for sub_path in parent.iterdir():
                 if sub_path.is_dir():
@@ -291,7 +395,17 @@ class _DetectionHelpers:
     def _dedup_roots_by_realpath(
         roots: list[str],
     ) -> list[str]:
-        """Dedup roots by realpath."""
+        """Deduplicate roots by their resolved real path.
+
+        Preserves insertion order. Failures to resolve fall back
+        to the raw path for comparison.
+
+        Args:
+            roots: Candidate list.
+
+        Returns:
+            Deduplicated list.
+        """
         seen: set[str] = set()
         unique: list[str] = []
         for r in roots:

@@ -20,6 +20,7 @@ CB_RESET_TIMEOUT_SEC = 30.0
 
 @dataclass
 class _CBState:
+    """Internal mutable state of one circuit breaker."""
     window: deque[bool] = field(
         default_factory=lambda: deque(maxlen=CB_WINDOW_SIZE),
     )
@@ -40,12 +41,13 @@ class CircuitBreaker:
         seconds, after which one probe is allowed.
     """
 
-    def __init__(  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(
         self,
         *,
         open_threshold: float = CB_OPEN_THRESHOLD,
         reset_timeout: float = CB_RESET_TIMEOUT_SEC,
     ) -> None:
+        """Initialize the breaker with thresholds and an open duration."""
         self._open_threshold = open_threshold
         self._reset_timeout = reset_timeout
         self._state: dict[str, _CBState] = {}
@@ -62,7 +64,17 @@ class CircuitBreaker:
         return False
 
     def record(self, handler_name: str, success: bool) -> None:
-        """Record outcome. Trips the breaker if rate exceeds."""
+        """Record one handler outcome; trip the breaker if the failure rate threshold is reached.
+
+        The breaker only evaluates once the rolling window is
+        full. When ``failures / window_size`` exceeds
+        ``_open_threshold``, the breaker opens for
+        ``_reset_timeout`` seconds.
+
+        Args:
+            handler_name: Stable handler identifier.
+            success: True if the handler succeeded, False if it raised.
+        """
         s = self._state.setdefault(handler_name, _CBState())
         s.window.append(success)
         if len(s.window) < (s.window.maxlen or 0):
@@ -76,6 +88,7 @@ class CircuitBreaker:
                 handler_name, rate * 100,
             )
 
-    def is_open(self, handler_name: str) -> bool:  # noqa: D102 — documentation pending (Sprint D)
+    def is_open(self, handler_name: str) -> bool:
+        """Return True iff the breaker is currently tripped."""
         s = self._state.get(handler_name)
         return s is not None and s.open_until > time.monotonic()

@@ -29,7 +29,12 @@ logger = logging.getLogger(__name__)
 
 
 class _CredentialReader:
-    """Credential reader."""
+    """Read-only inspector for UPC credentials in a Wine prefix.
+
+    Locates the ``ConnectSecureStorage.dat`` vault under each
+    user home and exposes presence/mtime queries used by the
+    capture and propagation logic.
+    """
 
     def __init__(
         self,
@@ -37,12 +42,27 @@ class _CredentialReader:
         config: UbisoftConfig,
         paths: UbisoftPrefixPaths,
     ) -> None:
-        """Initialize the instance."""
+        """Bind the credential reader to its config + paths dependencies.
+
+        Args:
+            config: Frozen ``UbisoftConfig``.
+            paths: Wine prefix path helpers.
+        """
         self._config = config
         self._paths = paths
 
     def has_valid_credentials(self, prefix_path: str) -> bool:
-        """Check whether valid credentials."""
+        """Return True iff any user home in the prefix has a usable CSS vault.
+
+        "Usable" means present and ≥100 bytes (rejects empty
+        placeholder files Wine sometimes leaves around).
+
+        Args:
+            prefix_path: Wine prefix root.
+
+        Returns:
+            True iff at least one valid CSS file was found.
+        """
         for _root, user_home in self._paths.iter_user_homes(
             prefix_path,
             pfx_first=True,
@@ -53,7 +73,14 @@ class _CredentialReader:
         return False
 
     def get_credential_mtime(self, prefix_path: str) -> float:
-        """Get credential mtime."""
+        """Return the newest mtime of any valid credential file in a prefix.
+
+        Args:
+            prefix_path: Wine prefix root.
+
+        Returns:
+            The maximum Unix mtime, or 0.0 if no valid credentials.
+        """
         best: float = 0.0
         for _root, user_home in self._paths.iter_user_homes(
             prefix_path,
@@ -71,14 +98,27 @@ class _CredentialReader:
         return best
 
     def find_best_credential_source(self) -> str | None:
-        """Find best credential source."""
+        """Identify the prefix carrying the freshest credentials.
+
+        Resolution order: the auth prefix (if present) → the game
+        prefix with the newest credential mtime.
+
+        Returns:
+            Path to the chosen source prefix, or ``None`` if no
+            prefix contains valid credentials.
+        """
         auth_source = self._check_auth_prefix_for_credentials()
         if auth_source:
             return auth_source
         return self._find_freshest_game_prefix_credentials()
 
     def _check_auth_prefix_for_credentials(self) -> str | None:
-        """Check auth prefix for credentials."""
+        """Probe the auth prefix for valid credentials.
+
+        Returns:
+            Auth prefix path, or ``None`` if the prefix is missing
+            or doesn't carry credentials.
+        """
         auth_dir = self._config.auth_prefix_dir_expanded
         if not Path(auth_dir).is_dir():
             return None
@@ -94,7 +134,12 @@ class _CredentialReader:
     def _find_freshest_game_prefix_credentials(
         self,
     ) -> str | None:
-        """Find freshest game prefix credentials."""
+        """Walk every per-game prefix and pick the one with the newest CSS mtime.
+
+        Returns:
+            Path to the freshest prefix, or ``None`` if none carry
+            valid credentials.
+        """
         prefixes_dir = self._config.prefixes_dir_expanded
         prefixes_p = Path(prefixes_dir)
         if not prefixes_p.is_dir():
@@ -119,7 +164,14 @@ class _CredentialReader:
         self,
         prefix: str,
     ) -> float | None:
-        """Best CSS mtime for prefix."""
+        """Return the newest CSS mtime for one prefix (first user home wins).
+
+        Args:
+            prefix: Prefix to inspect.
+
+        Returns:
+            Unix mtime, or ``None`` if no valid CSS found.
+        """
         for _root, user_home in self._paths.iter_user_homes(
             prefix,
             pfx_first=True,
@@ -134,14 +186,31 @@ class _CredentialReader:
         return None
 
     def _css_path(self, user_home: str) -> str:
-        """Css path."""
+        """Build the absolute path to one prefix user's CSS vault.
+
+        Args:
+            user_home: Path to one user home inside the prefix
+                (typically ``<prefix>/pfx/drive_c/users/steamuser``).
+
+        Returns:
+            Absolute path string to ``ConnectSecureStorage.dat``.
+        """
         return str(
             Path(user_home) / self._config.upc_local_subdir / "ConnectSecureStorage.dat"
         )
 
     @staticmethod
     def _is_valid_css(css_path: str, min_size: int) -> bool:
-        """Is valid CSS."""
+        """Return True iff the CSS file exists and exceeds the minimum size.
+
+        Args:
+            css_path: Absolute path to ``ConnectSecureStorage.dat``.
+            min_size: Minimum byte threshold (callers use 10 for
+                source-side acceptance, 100 for stricter capture).
+
+        Returns:
+            True iff the file exists and is larger than ``min_size``.
+        """
         css_p = Path(css_path)
         if not css_p.is_file():
             return False

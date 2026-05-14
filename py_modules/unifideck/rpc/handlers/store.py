@@ -17,7 +17,16 @@ class StoreHandlers(RpcHandlerBase):
     """Store authentication, status, sync, and game operations."""
 
     async def store_auth(self, store: str, action: str, **kw: Any) -> Any:
-        """Delegate auth action to the store registry."""
+        """Forward an auth action (start, complete, logout, …) to the named store.
+
+        Args:
+            store: Store identifier.
+            action: Auth action name (e.g. ``"start"`` / ``"complete"``).
+            **kw: Action-specific keyword arguments forwarded verbatim.
+
+        Returns:
+            Whatever the underlying store's auth handler returns.
+        """
         return await self._registry.auth_action(store, action, **kw)
 
     async def check_store_status(self) -> Any:
@@ -59,7 +68,12 @@ class StoreHandlers(RpcHandlerBase):
         return self._sync.get_progress()
 
     async def cancel_sync(self) -> Any:
-        """Cancel an in-flight sync."""
+        """Cancel an in-flight library sync.
+
+        Returns:
+            Whatever the sync service returns from ``cancel``
+            (no-op if no sync is running).
+        """
         return await self._sync.cancel()
 
     async def get_all_unifideck_games(self) -> Any:
@@ -71,14 +85,37 @@ class StoreHandlers(RpcHandlerBase):
         return await self._sync.get_game_info(app_id)
 
     async def install_game(self, store: str, game_id: str, **kw: Any) -> Any:
-        """Install a game via the responsible store connector."""
+        """Install a game via the responsible store adapter.
+
+        Args:
+            store: Store identifier (e.g. ``"epic"``).
+            game_id: Per-store game identifier.
+            **kw: Store-specific install options (forwarded verbatim).
+
+        Returns:
+            The adapter's install result.
+
+        Raises:
+            RpcError: No adapter registered for ``store``.
+        """
         adapter = self._registry.get(store)
         if adapter is None:
             raise RpcError("store_not_found", store=store)
         return await adapter.install(game_id, **kw)
 
     async def uninstall_game(self, store: str, game_id: str) -> Any:
-        """Uninstall a game via the responsible store connector."""
+        """Uninstall a game via the responsible store adapter.
+
+        Args:
+            store: Store identifier.
+            game_id: Per-store game identifier.
+
+        Returns:
+            The adapter's uninstall result.
+
+        Raises:
+            RpcError: No adapter registered for ``store``.
+        """
         adapter = self._registry.get(store)
         if adapter is None:
             raise RpcError("store_not_found", store=store)

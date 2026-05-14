@@ -58,6 +58,7 @@ class _RecordedEvent:
     timestamp: float  # monotonic seconds since plugin start
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the recorded event to a JSON-compatible dict."""
         return {
             "event": self.event,
             "kwargs": self.kwargs,
@@ -76,12 +77,13 @@ class EventReplayBuffer:
         snap = replay.snapshot([Events.SYNC_PROGRESS], limit=100)
     """
 
-    def __init__(  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(
         self,
         *,
         fallback_cap: int = _FALLBACK_CAP,
         caps: dict[Events, int] | None = None,
     ) -> None:
+        """Allocate a ring buffer of the given capacity."""
         self._fallback_cap = fallback_cap
         self._caps = dict(_DEFAULT_CAPS)
         if caps:

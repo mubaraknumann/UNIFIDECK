@@ -26,12 +26,13 @@ class BatchDispatcher:
     `flush_all()` is called at shutdown to avoid losing items.
     """
 
-    def __init__(  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(
         self,
         *,
         window_ms: int = DEFAULT_BATCH_WINDOW_MS,
         max_size: int = DEFAULT_BATCH_MAX_SIZE,
     ) -> None:
+        """Initialize the dispatcher with the batch size and flush interval."""
         self._window_ms = window_ms
         self._max_size = max_size
         self._buffers: dict[str, list[Any]] = {}

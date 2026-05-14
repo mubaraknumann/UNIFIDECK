@@ -1,3 +1,5 @@
+"""Stable launcher exit codes (IntEnum) — propagated to the parent Decky process."""
+
 from __future__ import annotations
 from enum import IntEnum
 class ExitCode(IntEnum):
@@ -14,7 +16,13 @@ class ExitCode(IntEnum):
     CIRCUIT_BREAKER_OPEN = 9
     SIGTERM_EQUIVALENT = 143
     def user_message_key(self) -> str:
-        """User message key."""
+        """Resolve the i18n key for the user-facing toast tied to this exit code.
+
+        Returns:
+            Localization key string (e.g.
+            ``"toasts.launcher.errorGeneric"``). The empty string
+            means SUCCESS (no toast to display).
+        """
         mapping = {
         ExitCode.SUCCESS: "",
         ExitCode.GENERIC_ERROR: "toasts.launcher.errorGeneric",

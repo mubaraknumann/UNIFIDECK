@@ -35,6 +35,20 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class _Subscription:
+    """Internal record describing one declarative event subscription.
+
+    Populated by the ``@subscribe`` decorator and stored in the
+    subscription registry.
+
+    Attributes:
+        event: Event identifier (string form).
+        handler: The decorated callable.
+        priority: Per-subscription priority override (None
+            means use the event's default).
+        timeout: Per-subscription timeout in seconds.
+        scope: Optional logical scope tag (used by the
+            watchdog and the per-scope unsubscribe path).
+    """
     event: str
     handler: Callable
     priority: int | None = None
@@ -50,13 +64,16 @@ class SubscriptionRegistry:
     create fresh registries to avoid cross-contamination.
     """
 
-    def __init__(self) -> None:  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(self) -> None:
+        """Initialize an empty subscription registry."""
         self._subs: list[_Subscription] = []
 
-    def add(self, sub: _Subscription) -> None:  # noqa: D102 — documentation pending (Sprint D)
+    def add(self, sub: _Subscription) -> None:
+        """Register a subscription record."""
         self._subs.append(sub)
 
-    def all(self) -> list[_Subscription]:  # noqa: D102 — documentation pending (Sprint D)
+    def all(self) -> list[_Subscription]:
+        """Return every registered subscription."""
         return list(self._subs)
 
     def apply(self, bus: EventBus) -> int:
@@ -68,7 +85,8 @@ class SubscriptionRegistry:
                 count += 1
         return count
 
-    def clear(self) -> None:  # noqa: D102 — documentation pending (Sprint D)
+    def clear(self) -> None:
+        """Discard every registered subscription."""
         self._subs.clear()
 
 
@@ -97,6 +115,18 @@ def subscribe(
     """
 
     def decorator(fn: Callable) -> Callable:
+        """Inner decorator — attaches the ``__subscribe_meta__`` ``_Subscription`` record to ``fn``.
+
+        Free functions are registered immediately into the supplied
+        (or default) registry. Methods are left for ``auto_wire`` to
+        discover and bind at instance creation time.
+
+        Args:
+            fn: Function or method to subscribe.
+
+        Returns:
+            The same ``fn`` (transparent decoration).
+        """
         event_key = getattr(event, "value", event)
         # Dynamic attribute: @subscribe decorator attaches metadata
         # to the function so auto_wire() (or the module-level
@@ -246,6 +276,7 @@ class SchemaExtractor:
 
     @staticmethod
     def _is_emit_call(node: ast.Call) -> bool:
+        """Return True iff the AST node is a bus.emit(...) call."""
         func = node.func
         if isinstance(func, ast.Attribute) and func.attr == "emit":
             return True
@@ -253,6 +284,7 @@ class SchemaExtractor:
 
     @staticmethod
     def _extract_event_name(node: ast.Call) -> str | None:
+        """Return the event-name string from an emit() call AST node."""
         if not node.args:
             return None
         first = node.args[0]

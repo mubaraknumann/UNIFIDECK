@@ -49,7 +49,13 @@ _DEFAULT_SUCCESS_MARKERS: list[str] = [
 
 
 class AmazonStore(StoreBase):
-    """Amazon store."""
+    """Amazon Games store backend (``StoreBase`` implementation).
+
+    Wires the nile CLI, library reader, installer, update
+    checker, and OAuth flow into a cohesive façade. Discovers
+    the nile binary via the bundled-or-system search path and
+    tracks Amazon authentication via ``user.json``.
+    """
 
     store_info = StoreInfo(
         name='amazon',
@@ -74,7 +80,21 @@ class AmazonStore(StoreBase):
         browser_monitor: OAuthBrowserMonitor | None = None,
         shortcut_service: ShortcutService | None = None,
     ) -> None:
-        """Initialize the instance."""
+        """Wire the Amazon store specialists (library reader, installer, updates).
+
+        Reads Amazon-specific config (Nile config dir, install
+        root, timeouts) and builds the library reader, installer,
+        and update checker on top of the bundled Nile CLI.
+
+        Args:
+            bus: Event bus.
+            cache: Cache manager.
+            plugin_dir: Plugin root directory.
+            config: ConfigManager.
+            browser_monitor: Optional OAuth browser monitor.
+            shortcut_service: Optional shortcut service for game
+                registration.
+        """
         super().__init__(bus, cache, plugin_dir, config)
         self._config_manager = config
         self._shortcut_service = shortcut_service
@@ -126,7 +146,15 @@ class AmazonStore(StoreBase):
     def _read_amazon_config(
         self, config: ConfigManager | None,
     ) -> dict[str, Any]:
-        """Read amazon config."""
+        """Read Amazon-specific configuration with defaults.
+
+        Args:
+            config: ConfigManager, or ``None``.
+
+        Returns:
+            Dict with install_root, nile_config_dir, timeouts,
+            success_markers.
+        """
         cli_timeouts = read_cli_timeouts(config) if config else {}
         return {
             'install_root': str(get_cfg(
@@ -148,7 +176,14 @@ class AmazonStore(StoreBase):
         }
 
     async def is_available(self) -> bool:
-        """Is available."""
+        """Return True iff nile is installed and the user is logged in.
+
+        Caches the result and emits ``EXTERNAL_AUTH_CHECK_FAILED``
+        when no ``user.json`` is present.
+
+        Returns:
+            True iff Amazon is usable.
+        """
         if not self._cli_path:
             self._cached_available = False
             return False
@@ -161,7 +196,11 @@ class AmazonStore(StoreBase):
         return authenticated
 
     def _check_nile_authenticated(self) -> bool:
-        """Check NILE authenticated."""
+        """Check whether nile's user.json contains a valid auth payload.
+
+        Returns:
+            True iff ``extensions.customer_info`` is present.
+        """
         user_json = os.path.expanduser(_NILE_USER_JSON)
         if not os.path.isfile(user_json):
             return False
@@ -177,7 +216,13 @@ class AmazonStore(StoreBase):
         return isinstance(extensions, dict) and 'customer_info' in extensions
 
     async def start_auth(self, **kwargs: Any) -> AuthResult:
-        """Start auth."""
+        """Delegate to the Amazon auth flow (no-op when not configured).
+
+        Returns:
+            ``AuthResult`` from the flow, or
+            ``auth_not_configured`` when the auth subcomponent
+            wasn't built (no browser monitor available).
+        """
         if self._auth is None:
             return AuthResult(
                 success=False, store='amazon', error='auth_not_configured',
@@ -189,7 +234,14 @@ class AmazonStore(StoreBase):
     async def complete_auth(
         self, code: str = '', **kwargs: Any,
     ) -> AuthResult:
-        """Complete auth."""
+        """Forward an externally-captured auth code to ``nile auth --register``.
+
+        Args:
+            code: OAuth code.
+
+        Returns:
+            ``AuthResult``.
+        """
         if self._auth is None:
             return AuthResult(
                 success=False, store='amazon', error='auth_not_configured',
@@ -197,14 +249,23 @@ class AmazonStore(StoreBase):
         return await self._auth._register_code(code)
 
     async def logout(self) -> Result:
-        """Logout."""
+        """Logout via the auth flow if available; emit STORE_LOGOUT otherwise.
+
+        Returns:
+            ``Result``.
+        """
         if self._auth is None:
             await self._bus.emit(Events.STORE_LOGOUT, store='amazon')
             return Result(success=True)
         return await self._auth.logout()
 
     async def get_library(self) -> list[Game] | None:
-        """Get library."""
+        """Read owned + installed games and merge them.
+
+        Returns:
+            Full ``Game`` list with install state, or ``None`` on
+            any read failure.
+        """
         try:
             owned = await self._library.read_owned_games()
             installed = await self._library.read_installed_ids()
@@ -220,7 +281,16 @@ class AmazonStore(StoreBase):
         progress_cb: ProgressCallback | None = None,
         **kwargs: Any,
     ) -> InstallResult:
-        """Install game."""
+        """Delegate to ``AmazonInstaller.install_game``.
+
+        Args:
+            game_id: Amazon game identifier.
+            base_path: Optional install root override.
+            progress_cb: Optional progress callback.
+
+        Returns:
+            ``InstallResult``.
+        """
         return await self._installer.install_game(
             game_id, base_path=base_path, progress_cb=progress_cb,
         )
@@ -228,7 +298,14 @@ class AmazonStore(StoreBase):
     async def uninstall_game(
         self, game_id: str, **kwargs: Any,
     ) -> Result:
-        """Uninstall game."""
+        """Delegate to ``AmazonInstaller.uninstall_game``.
+
+        Args:
+            game_id: Amazon game identifier.
+
+        Returns:
+            ``Result``.
+        """
         return await self._installer.uninstall_game(game_id)
 
     async def update_game(
@@ -250,15 +327,33 @@ class AmazonStore(StoreBase):
         )
 
     async def check_for_updates(self) -> list[str]:
-        """Check for updates."""
+        """Delegate to ``AmazonUpdateChecker.check_for_updates``.
+
+        Returns:
+            List of game IDs with pending updates.
+        """
         return await self._updates.check_for_updates()
 
     async def get_game_size(self, game_id: str) -> int | None:
-        """Get game size."""
+        """Delegate to ``AmazonUpdateChecker.get_game_size``.
+
+        Args:
+            game_id: Amazon game identifier.
+
+        Returns:
+            Download size in bytes, or ``None`` if unknown.
+        """
         return await self._updates.get_game_size(game_id)
 
     async def get_official_url(self, game_id: str) -> str | None:
-        """Get official URL."""
+        """Delegate to ``AmazonLibraryReader.get_official_url``.
+
+        Args:
+            game_id: Amazon game identifier.
+
+        Returns:
+            URL string, or ``None``.
+        """
         return await self._library.get_official_url(game_id)
 
     async def _ensure_auth_shortcut(self) -> None:

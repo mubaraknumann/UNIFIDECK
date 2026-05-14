@@ -13,7 +13,16 @@ class StoreRPCMixin:
     registry: Any
 
     async def store_auth(self, store: str, action: str, **kw: Any) -> Any:
-        """Delegate auth action to the store registry."""
+        """Forward an auth action (start, complete, logout, …) to the named store.
+
+        Args:
+            store: Store identifier.
+            action: Auth action name.
+            **kw: Action-specific keyword arguments forwarded verbatim.
+
+        Returns:
+            Whatever the underlying store's auth handler returns.
+        """
         return await self.registry.auth_action(store, action, **kw)
 
     async def check_store_status(self) -> Any:

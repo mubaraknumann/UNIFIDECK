@@ -160,7 +160,19 @@ class MetadataService:
             return {}
 
     async def _fetch_metacritic(self, title: str) -> dict[str, Any]:
-        """Fetch Metacritic critic + user score and summary."""
+        """Fetch Metacritic critic + user score and editorial summary.
+
+        Best-effort: any exception (network, parse, missing entry)
+        is swallowed and returns ``{}``.
+
+        Args:
+            title: Game title used for the Metacritic lookup.
+
+        Returns:
+            Dict ``{metacritic_score, metacritic_user_score,
+            metacritic_url, summary}`` on success, ``{}`` on
+            miss or failure.
+        """
         from ..metadata import metacritic
         try:
             result = await metacritic.fetch_score(title)

@@ -30,10 +30,20 @@ _AUTH_SHORTCUT_NAME = "Ubisoft Connect"
 
 
 class _AuthContext:
-    """Auth context."""
+    """Build the auth-context dict the frontend consumes after "Sign in".
+
+    Provides the appid the frontend launches via ``SteamClient.RunGame``
+    and an optional artwork-fetch step that ensures the SteamGridDB
+    icons are cached for the auth shortcut.
+    """
 
     def __init__(self, parent: UbisoftAuth) -> None:
-        """Initialize the instance."""
+        """Bind the auth-context helper to its parent auth orchestrator.
+
+        Args:
+            parent: Owning ``UbisoftAuth`` instance (provides config,
+                paths, services, and the SteamGridDB client).
+        """
         self._parent = parent
 
     async def fetch_auth_shortcut_artwork(
@@ -41,7 +51,16 @@ class _AuthContext:
         unsigned_id: int,
         force: bool = False,
     ) -> None:
-        """Fetch auth shortcut artwork."""
+        """Download SteamGridDB artwork for the auth shortcut (best-effort).
+
+        Skips artwork that's already cached unless ``force=True``;
+        supports per-type gap-fill via
+        ``sgdb.get_missing_artwork_types`` when available.
+
+        Args:
+            unsigned_id: Steam shortcut AppID (unsigned).
+            force: Re-download even if artwork already exists.
+        """
         sgdb = self._parent._steamgriddb
         if sgdb is None:
             logger.debug(
@@ -95,7 +114,17 @@ class _AuthContext:
         *,
         with_launch_wait: bool = True,
     ) -> dict[str, Any]:
-        """Build auth context success."""
+        """Build the successful auth-context dict returned to the frontend.
+
+        Args:
+            unsigned_appid: Auth shortcut AppID.
+            with_launch_wait: If True, include the configured
+                ``launch_wait_ms`` delay; if False, set it to 0
+                (used when the caller has already waited).
+
+        Returns:
+            Dict with ``success=True``, ``appid_unsigned``, ``launch_wait_ms``.
+        """
         return {
             "success": True,
             "appid_unsigned": unsigned_appid,
@@ -107,7 +136,19 @@ class _AuthContext:
         }
 
     async def get_auth_shortcut_context(self) -> dict[str, Any]:
-        """Get auth shortcut context."""
+        """Resolve the auth-context dict the frontend needs to launch UPC.
+
+        Resolution order: existing registry entry confirmed in VDF →
+        VDF recovery (rebuild the registry from VDF if entry lost) →
+        create a fresh shortcut. Returns an error dict when the
+        shortcut service isn't available or the shortcut can't be
+        created.
+
+        Returns:
+            Auth-context dict (either success-shape from
+            ``build_auth_context_success`` or error-shape with
+            ``success=False`` and an ``error`` code).
+        """
         if self._parent._shortcut_service is None:
             return {
                 "success": False,
@@ -145,7 +186,20 @@ class _AuthContext:
         self,
         sm: Any,
     ) -> dict[str, Any] | None:
-        """Try existing registry."""
+        """Attempt to satisfy the auth-context request from the existing registry.
+
+        Returns the success-shape dict if the registry entry exists
+        AND the corresponding VDF entry is still present. If the
+        registry entry is stale (registry says yes but VDF says no),
+        recreates the shortcut.
+
+        Args:
+            sm: Shortcut service.
+
+        Returns:
+            Auth-context dict on hit, ``None`` to fall through to the
+            VDF-scan path.
+        """
         store_id = self._parent._config.auth_shortcut_store_id
         registry = await self._parent._load_registry(sm)
         entry = registry.get(store_id)

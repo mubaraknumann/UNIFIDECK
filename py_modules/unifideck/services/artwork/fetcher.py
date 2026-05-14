@@ -48,6 +48,7 @@ async def has_artwork(grid_dir: str, app_id: int) -> bool:
     async file ops so the check runs off the event loop.
     """
     def _check() -> bool:
+        """Sync stat check for grid and hero images on disk."""
         grid_path = os.path.join(grid_dir, f"{app_id}{_KIND_SUFFIX['grid']}")
         hero_path = os.path.join(grid_dir, f"{app_id}{_KIND_SUFFIX['hero']}")
         return os.path.isfile(grid_path) and os.path.isfile(hero_path)
@@ -151,6 +152,7 @@ async def download_and_save(
     try:
         # Ensure directory exists
         def _ensure_dir():
+            """Blocking mkdir of the grid directory if missing."""
             if not os.path.isdir(grid_dir):
                 os.makedirs(grid_dir, exist_ok=True)
         await asyncio.to_thread(_ensure_dir)
@@ -164,6 +166,7 @@ async def download_and_save(
                     return False
 
                 def _write_file(chunk_iter):
+                    """Blocking write of the streamed chunks to the temp file, then atomic replace."""
                     with open(tmp_path, "wb") as f:
                         for chunk in chunk_iter:
                             f.write(chunk)
@@ -185,6 +188,7 @@ async def download_and_save(
     finally:
         # Cleanup tmp if left behind
         def _cleanup():
+            """Blocking cleanup of the partial tmp file on failure."""
             if os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)

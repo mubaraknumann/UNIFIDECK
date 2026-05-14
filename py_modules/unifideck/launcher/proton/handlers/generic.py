@@ -1,3 +1,5 @@
+"""Generic Proton launch handler — fallback path for stores without a dedicated handler."""
+
 from __future__ import annotations
 import logging
 import shutil
@@ -7,14 +9,33 @@ from ..infrastructure.core import ProtonLaunchPlan
 from ..infrastructure.umu_runtime import run_umu_with_retry
 logger = logging.getLogger(__name__)
 def _locate_store_cli(plan: ProtonLaunchPlan, tool_name: str) -> Path | None:
-    """Locate store cli."""
+    """Locate a store CLI (``gogdl``, ``nile``, …) — bundled or system.
+
+    Args:
+        plan: Launch plan.
+        tool_name: CLI name (also the bundled binary filename).
+
+    Returns:
+        Path to the binary, or ``None`` if not found anywhere.
+    """
     plugin_bin = plan.context.plugin_dir / "bin" / tool_name
     if plugin_bin.is_file():
         return plugin_bin
     system = shutil.which(tool_name)
     return Path(system) if system else None
 async def _gog_launch(plan: ProtonLaunchPlan) -> int:
-    """Gog launch."""
+    """Launch a GOG title through gogdl (or raw exe as a fallback).
+
+    Applies the GOG language setup and installs the Galaxy stub
+    in the prefix, then invokes ``gogdl launch`` through UMU.
+    Falls back to a raw exe launch if gogdl can't be located.
+
+    Args:
+        plan: Launch plan.
+
+    Returns:
+        Subprocess exit code.
+    """
     try:
         from ....config.config_manager import ConfigManager
         from ..language_setup import apply_gog_language
@@ -60,7 +81,17 @@ async def _gog_launch(plan: ProtonLaunchPlan) -> int:
 
 async def _amazon_launch(plan: ProtonLaunchPlan) -> int:
 
-    """Amazon launch."""
+    """Launch an Amazon Games title through nile (or raw exe).
+
+    Applies the Amazon language setup, then invokes ``nile launch``
+    through UMU. Falls back to a raw exe launch if nile is missing.
+
+    Args:
+        plan: Launch plan.
+
+    Returns:
+        Subprocess exit code.
+    """
     try:
         from ....config.config_manager import ConfigManager
         from ..language_setup import apply_amazon_language
@@ -90,7 +121,14 @@ async def _amazon_launch(plan: ProtonLaunchPlan) -> int:
         return await run_umu_with_retry(argv, env=plan.env, on_start=plan.on_process_start)
     return await _raw_exe_launch(plan)
 async def _raw_exe_launch(plan: ProtonLaunchPlan) -> int:
-    """Raw exe launch."""
+    """Last-resort raw exe launch through UMU.
+
+    Args:
+        plan: Launch plan.
+
+    Returns:
+        Subprocess exit code.
+    """
     logger.info(
         "[launcher.proton.generic] raw exe launch: %s", plan.context.exe_path,
     )
@@ -106,7 +144,19 @@ async def _raw_exe_launch(plan: ProtonLaunchPlan) -> int:
     argv.extend(plan.state.game_args)
     return await run_umu_with_retry(argv, env=plan.env, cwd=cwd, on_start=plan.on_process_start)
 async def generic_launch(plan: ProtonLaunchPlan) -> int:
-    """Generic launch."""
+    """Per-store dispatch — GOG → ``_gog_launch``, Amazon → ``_amazon_launch``,
+    everything else → ``_raw_exe_launch``.
+
+    Args:
+        plan: Launch plan.
+
+    Returns:
+        Game exit code on success.
+
+    Raises:
+        UmuRuntimeError: UMU returned 2 or 74.
+        GameFailedError: Game exited non-zero (other codes).
+    """
     store = plan.context.store
     if store == "gog":
         rc = await _gog_launch(plan)

@@ -81,12 +81,13 @@ class HandlerWatchdog:
     identifier (usually the function's `__qualname__`).
     """
 
-    def __init__(  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(
         self,
         *,
         default_timeout: float = DEFAULT_HANDLER_TIMEOUT_SEC,
         quarantine_threshold: int = DEFAULT_QUARANTINE_THRESHOLD,
     ) -> None:
+        """Initialize the watchdog with the failure threshold and recovery window."""
         self._default_timeout = default_timeout
         self._quarantine_threshold = quarantine_threshold
         self._metrics: dict[str, HandlerTimeoutMetrics] = {}
@@ -245,6 +246,7 @@ class HandlerQuarantinedError(Exception):
     triggered.
     """
 
-    def __init__(self, handler_name: str) -> None:  # noqa: D107 — class docstring documents the constructor's contract
+    def __init__(self, handler_name: str) -> None:
+        """Build the error with the handler name and quarantine reason."""
         super().__init__(f"handler {handler_name} is quarantined")
         self.handler_name = handler_name

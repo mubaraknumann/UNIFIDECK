@@ -48,7 +48,13 @@ _UPDATE_TIMEOUT_S = 4 * 60 * 60
 
 
 class UbisoftInstaller:
-    """Ubisoft installer."""
+    """Orchestrates the full UPC install pipeline for one Ubisoft title.
+
+    Owns the cross-cutting state (active-install PIDs, sub-installers
+    for launcher / manual UI / uninstall / update) and exposes the
+    store-facing methods: install, uninstall, update,
+    open_launcher_for_install, cancel_install_session.
+    """
 
     def __init__(
         self,
@@ -63,7 +69,19 @@ class UbisoftInstaller:
             Awaitable[bool],
         ],
     ) -> None:
-        """Initialize the instance."""
+        """Wire dependencies and build the manual-UI installer + uninstall pipeline.
+
+        Args:
+            config: Ubisoft store config.
+            paths: Ubisoft prefix paths.
+            binaries: Ubisoft binary resolver.
+            id_map: Ubisoft ID map.
+            session: Ubisoft session state.
+            library: Ubisoft library facade.
+            bootstrap_game_prefix: Awaitable callback that
+                prepares the per-game Wine prefix before install
+                (returns True on success).
+        """
         self._config = config
         self._paths = paths
         self._binaries = binaries
@@ -95,7 +113,16 @@ class UbisoftInstaller:
         *,
         delete_prefix: bool = False,
     ) -> Result:
-        """Uninstall game."""
+        """Run the uninstall pipeline for one game.
+
+        Args:
+            game_id: UPC space_id.
+            delete_prefix: When True, the Wine prefix is also wiped
+                (otherwise it's kept for credentials/saves).
+
+        Returns:
+            A ``Result`` from the uninstall pipeline.
+        """
         return await self._uninstall_pipeline.uninstall_game(
             game_id,
             delete_prefix=delete_prefix,
@@ -105,7 +132,17 @@ class UbisoftInstaller:
         self,
         game_id: str,
     ) -> Result:
-        """Open launcher for install."""
+        """Open UPC pointed at the install URL for ``game_id``.
+
+        Used when the user wants to install via UPC's GUI directly
+        (bypassing our manual-UI driver).
+
+        Args:
+            game_id: UPC space_id.
+
+        Returns:
+            A ``Result`` capturing the launch outcome.
+        """
         return await self._launcher.open_launcher_for_install(
             game_id,
         )
@@ -118,7 +155,26 @@ class UbisoftInstaller:
         prefer_connect_exe: bool = False,
         upc_missing_error: str = "upc_exe_not_found",
     ) -> _UpcLaunchEnv:
-        """Build UPC launch env."""
+        """Build the UPC launch environment (paths, env, umu wrapper).
+
+        Locates UPC inside the prefix (preferring ``UbisoftConnect.exe``
+        when ``prefer_connect_exe`` is set, else ``upc.exe``), the
+        bundled umu-run wrapper, and a Python interpreter; builds the
+        env dict from the binary resolver plus per-game Steam-window
+        vars.
+
+        Args:
+            game_id: UPC space_id.
+            prefix_path: Wine prefix path.
+            prefer_connect_exe: Prefer ``UbisoftConnect.exe`` over ``upc.exe``.
+            upc_missing_error: Error code to use if UPC isn't found.
+
+        Returns:
+            A populated ``_UpcLaunchEnv``.
+
+        Raises:
+            UpcLaunchEnvBuildError: UPC, umu-run, or python missing.
+        """
         upc_path: str | None = None
         if prefer_connect_exe:
             upc_path = self._paths.find_connect_exe(prefix_path)
@@ -152,7 +208,17 @@ class UbisoftInstaller:
         progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         install_path: str | None = None,
     ) -> InstallResult:
-        """Install game."""
+        """Run the install pipeline (bootstrap prefix + manual UPC UI install).
+
+        Args:
+            game_id: UPC space_id.
+            progress_cb: Optional async callback receiving phase progress.
+            install_path: Optional override for the install directory.
+
+        Returns:
+            An ``InstallResult`` (failure modes: ``prefix_bootstrap_failed``,
+            UPC env-build errors, or ``install_exception: <msg>``).
+        """
         try:
             logger.info(
                 "[UbisoftInstaller] installing game %s",
@@ -204,7 +270,17 @@ class UbisoftInstaller:
             )
 
     def is_install_session_active(self, game_id: str) -> bool:
-        """Check whether install session active."""
+        """Check whether a UPC install subprocess is still running.
+
+        Uses ``os.kill(pid, 0)`` to probe the PID; cleans up the
+        registration if the process has exited.
+
+        Args:
+            game_id: UPC space_id.
+
+        Returns:
+            True iff a tracked PID for ``game_id`` is still alive.
+        """
         pid = self._active_install_pids.get(game_id)
         if pid is None:
             return False
@@ -219,7 +295,19 @@ class UbisoftInstaller:
         self,
         game_id: str,
     ) -> Result:
-        """Check whether install session."""
+        """SIGTERM the UPC install subprocess and capture credentials.
+
+        After sending SIGTERM (best-effort), waits 2 s then tries to
+        capture and propagate any UPC session credentials that the
+        user may have entered before cancelling.
+
+        Args:
+            game_id: UPC space_id.
+
+        Returns:
+            A successful ``Result`` (cancellation is always reported
+            as success — the install just doesn't complete).
+        """
         pid = self._active_install_pids.pop(game_id, None)
         if pid is not None:
             try:
@@ -257,14 +345,32 @@ class UbisoftInstaller:
         return Result(success=True)
 
     async def check_for_updates(self) -> list[str]:
-        """Check for updates."""
+        """Return the list of game IDs that have updates available.
+
+        Currently a no-op stub (always returns ``[]``). UPC's update
+        detection is opaque; updates are surfaced lazily via
+        ``update_game``.
+
+        Returns:
+            Empty list.
+        """
         return []
 
     async def update_game(
         self,
         game_id: str,
     ) -> InstallResult:
-        """Update game."""
+        """Apply pending updates for one installed game.
+
+        Delegates to ``_UpdateOperation`` which re-runs UPC in update
+        mode against the installed prefix.
+
+        Args:
+            game_id: UPC space_id.
+
+        Returns:
+            An ``InstallResult``.
+        """
         return await self._update_op.update(game_id)
 
     def inject_install_registry(
@@ -273,7 +379,13 @@ class UbisoftInstaller:
         install_id: str,
         install_dir: str,
     ) -> None:
-        """Inject install registry."""
+        """Write the post-install Ubisoft registry keys into the prefix.
+
+        Args:
+            prefix_path: Wine prefix path.
+            install_id: Ubisoft install ID.
+            install_dir: Game install directory.
+        """
         _reg.inject_install_registry(
             prefix_path,
             install_id,
@@ -281,7 +393,11 @@ class UbisoftInstaller:
         )
 
     def kill_upc_processes(self) -> None:
-        """Kill UPC processes."""
+        """Force-kill every running ``upc.exe`` process (best-effort).
+
+        Useful when UPC hangs after credential capture; runs
+        ``pkill -f upc.exe`` with a 5 s timeout.
+        """
         try:
             subprocess.run(
                 ["pkill", "-f", "upc.exe"],
@@ -301,7 +417,20 @@ class UbisoftInstaller:
         self,
         store_game_id: str | None,
     ) -> dict[str, str]:
-        """Build steam window env."""
+        """Build the Steam-window env vars for the UPC subprocess.
+
+        When a shortcut AppID can be resolved, sets ``SteamGameId``,
+        ``STEAM_COMPAT_APP_ID``, ``SteamAppId``, and the umu-encoded
+        ``UMU_STEAM_GAME_ID``. Otherwise sets every var to ``"0"``
+        so umu picks a stable fallback identity.
+
+        Args:
+            store_game_id: ``ubisoft:<space_id>`` style identifier,
+                or ``None``.
+
+        Returns:
+            Env dict.
+        """
         appid = self._shortcut_registry.resolve_shortcut_appid(
             store_game_id,
         )

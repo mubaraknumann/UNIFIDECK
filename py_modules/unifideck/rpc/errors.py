@@ -19,6 +19,7 @@ class RpcError(Exception):
     """
 
     def __init__(self, code: str, message: str = "", **context: object) -> None:
+        """Build the error with a code and message payload."""
         super().__init__(f"{code}: {message}" if message else code)
         self.code = code
         self.message = message
