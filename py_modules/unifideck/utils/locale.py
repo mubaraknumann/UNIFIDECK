@@ -8,10 +8,11 @@ edit to config.json, and this module picks it up automatically
 on the next plugin start.
 
 Resolution priority:
-  1. User preference → ConfigManager key 'ui.language'
-     (only if the saved value is a tag present in
-     i18n.locales; unknown saved tags are silently ignored
-     and we fall through to system detection)
+  1. User preference → ConfigManager key 'ui.locale'
+     (the ``"auto"`` sentinel falls through to system
+     detection; only if the saved value is a concrete tag
+     present in i18n.locales is it returned as-is — unknown
+     saved tags fall through to system detection)
   2. System POSIX → locale.getlocale() → mapped to the first
      i18n.locales entry whose tag begins with the same 2-
      letter prefix (case-insensitive)
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Config keys used by this module.
-_USER_LANGUAGE_KEY = "ui.language"
+_USER_LANGUAGE_KEY = "ui.locale"
 
 # The locale_config module lives in scripts/ which is a sibling
 # of py_modules/. It's not on the default Python path so we add
@@ -135,7 +136,7 @@ def get_unifideck_locale(config: ConfigManager | None) -> str:
     lc = get_locale_config(config)
     # ─── 1. Explicit user preference ──────────────────────────
     saved = get_cfg(config, _USER_LANGUAGE_KEY, None)
-    if isinstance(saved, str) and saved:
+    if isinstance(saved, str) and saved and saved != "auto":
         # Normalise: accept both 'fr-FR' and 'fr_FR' for
         # compatibility with POSIX-style values.
         normalised = saved.replace("_", "-")
