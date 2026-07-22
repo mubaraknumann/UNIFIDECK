@@ -460,11 +460,9 @@ def _apply_language_setup(plan: ProtonLaunchPlan) -> None:
 
     """Apply language setup."""
     try:
-        from unifideck.config.config_manager import ConfigManager
+        from unifideck.launcher.bootstrap import _load_standalone_config
         from unifideck.launcher.proton.language_setup import apply_ubisoft_language
-        _cfg = ConfigManager(
-            str(plan.context.plugin_dir / "defaults" / "config.json"),
-        )
+        _cfg = _load_standalone_config()
         apply_ubisoft_language(
             str(plan.prefix_path),
             space_id=plan.context.game_id,

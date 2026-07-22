@@ -20,6 +20,8 @@ from unifideck.launcher.proton.compat import epic as compat_epic
 from unifideck.launcher.proton.handlers.epic import _build_legendary_argv
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 
+_SAMPLE_TAG = "ja-JP"
+
 
 def _plan() -> ProtonLaunchPlan:
     return ProtonLaunchPlan(
@@ -35,8 +37,21 @@ def _plan() -> ProtonLaunchPlan:
 
 def test_wrapper_force_clears_ld_env(monkeypatch):
     monkeypatch.setattr(compat_epic, "detect_offline", lambda: False)
+    monkeypatch.setattr(
+        "unifideck.launcher.bootstrap._load_standalone_config",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "unifideck.launcher.proton.language_setup.get_unifideck_language",
+        lambda _cfg: _SAMPLE_TAG,
+    )
 
-    argv = _build_legendary_argv(_plan(), "/plugin/bin/legendary")
+    plan = _plan()
+    env = compat_epic.build_legendary_env(plan, "")
+    assert env["EPIC_LANG"] == "ja"
+
+    argv = _build_legendary_argv(plan, "/plugin/bin/legendary", env)
+    assert argv[argv.index("--language") + 1] == "ja"
 
     wrapper_cmd = argv[argv.index("--wrapper") + 1]
     assert wrapper_cmd == (

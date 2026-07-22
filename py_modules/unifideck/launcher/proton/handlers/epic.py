@@ -93,7 +93,7 @@ async def epic_launch(plan: ProtonLaunchPlan) -> int:
     )
     apply_rockstar_egs_setup(plan)
     legendary_bin, env = await _prepare_epic_env(plan)
-    argv = _build_legendary_argv(plan, legendary_bin)
+    argv = _build_legendary_argv(plan, legendary_bin, env)
     rc = await run_umu_with_retry(
         argv, env=env, on_start=plan.on_process_start,
     )
@@ -126,7 +126,9 @@ async def _prepare_epic_env(
 
 
 def _build_legendary_argv(
-    plan: ProtonLaunchPlan, legendary_bin: str,
+    plan: ProtonLaunchPlan,
+    legendary_bin: str,
+    launch_env: dict[str, str] | None = None,
 ) -> list[str]:
     """Assemble the ``legendary launch`` argv (offline, language, overrides)."""
     from unifideck.launcher.proton.compat.epic import detect_offline
@@ -141,6 +143,11 @@ def _build_legendary_argv(
     if detect_offline():
         argv.append("--offline")
         logger.info("[launcher.proton.epic] offline mode — passing --offline")
+    epic_lang = (
+        (launch_env or {}).get("EPIC_LANG")
+        or (plan.env or {}).get("EPIC_LANG")
+        or os.environ.get("EPIC_LANG", "en")
+    )
     argv.extend([
         "--wrapper",
         # legendary is a PyInstaller onefile binary; it may hand its own
@@ -151,7 +158,7 @@ def _build_legendary_argv(
         # libz.so.1). Force-clear both right at the boundary.
         f"env -u LD_LIBRARY_PATH -u LD_PRELOAD {plan.python_bin} {plan.umu_wrapper}",
         "--language",
-        os.environ.get("EPIC_LANG", "en"),
+        epic_lang,
     ])
     exe_override = _resolve_exe_override(plan)
     if exe_override:

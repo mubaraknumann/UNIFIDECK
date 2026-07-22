@@ -178,6 +178,11 @@ def get_unifideck_locale(config: ConfigManager | None) -> str:
     return "en-US"
 
 
+def locale_to_epic_language(tag: str) -> str:
+    """Map a BCP-47 tag to legendary's ``--language`` code."""
+    return tag.split("-", maxsplit=1)[0].lower()
+
+
 def get_unifideck_market(config: ConfigManager | None) -> str:
     """Return the ISO 3166-1 alpha-2 market code.
 

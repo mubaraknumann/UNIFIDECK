@@ -87,6 +87,21 @@ def build_legendary_env(
     env["HEROIC_APP_RUNNER"] = "legendary"
     if config_path:
         env["LEGENDARY_CONFIG_PATH"] = config_path
+    try:
+        from unifideck.launcher.bootstrap import _load_standalone_config
+        from unifideck.launcher.proton.language_setup import (
+            get_unifideck_language,
+        )
+        from unifideck.utils.locale import locale_to_epic_language
+
+        env["EPIC_LANG"] = locale_to_epic_language(
+            get_unifideck_language(_load_standalone_config()),
+        )
+    except Exception:
+        logger.exception(
+            "[compat.epic] EPIC_LANG resolution failed, using en",
+        )
+        env.setdefault("EPIC_LANG", "en")
     return env
 
 

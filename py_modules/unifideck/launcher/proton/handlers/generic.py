@@ -48,11 +48,9 @@ async def _amazon_launch(plan: ProtonLaunchPlan) -> int:
 
     """Amazon launch."""
     try:
-        from unifideck.config.config_manager import ConfigManager
+        from unifideck.launcher.bootstrap import _load_standalone_config
         from unifideck.launcher.proton.language_setup import apply_amazon_language
-        _cfg = ConfigManager(
-            str(plan.context.plugin_dir / "defaults" / "config.json"),
-        )
+        _cfg = _load_standalone_config()
         apply_amazon_language(str(plan.prefix_path), config=_cfg)
     except Exception as err:
         logger.warning(

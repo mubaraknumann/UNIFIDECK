@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 _FALLBACK: dict[str, Any] = {
     "data_dir": "~/.local/share/unifideck",
     "ui": {
-        "language": "en-US",
+        "locale": "auto",
     },
     "sync": {
         "interval_seconds": 300,
@@ -95,8 +95,8 @@ class ConfigManager:
     defaults_path="/path/to/defaults/config.json",
     user_path="~/.config/unifideck/config.json",
     )
-    lang = config.get("ui.language", default="en-US")
-    config.set("ui.language", "fr-FR") # persisted.
+    lang = config.get("ui.locale", default="auto")
+    config.set("ui.locale", "fr-FR") # persisted.
     """
 
     def __init__(

@@ -62,9 +62,10 @@ def build_launcher_service(config: Any | None = None) -> Any:
             "bootstrap: cloudsave service unavailable — "
             "launching without cloud-save sync",
         )
+    from unifideck.utils.locale import get_unifideck_locale
     edge_browser = EdgeBrowser(
         cdp_port=config.get_int("edge.cdp_port", 9222),
-        locale_fn=lambda: config.get_str("ui.locale", "en-US"),
+        locale_fn=lambda: get_unifideck_locale(config),
     )
     return LauncherService(
         bus=bus,

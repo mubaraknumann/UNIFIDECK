@@ -144,9 +144,10 @@ def _wire_edge_browser(
     """
     try:
         from unifideck.auth.edge_browser import EdgeBrowser
+        from unifideck.utils.locale import get_unifideck_locale
         container.edge_browser = EdgeBrowser(
             cdp_port=cdp_port,
-            locale_fn=lambda: str(config.get("ui.locale", "en-US")),
+            locale_fn=lambda: get_unifideck_locale(config),
         )
         logger.info("[bootstrap] edge_browser wired")
     except Exception as e:
