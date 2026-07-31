@@ -25,6 +25,7 @@ const STORE_ICONS: Record<StoreId, IconType> = {
   microsoft: FaXbox,
   ubisoft: SiUbisoft,
   battlenet: SiBattledotnet,
+  gamevault: FaGamepad,
 };
 
 interface Props {

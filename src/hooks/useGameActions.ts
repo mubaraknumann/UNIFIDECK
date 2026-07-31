@@ -37,7 +37,7 @@ export interface UseGameActionsResult {
   install: (
     store: StoreId,
     gameId: string,
-    options?: { storage?: string; language?: string; title?: string },
+    options?: { storage?: string; language?: string; title?: string; download_dir?: string },
   ) => Promise<Result | null>;
   uninstall: (appId: number, deletePrefix?: boolean) => Promise<Result | null>;
   cancel: (downloadId: string) => Promise<Result | null>;
@@ -70,7 +70,7 @@ export function useGameActions(bridge: SteamBridgeShape): UseGameActionsResult {
     async (
       store: StoreId,
       gameId: string,
-      options?: { storage?: string; language?: string; title?: string },
+      options?: { storage?: string; language?: string; title?: string; download_dir?: string },
     ) => {
       setWorking(true);
       try {

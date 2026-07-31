@@ -15,6 +15,7 @@
  *  - `busy`        : true when an auth call is in flight
  */
 import { useCallback, useState } from "react";
+import { call } from "@decky/api";
 import { showModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../contexts/AuthContext";
@@ -22,6 +23,9 @@ import { useStores } from "../contexts/StoreContext";
 import { useToast } from "./useToast";
 import { AuthDispatcher } from "../services/auth/AuthDispatcher";
 import { ChromiumInstallModal } from "../components/modals/ChromiumInstallModal";
+import { GameVaultCredentialsModal } from "../components/modals/GameVaultCredentialsModal";
+import { rpcRoutes } from "../api/rpc-routes";
+import { unwrapRpcEnvelope } from "../api/useRPC";
 import type { AuthResult, StoreId } from "../types/api";
 
 /**
@@ -71,6 +75,52 @@ export function useStoreAuth(store: StoreId): UseStoreAuthResult {
   const status = auth.statuses[store];
 
   const connect = useCallback(async (): Promise<AuthResult | null> => {
+    // GameVault uses a credential form instead of a browser/shortcut flow.
+    if (store === "gamevault") {
+      return new Promise<AuthResult | null>((resolve) => {
+        showModal(
+          <GameVaultCredentialsModal
+            closeModal={() => resolve(null)}
+            onConnect={async (serverUrl, username, password, verifySsl, downloadDir) => {
+              setBusy(true);
+              try {
+                const raw = await call<
+                  [string, string, Record<string, unknown>],
+                  unknown
+                >(rpcRoutes.storeAuth, "gamevault", "start", {
+                  server_url: serverUrl,
+                  username,
+                  password,
+                  verify_ssl: verifySsl,
+                  download_dir: downloadDir || null,
+                });
+                const result = unwrapRpcEnvelope<AuthResult>(raw, {
+                  route: rpcRoutes.storeAuth,
+                  throwing: false,
+                });
+                if (result?.success) {
+                  auth.notifyConnected(store);
+                  toast.success(t("gamevault.connectTitle") + " ✓");
+                  resolve({ success: true, store });
+                } else {
+                  resolve({
+                    success: false,
+                    store,
+                    error: result?.error ?? "connection_failed",
+                  });
+                }
+              } catch (e) {
+                const message = e instanceof Error ? e.message : String(e);
+                resolve({ success: false, store, error: message });
+              } finally {
+                setBusy(false);
+              }
+            }}
+          />,
+        );
+      });
+    }
+
     setBusy(true);
     try {
       toast.info(`Starting ${store} sign-in…`);

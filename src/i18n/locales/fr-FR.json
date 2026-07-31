@@ -1045,5 +1045,23 @@
     "title": "COLLECTIONS STEAM",
     "enabled": "Collections activées",
     "disabled": "Collections désactivées"
+  },
+  "gamevault": {
+    "connectTitle": "Se connecter à GameVault",
+    "connect": "Connecter",
+    "connecting": "Connexion…",
+    "cancel": "Annuler",
+    "serverUrl": "URL du serveur",
+    "username": "Nom d'utilisateur",
+    "password": "Mot de passe",
+    "verifySsl": "Vérifier le certificat SSL",
+    "verifySslDescription": "Désactiver pour les certificats auto-signés",
+    "downloadDir": "Répertoire de téléchargement d'archives",
+    "downloadDirDescription": "Répertoire temporaire pour les téléchargements d'archives. Laisser vide pour utiliser le répertoire par défaut.",
+    "downloadDirPlaceholder": "Défaut: ~/.local/share/unifideck/gamevault_downloads",
+    "errorServerUrlRequired": "Veuillez entrer l'URL du serveur",
+    "errorUsernameRequired": "Veuillez entrer votre nom d'utilisateur",
+    "errorPasswordRequired": "Veuillez entrer votre mot de passe",
+    "errorConnection": "Échec de la connexion au serveur GameVault"
   }
 }

@@ -20,6 +20,7 @@ export { SteamRestartModal } from "./SteamRestartModal";
 export { UninstallConfirmModal } from "./UninstallConfirmModal";
 export { CloudSaveConflictModal } from "./CloudSaveConflictModal";
 export { LanguageSelectModal } from "./LanguageSelectModal";
+export { GameVaultCredentialsModal } from "./GameVaultCredentialsModal";
 export { ForceSyncModal } from "./ForceSyncModal";
 export { ChromiumInstallModal } from "./ChromiumInstallModal";
 export { PickStorageModal, pickStorageForInstall } from "./PickStorageModal";

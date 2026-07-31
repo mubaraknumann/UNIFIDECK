@@ -1045,5 +1045,23 @@
     "title": "STEAM 컬렉션",
     "enabled": "컬렉션 활성화됨",
     "disabled": "컬렉션 비활성화됨"
+  },
+  "gamevault": {
+    "connectTitle": "GameVault에 연결",
+    "connect": "연결",
+    "connecting": "연결 중…",
+    "cancel": "취소",
+    "serverUrl": "서버 URL",
+    "username": "사용자 이름",
+    "password": "비밀번호",
+    "verifySsl": "SSL 인증서 확인",
+    "verifySslDescription": "자체 서명 인증서는 비활성화하세요",
+    "downloadDir": "아카이브 다운로드 디렉토리",
+    "downloadDirDescription": "아카이브 다운로드용 임시 디렉토리. 기본값을 사용하려면 비워두세요.",
+    "downloadDirPlaceholder": "기본값: ~/.local/share/unifideck/gamevault_downloads",
+    "errorServerUrlRequired": "서버 URL을 입력하세요",
+    "errorUsernameRequired": "사용자 이름을 입력하세요",
+    "errorPasswordRequired": "비밀번호를 입력하세요",
+    "errorConnection": "GameVault 서버 연결 실패"
   }
 }

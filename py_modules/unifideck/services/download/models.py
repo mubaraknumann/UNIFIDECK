@@ -55,6 +55,7 @@ class DownloadItem:
     # User-picked install language (GOG multi-language games),
     # verbatim store language code. Empty = use the store default.
     language: str = ""
+    download_dir: str = ""
     progress: float = 0.0
     status: str = "queued"
     error: str = ""

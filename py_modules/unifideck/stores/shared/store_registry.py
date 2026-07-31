@@ -314,9 +314,15 @@ class StoreRegistry:
             return Result(success=False, error=str(e))
         try:
             if action == "start":
-                return await store.start_auth(**kwargs)
+                result = await store.start_auth(**kwargs)
+                if result.success:
+                    store._cached_available = True
+                return result
             if action == "complete":
-                return await store.complete_auth(**kwargs)
+                result = await store.complete_auth(**kwargs)
+                if result.success:
+                    store._cached_available = True
+                return result
             if action == "logout":
                 result = await store.logout()
                 if result.success:

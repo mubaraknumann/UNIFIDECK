@@ -1045,5 +1045,23 @@
     "title": "STEAM-COLLECTIES",
     "enabled": "Collecties ingeschakeld",
     "disabled": "Collecties uitgeschakeld"
+  },
+  "gamevault": {
+    "connectTitle": "Verbinden met GameVault",
+    "connect": "Verbinden",
+    "connecting": "Verbinden…",
+    "cancel": "Annuleren",
+    "serverUrl": "Server-URL",
+    "username": "Gebruikersnaam",
+    "password": "Wachtwoord",
+    "verifySsl": "SSL-certificaat verifiëren",
+    "verifySslDescription": "Uitschakelen voor zelfondertekende certificaten",
+    "downloadDir": "Archiefdownloadmap",
+    "downloadDirDescription": "Tijdelijke map voor archiefdownloads. Leeg laten voor de standaard.",
+    "downloadDirPlaceholder": "Standaard: ~/.local/share/unifideck/gamevault_downloads",
+    "errorServerUrlRequired": "Voer de server-URL in",
+    "errorUsernameRequired": "Voer uw gebruikersnaam in",
+    "errorPasswordRequired": "Voer uw wachtwoord in",
+    "errorConnection": "Verbinding met GameVault-server mislukt"
   }
 }

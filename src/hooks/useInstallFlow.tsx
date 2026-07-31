@@ -120,6 +120,14 @@ export function useInstallFlow(bridge: SteamBridgeShape): UseInstallFlowResult {
           customPath ?? "none",
         );
 
+        if (game.store === "gamevault") {
+          return await actions.install(game.store, game.store_game_id, {
+            storage,
+            title: game.title,
+            download_dir: "",
+          });
+        }
+
         const fetchLangs = LANGUAGE_STORES[game.store];
         if (!fetchLangs) {
           console.log(

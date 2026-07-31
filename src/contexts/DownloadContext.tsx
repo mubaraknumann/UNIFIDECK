@@ -31,7 +31,7 @@ interface DownloadContextValue {
   installGame: (
     store: StoreId,
     gameId: string,
-    options?: { storage?: string; language?: string; title?: string },
+    options?: { storage?: string; language?: string; title?: string; download_dir?: string },
   ) => Promise<Result | null>;
   uninstallGame: (
     appId: number,
@@ -62,7 +62,7 @@ export const DownloadProvider: FC<{ children: ReactNode }> = ({ children }) => {
     [
       StoreId,
       string,
-      { storage?: string; language?: string; title?: string } | undefined,
+      { storage?: string; language?: string; title?: string; download_dir?: string } | undefined,
     ],
     Result
   >(rpcRoutes.installGame);
@@ -85,7 +85,7 @@ export const DownloadProvider: FC<{ children: ReactNode }> = ({ children }) => {
     (
       store: StoreId,
       gameId: string,
-      options?: { storage?: string; language?: string; title?: string },
+      options?: { storage?: string; language?: string; title?: string; download_dir?: string },
     ) => installMut.mutate(store, gameId, options),
     [installMut],
   );

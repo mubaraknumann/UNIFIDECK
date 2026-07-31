@@ -123,6 +123,7 @@ class DownloadRPCMixin:
         # the game's own language codes, matched exactly downstream).
         # Other stores don't send this.
         language = opts.pop("language", None)
+        download_dir: str = opts.pop("download_dir", "") or ""
 
         logger.info(
             "[download] install_game store=%s game_id=%s storage=%s "
@@ -141,6 +142,7 @@ class DownloadRPCMixin:
             is_update=False,
             language=language,
             required_bytes=required_bytes,
+            download_dir=download_dir,
         )
         return {"success": result.success, "error": result.error}
 
@@ -262,6 +264,11 @@ class DownloadRPCMixin:
         # leaves our manifest marker (a stub dir) behind. The marker proves
         # the folder is ours, so this only ever removes a dir we created.
         await asyncio.to_thread(marker_sweep.sweep_game, store, game_id)
+        if result.success:
+            shortcut_svc = getattr(self, "services", None)
+            shortcut_svc = getattr(shortcut_svc, "shortcut", None) if shortcut_svc else None
+            if shortcut_svc and hasattr(shortcut_svc, "mark_uninstalled"):
+                await shortcut_svc.mark_uninstalled(store, game_id)
         return result
 
     async def check_game_update(self, store: str, game_id: str) -> Any:

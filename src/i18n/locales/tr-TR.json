@@ -1045,5 +1045,23 @@
     "title": "STEAM KOLEKSİYONLARI",
     "enabled": "Koleksiyonlar etkin",
     "disabled": "Koleksiyonlar devre dışı"
+  },
+  "gamevault": {
+    "connectTitle": "GameVault'a Bağlan",
+    "connect": "Bağlan",
+    "connecting": "Bağlanıyor…",
+    "cancel": "İptal",
+    "serverUrl": "Sunucu URL",
+    "username": "Kullanıcı Adı",
+    "password": "Şifre",
+    "verifySsl": "SSL Sertifikasını Doğrula",
+    "verifySslDescription": "Kendinden imzalı sertifikalar için devre dışı bırakın",
+    "downloadDir": "Arşiv indirme dizini",
+    "downloadDirDescription": "Arşiv indirmeleri için geçici dizin. Varsayılanı kullanmak için boş bırakın.",
+    "downloadDirPlaceholder": "Varsayılan: ~/.local/share/unifideck/gamevault_downloads",
+    "errorServerUrlRequired": "Lütfen sunucu URL'sini girin",
+    "errorUsernameRequired": "Lütfen kullanıcı adınızı girin",
+    "errorPasswordRequired": "Lütfen şifrenizi girin",
+    "errorConnection": "GameVault sunucusuna bağlanılamadı"
   }
 }

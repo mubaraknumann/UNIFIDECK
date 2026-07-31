@@ -277,6 +277,11 @@ class _WorkerMixin:
             logger.info(
                 "[DownloadWorker] %s install language=%s", key, item.language,
             )
+        if item.store == "gamevault" and item.download_dir:
+            extra["download_dir"] = item.download_dir
+            logger.info(
+                "[DownloadWorker] %s download_dir=%s", key, item.download_dir,
+            )
         return await store.install_game(  # type: ignore[call-arg]
             item.game_id,
             item.install_path or None,

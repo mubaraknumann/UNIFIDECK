@@ -1045,5 +1045,23 @@
     "title": "مجموعات STEAM",
     "enabled": "تم تمكين المجموعات",
     "disabled": "تم تعطيل المجموعات"
+  },
+  "gamevault": {
+    "connectTitle": "الاتصال بـ GameVault",
+    "connect": "اتصال",
+    "connecting": "جارٍ الاتصال…",
+    "cancel": "إلغاء",
+    "serverUrl": "رابط الخادم",
+    "username": "اسم المستخدم",
+    "password": "كلمة المرور",
+    "verifySsl": "التحقق من شهادة SSL",
+    "verifySslDescription": "تعطيل للشهادات الموقعة ذاتياً",
+    "downloadDir": "مجلد تنزيل الأرشيف",
+    "downloadDirDescription": "مجلد مؤقت لتنزيلات الأرشيف. اتركه فارغاً للافتراضي.",
+    "downloadDirPlaceholder": "الافتراضي: ~/.local/share/unifideck/gamevault_downloads",
+    "errorServerUrlRequired": "الرجاء إدخال رابط الخادم",
+    "errorUsernameRequired": "الرجاء إدخال اسم المستخدم",
+    "errorPasswordRequired": "الرجاء إدخال كلمة المرور",
+    "errorConnection": "فشل الاتصال بخادم GameVault"
   }
 }

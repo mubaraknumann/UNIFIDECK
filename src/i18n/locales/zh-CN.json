@@ -1045,5 +1045,23 @@
     "title": "STEAM 收藏夹",
     "enabled": "收藏夹已启用",
     "disabled": "收藏夹已禁用"
+  },
+  "gamevault": {
+    "connectTitle": "连接到 GameVault",
+    "connect": "连接",
+    "connecting": "连接中…",
+    "cancel": "取消",
+    "serverUrl": "服务器地址",
+    "username": "用户名",
+    "password": "密码",
+    "verifySsl": "验证 SSL 证书",
+    "verifySslDescription": "自签名证书请禁用此选项",
+    "downloadDir": "归档下载目录",
+    "downloadDirDescription": "归档下载的临时目录。留空使用默认值。",
+    "downloadDirPlaceholder": "默认：~/.local/share/unifideck/gamevault_downloads",
+    "errorServerUrlRequired": "请输入服务器地址",
+    "errorUsernameRequired": "请输入用户名",
+    "errorPasswordRequired": "请输入密码",
+    "errorConnection": "连接 GameVault 服务器失败"
   }
 }
