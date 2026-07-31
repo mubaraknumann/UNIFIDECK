@@ -334,10 +334,17 @@ def _build_umu_env(
     # umu-run (system python) doesn't load a stale libcrypto and abort — the
     # cause of empty install-time prefixes. No-op for the clean launcher env.
     sanitize_frozen_loader_env(env)
-    # Fall back to the shortcut's Steam AppID so gamescope can bind the
-    # window to the running session; "umu-0" leaves steam app id: 0 in
-    # gamescope and the window never appears in Gaming Mode.
-    fallback_id = f"umu-{ctx.steam_app_id}" if ctx.steam_app_id else "umu-0"
+    # umu's regex ^umu-[\d\w]+$ rejects negative IDs (signed 32-bit from
+    # games.map); convert to unsigned so STEAM_COMPAT_APP_ID passes through.
+    if ctx.steam_app_id:
+        try:
+            sid = int(ctx.steam_app_id)
+            unsigned_id = str(sid & 0xFFFFFFFF) if sid < 0 else ctx.steam_app_id
+        except ValueError:
+            unsigned_id = ctx.steam_app_id
+    else:
+        unsigned_id = None
+    fallback_id = f"umu-{unsigned_id}" if unsigned_id else "umu-0"
     env["GAMEID"] = umu_id or fallback_id
     # See _epic_store_value for the Epic STORE reasoning. ``umu_store_code``
     # on state keeps the real value for diagnostics regardless of this.
@@ -370,6 +377,21 @@ def _build_umu_env(
     # Let DXVK-NVAPI work on non-NVIDIA / mixed driver setups (harmless
     # on the Deck's AMD GPU; required by some titles' NVAPI probes).
     env["DXVK_NVAPI_ALLOW_OTHER_DRIVERS"] = "1"
+    # Force-set so gamescope can bind the window; Steam's env may contain
+    # stale/garbage values that setdefault would not override.
+    # SteamOverlayGameId is read by gameoverlayrenderer.so and reported to gamescope.
+    if unsigned_id:
+        env["STEAM_COMPAT_APP_ID"] = unsigned_id
+        env["SteamAppId"] = unsigned_id
+        env["SteamGameId"] = unsigned_id
+        env["SteamOverlayGameId"] = unsigned_id
+    # Replace the pressure-vessel ${LIB} template path with the stable host paths
+    # so gameoverlayrenderer.so is actually loaded after the container escape.
+    steam_root = os.path.expanduser("~/.local/share/Steam")
+    overlay_32 = f"{steam_root}/ubuntu12_32/gameoverlayrenderer.so"
+    overlay_64 = f"{steam_root}/ubuntu12_64/gameoverlayrenderer.so"
+    if os.path.exists(overlay_64):
+        env["LD_PRELOAD"] = f"{overlay_32}:{overlay_64}"
     # Do NOT pin STEAM_COMPAT_CLIENT_INSTALL_PATH. umu-run derives it
     # itself; forcing it to ``~/.steam/root`` — a symlink chain on
     # atomic/ostree hosts (Bazzite: ``~`` → /var/home, ``.steam/root`` →
@@ -421,6 +443,21 @@ def proton_prepare(
         prefix_path=prefix_path, proton_path=proton_path,
         proton_tool_id=proton_tool_id,
     )
+    # Start the gamescope window tagger immediately (not deferred to the
+    # on_process_start callback) so windows appearing before the umu process
+    # is fully registered are still tagged.  umu's own monitor_windows only
+    # runs when container=flatpak; we have container=pressure-vessel so
+    # gamescope never gets STEAM_GAME without this.
+    raw_appid = env.get("SteamGameId") or env.get("SteamAppId")
+    if raw_appid:
+        try:
+            appid_int = int(raw_appid)
+        except ValueError:
+            appid_int = 0
+        if appid_int > 0:
+            from .gamescope_window_tagger import start_window_tagger
+            start_window_tagger(appid_int)
+
     return ProtonLaunchPlan(
         context=ctx,
         state=state,
