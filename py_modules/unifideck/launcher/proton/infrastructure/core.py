@@ -334,7 +334,11 @@ def _build_umu_env(
     # umu-run (system python) doesn't load a stale libcrypto and abort — the
     # cause of empty install-time prefixes. No-op for the clean launcher env.
     sanitize_frozen_loader_env(env)
-    env["GAMEID"] = umu_id or "umu-0"
+    # Fall back to the shortcut's Steam AppID so gamescope can bind the
+    # window to the running session; "umu-0" leaves steam app id: 0 in
+    # gamescope and the window never appears in Gaming Mode.
+    fallback_id = f"umu-{ctx.steam_app_id}" if ctx.steam_app_id else "umu-0"
+    env["GAMEID"] = umu_id or fallback_id
     # See _epic_store_value for the Epic STORE reasoning. ``umu_store_code``
     # on state keeps the real value for diagnostics regardless of this.
     exe_name = ctx.exe_path.name

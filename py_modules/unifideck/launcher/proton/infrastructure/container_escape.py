@@ -68,6 +68,9 @@ _ALWAYS_FORWARD = frozenset({
     "STEAM_COMPAT_INSTALL_PATH",
     "STORE",
     "WINEPREFIX",
+    # gamescope binds the window to this app id; without it the window never
+    # surfaces in Gaming Mode (steam app id: 0 in gamescope WSI log).
+    "SteamAppId",
 })
 
 
