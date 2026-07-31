@@ -68,15 +68,8 @@ _ALWAYS_FORWARD = frozenset({
     "STEAM_COMPAT_INSTALL_PATH",
     "STORE",
     "WINEPREFIX",
-    # umu copies STEAM_COMPAT_APP_ID → SteamAppId → SteamGameId; gamescope
-    # reads SteamGameId to bind the window — all four must cross the boundary.
-    "SteamAppId",
-    "SteamGameId",
-    "SteamOverlayGameId",
+    # umu derives SteamAppId/SteamGameId from this; gamescope window tagger handles focus.
     "STEAM_COMPAT_APP_ID",
-    # Reaper sets LD_PRELOAD to gameoverlayrenderer.so; --alongside-steam starts
-    # outside the reaper tree so the overlay is dropped — carry it explicitly.
-    "LD_PRELOAD",
 })
 
 
