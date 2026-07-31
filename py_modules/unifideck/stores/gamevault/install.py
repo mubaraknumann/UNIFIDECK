@@ -278,6 +278,7 @@ class GameVaultInstaller:
                 last_report = 0.0
                 import time
 
+                start_time = time.monotonic()
                 with archive_path.open("wb") as fh:
                     async for chunk in resp.content.iter_chunked(1024 * 1024):
                         fh.write(chunk)
@@ -285,12 +286,18 @@ class GameVaultInstaller:
                         now = time.monotonic()
                         if progress_callback and now - last_report >= 1.0:
                             pct = (downloaded / total * 100) if total else 0
+                            elapsed = now - start_time
+                            speed_bps = downloaded / elapsed if elapsed > 0 else 0
+                            remaining = total - downloaded
+                            eta = int(remaining / speed_bps) if speed_bps > 0 and total > 0 else 0
                             await progress_callback(
                                 {
                                     "phase": "downloading",
                                     "percentage": round(pct, 1),
                                     "downloaded_bytes": downloaded,
                                     "total_bytes": total,
+                                    "speed_bps": speed_bps,
+                                    "eta_seconds": eta,
                                 }
                             )
                             last_report = now
