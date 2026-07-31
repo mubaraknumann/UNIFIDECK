@@ -528,4 +528,6 @@ class _WorkerMixin:
                 progress=item.progress,
                 speed_mbps=item.speed_mbps,
                 eta_seconds=item.eta_seconds,
+                downloaded_bytes=item.downloaded_bytes,
+                total_bytes=item.total_bytes,
             )

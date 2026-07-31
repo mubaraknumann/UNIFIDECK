@@ -186,6 +186,14 @@ class DownloadStoreImpl {
               eta_seconds:
                 (payload.eta_seconds as number) ??
                 prev.queue.current.eta_seconds,
+              downloaded_bytes:
+                (payload.downloaded_bytes as number) > 0
+                  ? (payload.downloaded_bytes as number)
+                  : prev.queue.current.downloaded_bytes,
+              total_bytes:
+                (payload.total_bytes as number) > 0
+                  ? (payload.total_bytes as number)
+                  : prev.queue.current.total_bytes,
             },
           },
         }));
