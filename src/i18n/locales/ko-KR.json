@@ -757,6 +757,36 @@
       "subtitle": "이 게임이 실행할 파일을 선택하십시오 (예: 런처를 건너뛰고 게임을 직접 실행). 작업 디렉토리와 클라우드 저장 데이터는 영향을 받지 않습니다.",
       "title": "실행 파일 변경. {{game}}",
       "unavailable": "이 게임의 폴더를 읽을 수 없습니다."
+    },
+    "optiscaler": {
+      "menuItem": "Frame Generation (OptiScaler)…",
+      "title": "Frame Generation (OptiScaler) — {{game}}",
+      "subtitle": "Adds DLSS upscaling / FSR frame generation to this game via Decky-Framegen's OptiScaler mod, copied directly into the correct game folder.",
+      "fgmodMissing": "Decky-Framegen isn't set up yet. Install it and run \"Setup OptiScaler Mod\" first.",
+      "statusPatched": "Patched",
+      "statusNotPatched": "Not patched",
+      "installDir": "Game folder",
+      "patch": "Apply patch",
+      "unpatch": "Remove patch",
+      "envHint": "OptiScaler config env vars (e.g. Section_Option=value, see Decky-Framegen's README) can be set via \"Environment variables…\" on this game's menu — they apply here too.",
+      "patched": "Frame Generation patch applied",
+      "patchFailed": "Couldn't apply Frame Generation patch",
+      "unpatched": "Frame Generation patch removed",
+      "unpatchFailed": "Couldn't remove Frame Generation patch",
+      "envAppliedTitle": "Environment variables applied to the patch",
+      "envAppliedEmpty": "None set — see \"Environment variables…\" on this game's menu to add some.",
+      "patchedWithEnv": "Frame Generation patch applied ({{count}} env var(s) set)"
+    },
+    "gameEnv": {
+      "menuItem": "Environment variables…",
+      "title": "Environment variables — {{game}}",
+      "subtitle": "Environment variables applied every time this game launches (MangoHud, DXVK_HUD, PROTON_* tweaks, OptiScaler Section_Option=value settings, ...) — the same effect as Steam's \"VAR=value %command%\" launch options, but it survives a Force Sync.",
+      "empty": "No environment variables set yet.",
+      "keyLabel": "Name",
+      "valueLabel": "Value",
+      "add": "Add",
+      "saved": "Environment variables saved",
+      "saveFailed": "Couldn't save environment variables"
     }
   },
   "playMeta": {
