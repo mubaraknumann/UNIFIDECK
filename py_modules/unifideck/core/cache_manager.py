@@ -23,6 +23,8 @@ Files are written with ``chmod 0600`` so cache contents
 owner-readable.
 """
 
+from __future__ import annotations
+
 import contextlib
 import copy
 import json

@@ -29,6 +29,7 @@ of the most-used names so consumers can ``from unifideck.core
 import Game, Result, Events`` without knowing the internal
 split.
 """
+from __future__ import annotations
 
 from .cache_manager import CacheManager
 from .types import (

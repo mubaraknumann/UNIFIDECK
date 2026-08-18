@@ -15,7 +15,41 @@ Reference: Technical Document v1.0 — Section 3.3 (EventBus topology).
 
 from __future__ import annotations
 
-from enum import StrEnum
+try:
+    from enum import StrEnum
+except ImportError:
+    # StrEnum was only added to the stdlib in Python 3.11. This module sits
+    # in the EAGER import chain every Unifideck shortcut launch pulls in
+    # (bin/unifideck-launcher -> launcher.dispatcher -> core -> core.types
+    # -> .events), which normally runs under a modern system Python via
+    # find_python_3_10_plus()'s ACCEPTED_VERSIONS — but that selection only
+    # applies to the Proton/umu subprocess, never to the launcher SCRIPT
+    # itself. bin/unifideck-launcher's own "#!/usr/bin/env python3" shebang
+    # resolves whatever "python3" the CALLING process's environment
+    # provides, and when Steam wraps the launcher in its own
+    # SteamLinuxRuntime_sniper pressure-vessel container — which it does
+    # automatically whenever the user sets Force-Compatibility on a
+    # Unifideck shortcut, see
+    # launcher.proton.infrastructure.container_escape's docstring for the
+    # umu-side twin of this same container problem — that "python3" is the
+    # CONTAINER's own (observed: too old for StrEnum, and for the `X | None`
+    # syntax core/cache_manager.py used to use unguarded). Reproduced
+    # on-device: entering the sniper container directly
+    # (_v2-entry-point --verb=run --) and invoking
+    # bin/unifideck-launcher raised exactly this ImportError one import
+    # deeper, right after an earlier `Any | None` TypeError in
+    # cache_manager.py was fixed.
+    #
+    # A plain (str, Enum) shim needs no stdlib version newer than 3.4 and
+    # is functionally identical for this codebase's usage (every member's
+    # value already equals its serialised form, so no custom __str__ is
+    # required) — this sidesteps entirely having to know or control which
+    # Python interpreters are reachable from inside an arbitrary Steam
+    # Runtime container.
+    from enum import Enum
+
+    class StrEnum(str, Enum):  # type: ignore[no-redef]
+        """Pre-3.11 stand-in for :class:`enum.StrEnum`."""
 
 
 class Events(StrEnum):
