@@ -223,6 +223,68 @@ def get_saved_proton_tool(store_game_id: str) -> str | None:
         return entry or None
     except (OSError, ValueError):
         return None
+def _persist_saved_proton_tool(store_game_id: str, tool: str) -> None:
+    """Mirror a live Steam Force-Compat choice into ``proton_settings.json``.
+
+    Writes the tier-2 shadow that :func:`get_saved_proton_tool` reads. Until
+    now ONLY the frontend's ``useLaunchPrep`` ever wrote it, which means a
+    game whose Proton was picked directly in Steam's own
+    Properties > Compatibility dialog — and then launched from Steam rather
+    than from Unifideck's game-details page — never got an entry at all.
+
+    Why that matters far beyond Proton selection: with Force-Compat set,
+    Steam wraps the launcher in its SteamLinuxRuntime pressure-vessel
+    container, whose Python is too old to run this code, so the launcher
+    escapes the container via ``steam-runtime-launch-client``. That escape
+    re-parents the entire process tree — launcher, umu, game and any
+    companion — out from under Steam's ``reaper``, and Steam then stops
+    recognising those windows as belonging to the app it launched: its
+    "switch window" control disappears, so a trainer running alongside the
+    game becomes unreachable. Clearing Force-Compat fixes all of that (the
+    launcher applies the tool itself), but clearing it USED TO silently
+    change the Proton version too, because this shadow was missing —
+    which made the correct fix look like a regression.
+
+    Writing the shadow here makes clearing Force-Compat safe: the same
+    Proton is still selected afterwards, just via tier 2. Deliberately does
+    NOT touch Steam's own ``config.vdf``: Steam rewrites that file from
+    memory on exit, so a launcher-side edit while Steam runs would simply
+    be discarded. Best-effort — any failure is logged and ignored, since
+    this only affects the NEXT launch, never the current one.
+    """
+    if not store_game_id or not tool:
+        return
+    import json
+    settings_path = Path(
+        "~/.local/share/unifideck/proton_settings.json",
+    ).expanduser()
+    try:
+        settings: dict = {}
+        if settings_path.is_file():
+            with settings_path.open() as f:
+                settings = json.load(f)
+        if not isinstance(settings, dict):
+            settings = {}
+        games = settings.setdefault("games", {})
+        if not isinstance(games, dict):
+            settings["games"] = games = {}
+        if games.get(store_game_id) == tool:
+            return
+        games[store_game_id] = tool
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps(settings, indent=2))
+        logger.info(
+            "[launcher.proton] mirrored steam force-compat choice %s for %s "
+            "into proton_settings.json so clearing Force-Compat keeps this "
+            "Proton", tool, store_game_id,
+        )
+    except (OSError, ValueError, TypeError) as e:
+        logger.warning(
+            "[launcher.proton] could not mirror force-compat choice for "
+            "%s: %s", store_game_id, e,
+        )
+
+
 def _read_steam_config_vdf() -> str:
     """Text of the global ``<steam>/config/config.vdf`` (cross-distro), or ""."""
     config_vdf = vdf_compat.find_steam_config_vdf()
@@ -316,6 +378,12 @@ def select_proton_version(
     if steam_tool:
         path = _resolve_logged("steam", steam_tool, tried)
         if path:
+            # Keep tier 2 in sync with the live choice, so that clearing
+            # Force-Compat (which is what stops Steam containerising the
+            # launcher, and with it the lost window switching) does not
+            # silently change the Proton version as a side effect.
+            if store_game_id:
+                _persist_saved_proton_tool(store_game_id, steam_tool)
             return path, steam_tool
     saved_tool = get_saved_proton_tool(store_game_id) if store_game_id else None
     if saved_tool:
