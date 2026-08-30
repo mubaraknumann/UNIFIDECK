@@ -71,18 +71,16 @@ class GameVaultInstaller:
 
     # ── Public API ──────────────────────────────────────────────────
 
-    async def install_game(
+    async def _prepare_dirs(
         self,
-        game_id: str,
-        *,
-        auth_headers: dict[str, str],
-        server_url: str,
-        verify_ssl: bool,
         install_path: str | None,
-        progress_callback: ProgressCallback | None = None,
-        download_dir: str | None = None,
-    ) -> InstallResult:
-        """Download and extract a GameVault game."""
+        download_dir: str | None,
+    ) -> tuple[Path, Path]:
+        """Resolve and create the install and archive directories.
+
+        Split out of :meth:`install_game` to keep it under the line cap.
+        Returns ``(target_dir, effective_download_dir)``.
+        """
         # expanduser() reads $HOME and touches no filesystem, so it is not
         # the blocking call ASYNC240 is looking for; the mkdir below is, and
         # that one goes to a thread.
@@ -101,6 +99,23 @@ class GameVaultInstaller:
         # and this coroutine shares the event loop with the download queue.
         for d in (target_dir, effective_dl_dir, _MARKER_DIR):
             await asyncio.to_thread(_mkdir_p, d)
+        return target_dir, effective_dl_dir
+
+    async def install_game(
+        self,
+        game_id: str,
+        *,
+        auth_headers: dict[str, str],
+        server_url: str,
+        verify_ssl: bool,
+        install_path: str | None,
+        progress_callback: ProgressCallback | None = None,
+        download_dir: str | None = None,
+    ) -> InstallResult:
+        """Download and extract a GameVault game."""
+        target_dir, effective_dl_dir = await self._prepare_dirs(
+            install_path, download_dir,
+        )
 
         archive_path: Path | None = None
         try:
@@ -149,17 +164,7 @@ class GameVaultInstaller:
                 game_id=game_id,
             )
         finally:
-            # Always remove the archive from the temp download dir
-            if archive_path and archive_path.exists():
-                try:
-                    archive_path.unlink()
-                    logger.info("[GameVaultInstaller] Removed archive %s", archive_path)
-                except Exception as exc:
-                    logger.warning(
-                        "[GameVaultInstaller] Could not delete archive %s: %s",
-                        archive_path,
-                        exc,
-                    )
+            _discard_archive(archive_path)
 
     async def uninstall_game(self, game_id: str) -> Result:
         """Remove game files and install marker."""
@@ -334,6 +339,28 @@ def _progress_payload(
             int(remaining / speed_bps) if speed_bps > 0 and total > 0 else 0
         ),
     }
+
+
+def _discard_archive(archive_path: Path | None) -> None:
+    """Delete the downloaded archive from the temp download dir.
+
+    Runs from :meth:`GameVaultInstaller.install_game`'s ``finally``, so it
+    must never raise: a failure here would replace the real install error
+    with an unlink error. Best-effort by design — the archive is a cache,
+    and the worst case of leaving one behind is wasted disk, whereas
+    propagating would lose the diagnosis of why the install failed.
+    """
+    if not archive_path or not archive_path.exists():
+        return
+    try:
+        archive_path.unlink()
+        logger.info("[GameVaultInstaller] Removed archive %s", archive_path)
+    except Exception as exc:
+        logger.warning(
+            "[GameVaultInstaller] Could not delete archive %s: %s",
+            archive_path,
+            exc,
+        )
 
 
 # ── Exe finder ──────────────────────────────────────────────────────────────

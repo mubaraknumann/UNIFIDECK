@@ -313,6 +313,61 @@ def _apply_per_title_env(
         _apply_icu_dll_overrides(env, ctx.game_id)
 
 
+def _apply_compat_paths(
+    env: dict[str, str],
+    *,
+    prefix_path: Path,
+    proton_path: Path,
+    work_dir: Path,
+) -> None:
+    """Point umu-run at the Proton build, the prefix and the install dir.
+
+    Split out of :func:`_build_umu_env` to keep it under the line cap. Every
+    comment here is load-bearing — each records a specific field bug this
+    exact layout fixes — so read before reordering.
+    """
+    # PROTONPATH tells umu-run which Proton to use — the *directory*
+    # holding the ``proton`` script (``proton_path`` is that script, so
+    # use its parent). Without this umu falls back to downloading its
+    # own UMU-Proton (or fails), ignoring the tool we selected. Mirrors
+    # staging's ``export PROTONPATH``.
+    env["PROTONPATH"] = str(proton_path.parent)
+    env["STEAM_COMPAT_DATA_PATH"] = str(prefix_path)
+    # Pin the game to its per-game prefix. umu-run does NOT derive the
+    # prefix from STEAM_COMPAT_DATA_PATH — with no WINEPREFIX it defaults
+    # to ``~/Games/umu/$GAMEID`` (e.g. the shared ``umu-0`` when a game
+    # has no per-game umu_id). That shared prefix lacks the deps our
+    # compat steps install into prefix_path (they set WINEPREFIX
+    # explicitly) AND it's not where cloud-save sync writes — so the game
+    # would launch in the wrong prefix and never see its saves/deps.
+    # Mirrors the compat steps (e.g. compat/winetricks.py).
+    env["WINEPREFIX"] = str(prefix_path)
+    # Game install dir — some Proton features/protonfixes key off this.
+    env["STEAM_COMPAT_INSTALL_PATH"] = str(work_dir)
+    # Let DXVK-NVAPI work on non-NVIDIA / mixed driver setups (harmless
+    # on the Deck's AMD GPU; required by some titles' NVAPI probes).
+    env["DXVK_NVAPI_ALLOW_OTHER_DRIVERS"] = "1"
+    # NOTE: the Steam identity block (SteamGameId / STEAM_COMPAT_APP_ID /
+    # SteamAppId / UMU_STEAM_GAME_ID) is NOT set here. ``build_steam_window_env``
+    # in the caller is its one implementation. An earlier version of this merge
+    # also re-exported the host's ``gameoverlayrenderer.so`` through LD_PRELOAD
+    # to "fix" window binding; that is the exact thing ``sanitize_frozen_loader_env``
+    # exists to prevent — see this module's LD_PRELOAD note above.
+
+    # Do NOT pin STEAM_COMPAT_CLIENT_INSTALL_PATH. umu-run derives it
+    # itself; forcing it to ``~/.steam/root`` — a symlink chain on
+    # atomic/ostree hosts (Bazzite: ``~`` → /var/home, ``.steam/root`` →
+    # steam) — makes pressure-vessel's ``/run/host`` + ``from-host``
+    # capsule-capture loop when bwrap resolves ``pv-adverb`` → "Too many
+    # levels of symbolic links" (ELOOP), so the game exits code 1 before it
+    # starts (Cyberpunk/GOG on Bazzite). The pre-refactor bash launcher
+    # deliberately UNSET this and worked on Deck + Bazzite + CachyOS; mirror
+    # that — also drop any value Steam passed down, since that's the looping
+    # one on atomic hosts.
+    env.pop("STEAM_COMPAT_CLIENT_INSTALL_PATH", None)
+    env["PROTON_VERB"] = "waitforexitandrun"
+
+
 def _build_umu_env(
     ctx: LaunchContext,
     *,
@@ -362,46 +417,12 @@ def _build_umu_env(
         env["STORE"] = _epic_store_value(ctx.game_id, umu_id, exe_name)
     else:
         env["STORE"] = umu_store
-    # PROTONPATH tells umu-run which Proton to use — the *directory*
-    # holding the ``proton`` script (``proton_path`` is that script, so
-    # use its parent). Without this umu falls back to downloading its
-    # own UMU-Proton (or fails), ignoring the tool we selected. Mirrors
-    # staging's ``export PROTONPATH``.
-    env["PROTONPATH"] = str(proton_path.parent)
-    env["STEAM_COMPAT_DATA_PATH"] = str(prefix_path)
-    # Pin the game to its per-game prefix. umu-run does NOT derive the
-    # prefix from STEAM_COMPAT_DATA_PATH — with no WINEPREFIX it defaults
-    # to ``~/Games/umu/$GAMEID`` (e.g. the shared ``umu-0`` when a game
-    # has no per-game umu_id). That shared prefix lacks the deps our
-    # compat steps install into prefix_path (they set WINEPREFIX
-    # explicitly) AND it's not where cloud-save sync writes — so the game
-    # would launch in the wrong prefix and never see its saves/deps.
-    # Mirrors the compat steps (e.g. compat/winetricks.py).
-    env["WINEPREFIX"] = str(prefix_path)
-    # Game install dir — some Proton features/protonfixes key off this.
-    env["STEAM_COMPAT_INSTALL_PATH"] = str(ctx.work_dir)
-    # Let DXVK-NVAPI work on non-NVIDIA / mixed driver setups (harmless
-    # on the Deck's AMD GPU; required by some titles' NVAPI probes).
-    env["DXVK_NVAPI_ALLOW_OTHER_DRIVERS"] = "1"
-    # NOTE: the Steam identity block (SteamGameId / STEAM_COMPAT_APP_ID /
-    # SteamAppId / UMU_STEAM_GAME_ID) is NOT set here. ``build_steam_window_env``
-    # below is its one implementation. An earlier version of this merge also
-    # re-exported the host's ``gameoverlayrenderer.so`` through LD_PRELOAD to
-    # "fix" window binding; that is the exact thing ``sanitize_frozen_loader_env``
-    # exists to prevent — see this module's LD_PRELOAD note above.
-
-    # Do NOT pin STEAM_COMPAT_CLIENT_INSTALL_PATH. umu-run derives it
-    # itself; forcing it to ``~/.steam/root`` — a symlink chain on
-    # atomic/ostree hosts (Bazzite: ``~`` → /var/home, ``.steam/root`` →
-    # steam) — makes pressure-vessel's ``/run/host`` + ``from-host``
-    # capsule-capture loop when bwrap resolves ``pv-adverb`` → "Too many
-    # levels of symbolic links" (ELOOP), so the game exits code 1 before it
-    # starts (Cyberpunk/GOG on Bazzite). The pre-refactor bash launcher
-    # deliberately UNSET this and worked on Deck + Bazzite + CachyOS; mirror
-    # that — also drop any value Steam passed down, since that's the looping
-    # one on atomic hosts.
-    env.pop("STEAM_COMPAT_CLIENT_INSTALL_PATH", None)
-    env["PROTON_VERB"] = "waitforexitandrun"
+    _apply_compat_paths(
+        env,
+        prefix_path=prefix_path,
+        proton_path=proton_path,
+        work_dir=ctx.work_dir,
+    )
     # Tell umu which Steam app this is. Without it umu defaults the identity
     # to 0, gamescope reports ``steam app id: 0`` for the game's window and
     # the Deck session never adopts it — the launch screen sits on top of a
