@@ -139,6 +139,7 @@ class DownloadService(_WorkerMixin):
         is_update: bool = False,
         language: str | None = None,
         required_bytes: int | None = None,
+        download_dir: str = "",
     ) -> Result:
         """Queue a new download request.
 
@@ -161,6 +162,10 @@ class DownloadService(_WorkerMixin):
         val_result = validate_path(install_path, required_bytes)
         if not val_result.success:
             return val_result
+        if download_dir and download_dir != install_path:
+            dl_result = validate_path(download_dir, required_bytes)
+            if not dl_result.success:
+                return dl_result
 
         key = f"{store}:{game_id}"
 
@@ -181,6 +186,7 @@ class DownloadService(_WorkerMixin):
                 title=title,
                 is_update=is_update,
                 language=language or "",
+                download_dir=download_dir,
                 # Ubisoft is a launcher-driven (UPC) install with no real
                 # download — mark it "manual" from enqueue so the UI shows the
                 # indeterminate "Installing in <vendor client>" state instead

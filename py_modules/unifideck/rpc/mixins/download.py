@@ -119,6 +119,7 @@ class DownloadRPCMixin:
         # the game's own language codes, matched exactly downstream).
         # Other stores don't send this.
         language = opts.pop("language", None)
+        download_dir: str = opts.pop("download_dir", "") or ""
 
         logger.info(
             "[download] install_game store=%s game_id=%s storage=%s "
@@ -137,6 +138,7 @@ class DownloadRPCMixin:
             is_update=False,
             language=language,
             required_bytes=required_bytes,
+            download_dir=download_dir,
         )
         return {"success": result.success, "error": result.error}
 

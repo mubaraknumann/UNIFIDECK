@@ -537,7 +537,8 @@
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
     "microsoft": "Microsoft",
-    "battlenet": "Battle.net"
+    "battlenet": "Battle.net",
+    "gamevault": "GameVault"
   },
   "unifiedLibrary": {
     "error": "خطأ في Unifideck",
@@ -1046,5 +1047,23 @@
   "reconcile": {
     "repairedTitle": "تم إصلاح بيانات المكتبة",
     "repairedBody": "تمت تعبئة {{artwork}} من الصور و{{metadata}} من البيانات الوصفية و{{compat}} من إدخالات التوافق التي خلّفتها مزامنة متوقفة."
+  },
+  "gamevault": {
+    "connectTitle": "الاتصال بـ GameVault",
+    "connect": "اتصال",
+    "connecting": "جارٍ الاتصال…",
+    "cancel": "إلغاء",
+    "serverUrl": "رابط الخادم",
+    "username": "اسم المستخدم",
+    "password": "كلمة المرور",
+    "verifySsl": "التحقق من شهادة SSL",
+    "verifySslDescription": "تعطيل للشهادات الموقعة ذاتياً",
+    "downloadDir": "مجلد تنزيل الأرشيف",
+    "downloadDirDescription": "مجلد مؤقت لتنزيلات الأرشيف. اتركه فارغاً للافتراضي.",
+    "downloadDirPlaceholder": "الافتراضي: ~/.local/share/unifideck/gamevault_downloads",
+    "errorServerUrlRequired": "الرجاء إدخال رابط الخادم",
+    "errorUsernameRequired": "الرجاء إدخال اسم المستخدم",
+    "errorPasswordRequired": "الرجاء إدخال كلمة المرور",
+    "errorConnection": "فشل الاتصال بخادم GameVault"
   }
 }

@@ -149,6 +149,9 @@
         },
         "battlenet": {
           "$ref": "#/$defs/battlenetStore"
+        },
+        "gamevault": {
+          "$ref": "#/$defs/gamevaultStore"
         }
       }
     },
@@ -892,6 +895,21 @@
         },
         "enable_web_enrichment": {
           "type": "boolean"
+        }
+      }
+    },
+    "gamevaultStore": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "config_file": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "default_install_root": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "download_dir": {
+          "$ref": "#/$defs/nonEmptyString"
         }
       }
     }

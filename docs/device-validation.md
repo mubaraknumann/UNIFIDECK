@@ -167,7 +167,7 @@ Run after **any** change in this programme. These replace the near-identical
 
 | ID | Step | Expected | Status | Evidence |
 |---|---|---|---|---|
-| SW1 | Full library sync across all six stores | Reconcile tally line: no unexpected `removed=`; game count unchanged | ( ) | |
+| SW1 | Full library sync across all seven stores | Reconcile tally line: no unexpected `removed=`; game count unchanged | ( ) | |
 | SW2 | Open App Details for one game per store | Panel renders; no missing metadata, size or artwork | ( ) | |
 | SW3 | Launch one already-installed game | Launches; correct per-game prefix in `game.log` | ( ) | |
 | SW4 | QAM → Store Connections after `systemctl restart plugin_loader` | All six rows, correct connected/disconnected state | ( ) | |

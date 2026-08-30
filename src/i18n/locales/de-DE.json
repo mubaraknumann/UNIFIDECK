@@ -537,7 +537,8 @@
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
     "microsoft": "Microsoft",
-    "battlenet": "Battle.net"
+    "battlenet": "Battle.net",
+    "gamevault": "GameVault"
   },
   "unifiedLibrary": {
     "error": "Unifideck-Fehler",
@@ -1046,5 +1047,23 @@
   "reconcile": {
     "repairedTitle": "Bibliotheksdaten repariert",
     "repairedBody": "{{artwork}} Grafiken, {{metadata}} Metadaten und {{compat}} Kompatibilitätseinträge ergänzt, die eine unterbrochene Synchronisierung zurückgelassen hatte."
+  },
+  "gamevault": {
+    "connectTitle": "Mit GameVault verbinden",
+    "connect": "Verbinden",
+    "connecting": "Verbinde…",
+    "cancel": "Abbrechen",
+    "serverUrl": "Server-URL",
+    "username": "Benutzername",
+    "password": "Passwort",
+    "verifySsl": "SSL-Zertifikat prüfen",
+    "verifySslDescription": "Deaktivieren für selbstsignierte Zertifikate",
+    "downloadDir": "Archiv-Download-Verzeichnis",
+    "downloadDirDescription": "Temporäres Verzeichnis für Archiv-Downloads. Leer lassen für den Standard. Verwende einen anderen Pfad, wenn auf dem Installationsziel nicht genug Platz für Archiv und entpacktes Spiel ist.",
+    "downloadDirPlaceholder": "Standard: ~/.local/share/unifideck/gamevault_downloads",
+    "errorServerUrlRequired": "Bitte Server-URL eingeben",
+    "errorUsernameRequired": "Bitte Benutzername eingeben",
+    "errorPasswordRequired": "Bitte Passwort eingeben",
+    "errorConnection": "Verbindung zum GameVault-Server fehlgeschlagen"
   }
 }

@@ -15,7 +15,50 @@ Reference: Technical Document v1.0 — Section 3.3 (EventBus topology).
 
 from __future__ import annotations
 
-from enum import StrEnum
+import sys
+
+# UP036/UP042: ruff reads requires-python (3.11) and concludes this block
+# is dead and the shim redundant. It is neither. The interpreter that
+# imports this module is not always the one the project targets — see
+# below — and the shim only ever runs on the interpreter ruff is not
+# looking at.
+if sys.version_info >= (3, 11):  # noqa: UP036
+    from enum import StrEnum
+else:
+    # StrEnum was only added to the stdlib in Python 3.11. This module sits
+    # in the EAGER import chain every Unifideck shortcut launch pulls in
+    # (bin/unifideck-launcher -> launcher.dispatcher -> core -> core.types
+    # -> .events), which normally runs under a modern system Python via
+    # find_python_3_10_plus()'s ACCEPTED_VERSIONS — but that selection only
+    # applies to the Proton/umu subprocess, never to the launcher SCRIPT
+    # itself. bin/unifideck-launcher's own "#!/usr/bin/env python3" shebang
+    # resolves whatever "python3" the CALLING process's environment
+    # provides, and when Steam wraps the launcher in its own
+    # SteamLinuxRuntime_sniper pressure-vessel container — which it does
+    # automatically whenever the user sets Force-Compatibility on a
+    # Unifideck shortcut, see
+    # launcher.proton.infrastructure.container_escape's docstring for the
+    # umu-side twin of this same container problem — that "python3" is the
+    # CONTAINER's own (observed: too old for StrEnum, and for the `X | None`
+    # syntax core/cache_manager.py used to use unguarded). Reproduced
+    # on-device: entering the sniper container directly
+    # (_v2-entry-point --verb=run --) and invoking bin/unifideck-launcher
+    # failed on exactly this import one level deeper, right after an
+    # earlier `Any | None` TypeError in cache_manager.py was fixed.
+    #
+    # A plain (str, Enum) shim needs no stdlib newer than 3.4, which
+    # sidesteps having to know which interpreters are reachable inside an
+    # arbitrary Steam Runtime container. It differs from the real StrEnum in
+    # exactly one respect — ``str(member)`` would return "Events.NAME"
+    # instead of the value — so ``__str__`` is pinned back to ``str``'s.
+    # Without that the shim would be a silent behaviour change on the one
+    # interpreter nothing here is tested against.
+    from enum import Enum
+
+    class StrEnum(str, Enum):  # type: ignore[no-redef]  # noqa: UP042
+        """Pre-3.11 stand-in for :class:`enum.StrEnum`."""
+
+        __str__ = str.__str__
 
 
 class Events(StrEnum):

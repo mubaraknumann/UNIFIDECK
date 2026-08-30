@@ -537,7 +537,8 @@
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
     "microsoft": "Microsoft",
-    "battlenet": "Battle.net"
+    "battlenet": "Battle.net",
+    "gamevault": "GameVault"
   },
   "unifiedLibrary": {
     "error": "Unifideck Hatası",
@@ -1046,5 +1047,23 @@
   "reconcile": {
     "repairedTitle": "Kitaplık verileri onarıldı",
     "repairedBody": "Yarıda kalan eşitlemeden kalan {{artwork}} görsel, {{metadata}} meta veri ve {{compat}} uyumluluk kaydı tamamlandı."
+  },
+  "gamevault": {
+    "connectTitle": "GameVault'a Bağlan",
+    "connect": "Bağlan",
+    "connecting": "Bağlanıyor…",
+    "cancel": "İptal",
+    "serverUrl": "Sunucu URL",
+    "username": "Kullanıcı Adı",
+    "password": "Şifre",
+    "verifySsl": "SSL Sertifikasını Doğrula",
+    "verifySslDescription": "Kendinden imzalı sertifikalar için devre dışı bırakın",
+    "downloadDir": "Arşiv indirme dizini",
+    "downloadDirDescription": "Arşiv indirmeleri için geçici dizin. Varsayılanı kullanmak için boş bırakın.",
+    "downloadDirPlaceholder": "Varsayılan: ~/.local/share/unifideck/gamevault_downloads",
+    "errorServerUrlRequired": "Lütfen sunucu URL'sini girin",
+    "errorUsernameRequired": "Lütfen kullanıcı adınızı girin",
+    "errorPasswordRequired": "Lütfen şifrenizi girin",
+    "errorConnection": "GameVault sunucusuna bağlanılamadı"
   }
 }

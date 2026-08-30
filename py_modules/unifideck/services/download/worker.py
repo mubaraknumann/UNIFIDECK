@@ -285,6 +285,18 @@ class _WorkerMixin:
                 key,
                 item.language,
             )
+        # A separate staging directory for the downloaded artifact, for a
+        # store whose install is "fetch an archive, then unpack it" and whose
+        # archive therefore needs room of its own. Keyed off the field, not
+        # off a store name: only the store that accepts the kwarg ever sets
+        # it (nothing else populates ``DownloadItem.download_dir``), so the
+        # worker does not need to know which store that is — same reasoning
+        # as the deleted ``_reject_microsoft`` branch above.
+        if item.download_dir:
+            extra["download_dir"] = item.download_dir
+            logger.info(
+                "[DownloadWorker] %s download_dir=%s", key, item.download_dir,
+            )
         return await store.install_game(  # type: ignore[call-arg]
             item.game_id,
             item.install_path or None,

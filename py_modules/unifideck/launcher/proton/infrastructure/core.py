@@ -330,6 +330,7 @@ def _build_umu_env(
     """
     import os
 
+    from unifideck.core.compat_bridge import to_unsigned
     from unifideck.launcher.proton.fixes.game_fixes import is_rockstar_egs
     from unifideck.steam.window_env import build_steam_window_env
     env = dict(os.environ)
@@ -338,7 +339,19 @@ def _build_umu_env(
     # umu-run (system python) doesn't load a stale libcrypto and abort — the
     # cause of empty install-time prefixes. No-op for the clean launcher env.
     sanitize_frozen_loader_env(env)
-    env["GAMEID"] = umu_id or "umu-0"
+    # A game with no umu-db entry used to fall back to the shared ``umu-0``,
+    # which makes every such game one session as far as umu is concerned.
+    # Fall back to this shortcut's own appid instead so the session is
+    # distinct. ``to_unsigned`` because games.map stores the signed 32-bit
+    # form and umu's GAMEID regex (``^umu-[\d\w]+$``) rejects the minus sign.
+    # Prefixes are unaffected either way: WINEPREFIX is pinned below.
+    unsigned_id: str | None = None
+    if ctx.steam_app_id:
+        try:
+            unsigned_id = str(to_unsigned(ctx.steam_app_id))
+        except (TypeError, ValueError):
+            unsigned_id = None
+    env["GAMEID"] = umu_id or (f"umu-{unsigned_id}" if unsigned_id else "umu-0")
     # See _epic_store_value for the Epic STORE reasoning. ``umu_store_code``
     # on state keeps the real value for diagnostics regardless of this.
     exe_name = ctx.exe_path.name
@@ -370,6 +383,13 @@ def _build_umu_env(
     # Let DXVK-NVAPI work on non-NVIDIA / mixed driver setups (harmless
     # on the Deck's AMD GPU; required by some titles' NVAPI probes).
     env["DXVK_NVAPI_ALLOW_OTHER_DRIVERS"] = "1"
+    # NOTE: the Steam identity block (SteamGameId / STEAM_COMPAT_APP_ID /
+    # SteamAppId / UMU_STEAM_GAME_ID) is NOT set here. ``build_steam_window_env``
+    # below is its one implementation. An earlier version of this merge also
+    # re-exported the host's ``gameoverlayrenderer.so`` through LD_PRELOAD to
+    # "fix" window binding; that is the exact thing ``sanitize_frozen_loader_env``
+    # exists to prevent — see this module's LD_PRELOAD note above.
+
     # Do NOT pin STEAM_COMPAT_CLIENT_INSTALL_PATH. umu-run derives it
     # itself; forcing it to ``~/.steam/root`` — a symlink chain on
     # atomic/ostree hosts (Bazzite: ``~`` → /var/home, ``.steam/root`` →
@@ -431,6 +451,26 @@ def proton_prepare(
         prefix_path=prefix_path, proton_path=proton_path,
         proton_tool_id=proton_tool_id,
     )
+    # Start the gamescope window tagger before returning, not from the
+    # on_process_start callback, so a window that appears before umu is fully
+    # registered is still tagged. umu's own ``monitor_windows`` only runs when
+    # ``container=flatpak``; under pressure-vessel it is skipped, so nothing
+    # sets STEAM_GAME on the window.
+    #
+    # Gaming Mode only: outside a gamescope session there is no compositor to
+    # tell, and the thread would poll an X display for five minutes for
+    # nothing. ``build_steam_window_env`` above is what fixes window adoption
+    # in the ordinary case — if the device check confirms it is sufficient on
+    # its own, this whole module goes away.
+    if os.environ.get("GAMESCOPE_WAYLAND_DISPLAY"):
+        try:
+            appid_int = int(env.get("SteamGameId") or 0)
+        except ValueError:
+            appid_int = 0
+        if appid_int > 0:
+            from .gamescope_window_tagger import start_window_tagger
+            start_window_tagger(appid_int)
+
     return ProtonLaunchPlan(
         context=ctx,
         state=state,

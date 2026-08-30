@@ -537,7 +537,8 @@
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
     "microsoft": "Microsoft",
-    "battlenet": "Battle.net"
+    "battlenet": "Battle.net",
+    "gamevault": "GameVault"
   },
   "unifiedLibrary": {
     "error": "Unifideck エラー",
@@ -1046,5 +1047,23 @@
   "reconcile": {
     "repairedTitle": "ライブラリデータを修復しました",
     "repairedBody": "中断された同期で残っていたアートワーク {{artwork}} 件、メタデータ {{metadata}} 件、互換性情報 {{compat}} 件を補完しました。"
+  },
+  "gamevault": {
+    "connectTitle": "GameVaultに接続",
+    "connect": "接続",
+    "connecting": "接続中…",
+    "cancel": "キャンセル",
+    "serverUrl": "サーバーURL",
+    "username": "ユーザー名",
+    "password": "パスワード",
+    "verifySsl": "SSL証明書の確認",
+    "verifySslDescription": "自己署名証明書の場合は無効にしてください",
+    "downloadDir": "アーカイブダウンロードディレクトリ",
+    "downloadDirDescription": "アーカイブダウンロード用の一時ディレクトリ。空欄のままにするとデフォルトが使用されます。",
+    "downloadDirPlaceholder": "デフォルト: ~/.local/share/unifideck/gamevault_downloads",
+    "errorServerUrlRequired": "サーバーURLを入力してください",
+    "errorUsernameRequired": "ユーザー名を入力してください",
+    "errorPasswordRequired": "パスワードを入力してください",
+    "errorConnection": "GameVaultサーバーへの接続に失敗しました"
   }
 }

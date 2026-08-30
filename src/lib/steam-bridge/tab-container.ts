@@ -109,9 +109,17 @@ export function getUnifideckTabs(): UnifideckTab[] {
       filters: [{ type: "store", params: { store: "microsoft" } }],
     },
     {
+      id: "unifideck-gamevault",
+      title: t("deckTabs.gamevault"),
+      position: 10,
+      filters: [{ type: "store", params: { store: "gamevault" } }],
+    },
+    {
+      // Stays last: "Non-Steam" is the catch-all, so a store tab inserted
+      // before it takes its number and this one moves down.
       id: "unifideck-nonsteam",
       title: t("deckTabs.nonSteam"),
-      position: 10,
+      position: 11,
       filters: [{ type: "nonSteam", params: {} }],
     },
   ];
@@ -376,7 +384,8 @@ type ConnectableStore =
   | "amazon"
   | "ubisoft"
   | "battlenet"
-  | "microsoft";
+  | "microsoft"
+  | "gamevault";
 
 class TabManager {
   private tabs: UnifideckTabContainer[] = [];
@@ -388,6 +397,7 @@ class TabManager {
     ubisoft: 0,
     battlenet: 0,
     microsoft: 0,
+    gamevault: 0,
   };
   private version = 0;
   private listeners: (() => void)[] = [];
@@ -440,6 +450,7 @@ class TabManager {
       "unifideck-ubisoft": "ubisoft",
       "unifideck-battlenet": "battlenet",
       "unifideck-microsoft": "microsoft",
+      "unifideck-gamevault": "gamevault",
     };
     const store = m[id];
     if (!store) return true;

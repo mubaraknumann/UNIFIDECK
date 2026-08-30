@@ -49,7 +49,7 @@ The machine-enforced invariants are in §9 (`.importlinter`).
 ├─────────────────────────────────────────────────┤
 │  Layer 5 — Services (services/)                 │  ← Infrastructure services
 ├─────────────────────────────────────────────────┤
-│  Layer 4 — Stores (stores/)                     │  ← 6 store connectors
+│  Layer 4 — Stores (stores/)                     │  ← 7 store connectors
 ├─────────────────────────────────────────────────┤
 │  Layer 3 — StoreBase (stores/shared/)           │  ← Abstract store contract
 ├─────────────────────────────────────────────────┤
@@ -123,16 +123,17 @@ owned by `launcher/dispatcher.py`.
 
 ### Layer 4 — `stores/`
 
-Six store connector sub-packages. Each is self-contained with its own auth, library, install, and update logic.
+Seven store connector sub-packages. Each is self-contained with its own auth, library, install, and update logic.
 
-| Package             | Store                 | Backend                              |
-| ------------------- | --------------------- | ------------------------------------ |
-| `stores/epic/`      | Epic Games Store      | `bin/legendary`                      |
-| `stores/gog/`       | GOG                   | `bin/gogdl` + `bin/comet`            |
-| `stores/amazon/`    | Amazon Games          | `bin/nile`                           |
-| `stores/ubisoft/`   | Ubisoft Connect       | UPC client in a per-game Wine prefix |
-| `stores/battlenet/` | Battle.net            | Battle.net client in a Wine prefix   |
-| `stores/microsoft/` | PC Game Pass / xCloud | Edge browser + CDP                   |
+| Package             | Store                   | Backend                              |
+| ------------------- | ----------------------- | ------------------------------------ |
+| `stores/epic/`      | Epic Games Store        | `bin/legendary`                      |
+| `stores/gog/`       | GOG                     | `bin/gogdl` + `bin/comet`            |
+| `stores/amazon/`    | Amazon Games            | `bin/nile`                           |
+| `stores/ubisoft/`   | Ubisoft Connect         | UPC client in a per-game Wine prefix |
+| `stores/battlenet/` | Battle.net              | Battle.net client in a Wine prefix   |
+| `stores/microsoft/` | PC Game Pass / xCloud   | Edge browser + CDP                   |
+| `stores/gamevault/` | GameVault (self-hosted) | The user's own server over HTTP      |
 
 ### Layer 5 — `services/`
 

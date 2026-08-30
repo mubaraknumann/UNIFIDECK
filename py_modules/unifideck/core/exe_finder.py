@@ -22,6 +22,7 @@ score-based search:
 Exported as both a class and a module-level singleton
 ``exe_finder``.
 """
+from __future__ import annotations
 
 import contextlib
 import logging

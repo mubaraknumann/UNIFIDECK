@@ -616,7 +616,14 @@ def test_check7_reports_both_the_stated_and_the_real_count(
     out = capsys.readouterr().out
     assert "docs/architecture.md:1" in out
     assert "says 5" in out
-    assert "the tree has 6" in out
+    # Derived, not written down: this assertion is about the message naming
+    # BOTH numbers, and hardcoding the real one means every new store breaks
+    # this test instead of the thing it guards. It said "6" until GameVault
+    # became the seventh.
+    real = len(mod.parse_store_caches(
+        repo_root / "py_modules/unifideck/bootstrap/cache_registry.py",
+    ))
+    assert f"the tree has {real}" in out
     assert "store-count-ok: <reason>" in out
 
 
