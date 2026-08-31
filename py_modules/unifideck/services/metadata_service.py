@@ -23,9 +23,9 @@ from unifideck.core.types import Game
 from unifideck.core.types.events import Events
 from unifideck.event_bus.event_bus_devex import auto_wire, subscribe
 from unifideck.services import metadata_backfill, metadata_sources, pcgw_backfill
+from unifideck.services.metadata_completeness import has_complete_metadata
 from unifideck.services.metadata_steam_mixin import (
-    STEAM_METADATA_NS,
-    STEAM_REAL_APPID_NS,
+    CACHE_NAMESPACE,
     _SteamMetadataMixin,
 )
 
@@ -36,7 +36,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-CACHE_NAMESPACE = "metadata"
 
 # Schema stamp for the unifiDB save-location block on a cached entry. Entries
 # without the current value are topped up in place by
@@ -186,39 +185,6 @@ class MetadataService(_SteamMetadataMixin):
             name="metadata-enrichment",
         )
 
-    def _has_complete_metadata(self, game: Game) -> bool:
-        """Check if metadata is already fully cached for a game."""
-        cache_key = f"{game.store}:{game.store_game_id}"
-        # 1. Check general metadata cache (positive or negative)
-        try:
-            cached_meta = self._cache.get(CACHE_NAMESPACE, cache_key)
-            if cached_meta is None:
-                return False
-        except Exception:
-            return False
-
-        # If it's a Steam-native game, general metadata is all we fetch
-        if game.store == "steam":
-            return True
-
-        # 2. For non-Steam games, check if real Steam AppID resolution is cached
-        try:
-            steam_id = self._cache.get(STEAM_REAL_APPID_NS, str(game.app_id))
-            if steam_id is None:
-                return False
-            if steam_id <= 0:
-                # Resolved to negative (no Steam counterpart exists)
-                return True
-
-            # 3. If it maps to a real Steam AppID, check if appdetails are cached
-            cached_details = self._cache.get(STEAM_METADATA_NS, str(steam_id))
-            if cached_details is None:
-                return False
-        except Exception:
-            return False
-
-        return True
-
     async def _run_enrichment(
         self, games: list[Game], *, is_force: bool = False,
         skip: bool = False,
@@ -281,7 +247,7 @@ class MetadataService(_SteamMetadataMixin):
         complete_games: list[Game] = []
         pending_games: list[Game] = []
         for g in games:
-            if self._has_complete_metadata(g):
+            if has_complete_metadata(self._cache, g):
                 complete_games.append(g)
             else:
                 pending_games.append(g)

@@ -256,3 +256,73 @@ def test_only_sweepable_stores_constructs_the_type() -> None:
         f"the whole point is that only the sweep-eligibility calculation "
         f"and reconcile's own narrow default can build one"
     )
+
+
+# ── The other half: the launch row ────────────────────────────────────
+#
+# The sweep above protects ``shortcuts.vdf``. ``_reconcile_phase_prune_map``
+# prunes ``games.map``, which is where the launcher resolves a game's
+# executable, and it was NOT scoped the same way — so a store that could
+# not answer kept its shortcut and lost the row behind it. The shortcut then
+# sits in the library looking installed and does nothing when launched.
+#
+# Measured on GameVault, whose server is a machine the user runs and so is
+# routinely offline. The sync did the right thing and said so:
+#
+#   [SyncService] gamevault could not read its library — keeping its
+#   existing shortcuts rather than treating this as an empty library
+#
+# and ``games.map`` was rewritten two lines later without the row.
+
+class _Host:
+    """Just enough of ShortcutService for the prune phase."""
+
+    def __init__(self, games_map: dict) -> None:
+        self._games_map = games_map
+
+
+def _prune(games_map: dict, valid_keys: set, valid_stores) -> tuple[int, dict]:
+    from unifideck.services.shortcut.reconcile_phases import (
+        _ReconcilePhasesMixin,
+    )
+
+    host = _Host(dict(games_map))
+    removed = _ReconcilePhasesMixin._reconcile_phase_prune_map(
+        host, valid_keys, valid_stores,
+    )
+    return removed, host._games_map
+
+
+def test_a_store_that_did_not_answer_keeps_its_launch_rows() -> None:
+    games_map = {"gamevault:1": object(), "epic:abc": object()}
+    # Epic answered (and still lists its game); GameVault answered not at all.
+    removed, remaining = _prune(
+        games_map, valid_keys={"epic:abc"}, valid_stores=frozenset({"epic"}),
+    )
+
+    assert removed == 0
+    assert set(remaining) == {"gamevault:1", "epic:abc"}
+
+
+def test_a_store_that_answered_still_drops_a_game_it_no_longer_lists() -> None:
+    """The phase must keep doing its job — this is a real removal."""
+    games_map = {"epic:gone": object(), "epic:kept": object()}
+
+    removed, remaining = _prune(
+        games_map, valid_keys={"epic:kept"}, valid_stores=frozenset({"epic"}),
+    )
+
+    assert removed == 1
+    assert set(remaining) == {"epic:kept"}
+
+
+def test_an_answering_store_with_an_empty_library_drops_its_rows() -> None:
+    """Symmetric with the sweep half above: empty is an answer."""
+    games_map = {"epic:gone": object()}
+
+    removed, remaining = _prune(
+        games_map, valid_keys=set(), valid_stores=frozenset({"epic"}),
+    )
+
+    assert removed == 1
+    assert remaining == {}

@@ -20,7 +20,6 @@ Design note — separate download_dir / install_dir:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import shutil
@@ -34,12 +33,16 @@ import aiohttp
 from unifideck.core.types import InstallResult, Result
 
 from .archive import _extract_archive, _mkdir_p
+from .markers import (
+    _load_all_install_info,
+    _load_install_info,
+    _remove_install_info,
+    _save_install_info,
+)
 
 logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
-
-_MARKER_DIR = Path("~/.local/share/unifideck/gamevault_installed").expanduser()
 
 # Exe scoring heuristics
 # Substrings that mark an executable as a bundled utility rather than the
@@ -97,8 +100,10 @@ class GameVaultInstaller:
         )
         # Off-thread: these can touch a sleeping SD card or a network mount,
         # and this coroutine shares the event loop with the download queue.
-        for d in (target_dir, effective_dl_dir, _MARKER_DIR):
+        for d in (target_dir, effective_dl_dir):
             await asyncio.to_thread(_mkdir_p, d)
+        # The marker directory is created by ``_save_install_info`` when
+        # there is something to record, so it is not pre-made here.
         return target_dir, effective_dl_dir
 
     async def install_game(
@@ -112,7 +117,22 @@ class GameVaultInstaller:
         progress_callback: ProgressCallback | None = None,
         download_dir: str | None = None,
     ) -> InstallResult:
-        """Download and extract a GameVault game."""
+        """Download and extract a GameVault game.
+
+        **Known gap: an archive that is an installer.** A GameVault library
+        holds whatever its owner uploaded, and that is often a repack or an
+        offline installer rather than a ready-to-run game directory. This
+        pipeline extracts and then looks for a launch target, which for such
+        an archive is the installer itself — so the shortcut launches Setup
+        rather than the game, and the user has to complete the install once
+        under Proton before the shortcut means anything.
+
+        Handling it properly needs a step this store does not have: run the
+        installer in the prefix, then re-scan for the real executable, the
+        way the wrapper stores let a vendor client install into a prefix.
+        Until then ``_find_executable`` at least never returns nothing when
+        an executable exists, and warns when all it found was a utility.
+        """
         target_dir, effective_dl_dir = await self._prepare_dirs(
             install_path, download_dir,
         )
@@ -218,24 +238,47 @@ class GameVaultInstaller:
     # ── Marker helpers (called by store.py) ────────────────────────
 
     def get_install_info(self, game_id: str) -> dict[str, Any] | None:
-        return _load_install_info(game_id)
+        """The persisted install marker, healing an empty ``exe_path``.
+
+        The marker is what ``get_library`` overlays onto the ``Game``, and
+        reconcile writes the games.map launch row from that — but **only when
+        the exe is non-empty**, because a library-sourced game legitimately
+        arrives without one. So a marker with ``exe_path: ""`` is not merely
+        incomplete, it is unrecoverable: every sync reads it, declines to
+        write a row, and the game stays unlaunchable.
+
+        That state was reachable: before ``_find_executable`` learned to fall
+        back, an archive whose only executable looked like a utility wrote an
+        empty marker. Re-scanning here costs a directory walk once — the
+        result is persisted — and turns a permanently broken install into a
+        self-correcting one, including for markers written by the version
+        that had the bug.
+        """
+        info = _load_install_info(game_id)
+        if info is None or info.get("exe_path"):
+            return info
+        install_path = info.get("install_path") or ""
+        if not install_path or not Path(install_path).is_dir():
+            return info
+        found = _find_executable(install_path)
+        if not found:
+            return info
+        logger.info(
+            "[GameVaultInstaller] healed empty exe_path for %s → %s",
+            game_id, found,
+        )
+        info["exe_path"] = found
+        _save_install_info(
+            game_id,
+            title=info.get("title", ""),
+            install_path=install_path,
+            exe_path=found,
+        )
+        return info
 
     def get_installed(self) -> dict[str, dict[str, Any]]:
-        result: dict[str, dict[str, Any]] = {}
-        if not _MARKER_DIR.exists():
-            return result
-        for f in _MARKER_DIR.glob("*.json"):
-            try:
-                result[f.stem] = json.loads(f.read_text())
-            except (OSError, ValueError) as exc:
-                # One unreadable marker must not hide every other
-                # installed game, but it should be visible: this is how a
-                # game silently reads as not-installed.
-                logger.warning(
-                    "[GameVaultInstaller] skipping unreadable marker %s: %s",
-                    f.name, exc,
-                )
-        return result
+        """``{game_id: marker}`` for every installed GameVault game."""
+        return _load_all_install_info()
 
     # ── Download helper ─────────────────────────────────────────────
 
@@ -366,85 +409,75 @@ def _discard_archive(archive_path: Path | None) -> None:
 # ── Exe finder ──────────────────────────────────────────────────────────────
 
 def _find_executable(install_dir: str) -> str | None:
-    """Score .exe candidates and return the best match."""
-    candidates: list[tuple[float, str]] = []
+    """Best-guess launch target under *install_dir*, or None if there is no exe.
 
-    for dirpath, _dirs, files in os.walk(install_dir):
-        depth = len(Path(dirpath).relative_to(install_dir).parts)
-        for fname in files:
-            if not fname.lower().endswith(".exe"):
-                continue
-            lower = fname.lower()
-            # Penalise utility executables
-            if any(k in lower for k in _UTIL_KEYWORDS):
-                continue
-            full = os.path.join(dirpath, fname)
-            # Score: prefer shallow + larger file
-            size = 0
-            try:
-                size = os.path.getsize(full)
-            except OSError:
-                pass
-            depth_score = max(0, _GOOD_DEPTH - depth)
-            size_score = min(size / (100 * 1024 * 1024), 5.0)  # cap at 5 pts
-            score = depth_score + size_score
-            candidates.append((score, full))
+    The keyword filter is a *preference*, not a validity test, so it degrades
+    instead of eliminating: when it rejects everything, the best rejected
+    candidate is returned rather than nothing.
 
-    if not candidates:
-        return None
-    candidates.sort(key=lambda x: x[0], reverse=True)
-    return candidates[0][1]
+    That distinction was worth a release. A GameVault library is whatever
+    archives its owner put there, and a repack's only executable is its
+    installer — the first real install produced exactly one ``.exe``,
 
+        Ghost of Tsushima [DODI Repack]/Setup.exe
 
-# ── Install marker helpers ───────────────────────────────────────────────────
+    which ``_UTIL_KEYWORDS`` rejects on "setup". With no fallback the marker
+    got ``exe_path: ""`` and reconcile wrote a games.map row with no target:
 
-def _marker_path(game_id: str) -> Path:
-    return _MARKER_DIR / f"{game_id}.json"
+        [ShortcutService] mark_installed gamevault:1 — empty exe_path;
+        launcher will not be able to resolve a target
 
-
-def _save_install_info(
-    game_id: str,
-    *,
-    title: str,
-    install_path: str,
-    exe_path: str,
-) -> None:
-    try:
-        _MARKER_DIR.mkdir(parents=True, exist_ok=True)
-        _marker_path(game_id).write_text(
-            json.dumps(
-                {
-                    "game_id": game_id,
-                    "title": title,
-                    "install_path": install_path,
-                    "exe_path": exe_path,
-                },
-                indent=2,
-            )
+    i.e. an install that reported success and could never launch. Handing
+    back the installer at least gives the user something to run — and see
+    ``GameVaultInstaller.install_game`` on why an archive that *is* an
+    installer is a known gap rather than a solved case.
+    """
+    preferred, rejected = _score_executables(install_dir)
+    if preferred:
+        return max(preferred)[1]
+    if rejected:
+        best = max(rejected)[1]
+        logger.warning(
+            "[GameVaultInstaller] every executable under %s looks like a "
+            "utility; using %s. If this archive is an installer, the game "
+            "still has to be installed from it before it will launch.",
+            install_dir, Path(best).name,
         )
-    except Exception:
-        logger.exception("[GameVaultInstaller] Could not save marker")
-
-
-def _load_install_info(game_id: str) -> dict[str, Any] | None:
-    p = _marker_path(game_id)
-    try:
-        if p.exists():
-            loaded = json.loads(p.read_text())
-            if isinstance(loaded, dict):
-                return loaded
-    except Exception as exc:
-        logger.debug("[GameVaultInstaller] Could not read marker: %s", exc)
+        return best
     return None
 
 
-def _remove_install_info(game_id: str) -> None:
-    p = _marker_path(game_id)
-    try:
-        if p.exists():
-            p.unlink()
-    except Exception as exc:
-        logger.warning("[GameVaultInstaller] Could not remove marker: %s", exc)
+def _score_executables(
+    install_dir: str,
+) -> tuple[list[tuple[float, str]], list[tuple[float, str]]]:
+    """``(preferred, rejected)`` ``(score, path)`` pairs for every ``.exe``.
+
+    Shallower and larger scores higher; the split is on ``_UTIL_KEYWORDS``.
+    Separate from the pick so :func:`_find_executable` stays under the
+    cognitive-complexity gate.
+    """
+    preferred: list[tuple[float, str]] = []
+    rejected: list[tuple[float, str]] = []
+    for dirpath, _dirs, files in os.walk(install_dir):
+        depth = len(Path(dirpath).relative_to(install_dir).parts)
+        depth_score = max(0, _GOOD_DEPTH - depth)
+        for fname in files:
+            if not fname.lower().endswith(".exe"):
+                continue
+            full = os.path.join(dirpath, fname)
+            try:
+                size = os.path.getsize(full)
+            except OSError:
+                size = 0
+            size_score = min(size / (100 * 1024 * 1024), 5.0)  # cap at 5 pts
+            scored = (depth_score + size_score, full)
+            pool = (
+                rejected
+                if any(k in fname.lower() for k in _UTIL_KEYWORDS)
+                else preferred
+            )
+            pool.append(scored)
+    return preferred, rejected
 
 
 # ── HTTP helpers ─────────────────────────────────────────────────────────────

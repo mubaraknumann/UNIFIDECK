@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any
 from unifideck.core.steam_appid_map import read_positive_steam_appid
 from unifideck.core.types.events import Events
 from unifideck.services import metadata_sources
+from unifideck.services.metadata_steam_mixin import CACHE_NAMESPACE
 
 if TYPE_CHECKING:
     from unifideck.core.cache_manager import CacheManager
@@ -55,7 +56,6 @@ _BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 # than imported so a future refactor of the service can rename the
 # namespaces without breaking the backfill. The wire-level cache
 # layout is the boundary; the constant names are not.
-_CACHE_NAMESPACE = "metadata"
 _STEAM_METADATA_NS = "steam_metadata"
 
 # Backfill is background work — keep concurrency low so we don't
@@ -100,7 +100,7 @@ async def _run(service: MetadataService, games: list[Game]) -> None:
         return_exceptions=True,
     )
     with contextlib.suppress(Exception):
-        service._cache.flush(_CACHE_NAMESPACE)
+        service._cache.flush(CACHE_NAMESPACE)
     logger.info(
         "[MetadataBackfill] metacritic backfill complete (%d games)",
         len(games),
@@ -180,7 +180,7 @@ def _has_cached_metacritic(cache: CacheManager, game: Game) -> bool:
     """A prior backfill (or any other writer) already populated the score."""
     cache_key = f"{game.store}:{game.store_game_id}"
     try:
-        entry = cache.get(_CACHE_NAMESPACE, cache_key)
+        entry = cache.get(CACHE_NAMESPACE, cache_key)
     except Exception:
         return False
     if not isinstance(entry, dict):
@@ -200,7 +200,7 @@ def _merge_into_metadata_cache(
     short-circuit.
     """
     cache_key = f"{game.store}:{game.store_game_id}"
-    existing = cache.get(_CACHE_NAMESPACE, cache_key)
+    existing = cache.get(CACHE_NAMESPACE, cache_key)
     merged: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
     merged.update(data)
     merged.pop("_negative", None)
@@ -213,7 +213,7 @@ def _merge_into_metadata_cache(
             merged["steam_appid"] = steam_id
     # Deferred write — one per backfilled game; ``_run`` flushes once
     # after the gather.
-    cache.set(_CACHE_NAMESPACE, cache_key, merged, flush=False)
+    cache.set(CACHE_NAMESPACE, cache_key, merged, flush=False)
 
 
 

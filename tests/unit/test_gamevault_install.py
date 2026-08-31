@@ -14,8 +14,10 @@ from unifideck.stores.gamevault.archive import _detect_format
 from unifideck.stores.gamevault.install import (
     GameVaultInstaller,
     _find_executable,
-    _load_install_info,
     _parse_filename_from_cd,
+)
+from unifideck.stores.gamevault.markers import (
+    _load_install_info,
     _remove_install_info,
     _save_install_info,
 )
@@ -113,8 +115,8 @@ def test_find_executable_does_not_filter_trainer_or_cheat_by_name(tmp_path):
 
 # ── install marker persistence ───────────────────────────────────────
 def test_save_and_load_install_info_roundtrip(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.install as install_mod
-    monkeypatch.setattr(install_mod, "_MARKER_DIR", tmp_path)
+    import unifideck.stores.gamevault.markers as markers_mod
+    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
 
     _save_install_info(
         "123", title="My Game", install_path="/games/mygame", exe_path="/games/mygame/Game.exe",
@@ -129,22 +131,22 @@ def test_save_and_load_install_info_roundtrip(tmp_path, monkeypatch):
 
 
 def test_load_install_info_missing_returns_none(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.install as install_mod
-    monkeypatch.setattr(install_mod, "_MARKER_DIR", tmp_path)
+    import unifideck.stores.gamevault.markers as markers_mod
+    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
     assert _load_install_info("does-not-exist") is None
 
 
 def test_load_install_info_corrupt_json_returns_none(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.install as install_mod
-    monkeypatch.setattr(install_mod, "_MARKER_DIR", tmp_path)
+    import unifideck.stores.gamevault.markers as markers_mod
+    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
     marker = tmp_path / "999.json"
     marker.write_text("{not valid json")
     assert _load_install_info("999") is None
 
 
 def test_remove_install_info_deletes_marker(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.install as install_mod
-    monkeypatch.setattr(install_mod, "_MARKER_DIR", tmp_path)
+    import unifideck.stores.gamevault.markers as markers_mod
+    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
     _save_install_info("42", title="T", install_path="/p", exe_path="/p/e.exe")
     assert (tmp_path / "42.json").exists()
     _remove_install_info("42")
@@ -152,14 +154,14 @@ def test_remove_install_info_deletes_marker(tmp_path, monkeypatch):
 
 
 def test_remove_install_info_missing_is_a_noop(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.install as install_mod
-    monkeypatch.setattr(install_mod, "_MARKER_DIR", tmp_path)
+    import unifideck.stores.gamevault.markers as markers_mod
+    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
     _remove_install_info("never-existed")  # must not raise
 
 
 def test_get_installed_reads_all_markers(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.install as install_mod
-    monkeypatch.setattr(install_mod, "_MARKER_DIR", tmp_path)
+    import unifideck.stores.gamevault.markers as markers_mod
+    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
     _save_install_info("1", title="A", install_path="/a", exe_path="/a/a.exe")
     _save_install_info("2", title="B", install_path="/b", exe_path="/b/b.exe")
 
@@ -171,22 +173,22 @@ def test_get_installed_reads_all_markers(tmp_path, monkeypatch):
 
 
 def test_get_installed_empty_dir_returns_empty(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.install as install_mod
-    monkeypatch.setattr(install_mod, "_MARKER_DIR", tmp_path)
+    import unifideck.stores.gamevault.markers as markers_mod
+    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
     installer = GameVaultInstaller(default_install_root="/root", download_dir="/dl")
     assert installer.get_installed() == {}
 
 
 def test_get_installed_missing_dir_returns_empty(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.install as install_mod
-    monkeypatch.setattr(install_mod, "_MARKER_DIR", tmp_path / "does-not-exist")
+    import unifideck.stores.gamevault.markers as markers_mod
+    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path / "does-not-exist")
     installer = GameVaultInstaller(default_install_root="/root", download_dir="/dl")
     assert installer.get_installed() == {}
 
 
 def test_get_install_info_delegates_to_module_function(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.install as install_mod
-    monkeypatch.setattr(install_mod, "_MARKER_DIR", tmp_path)
+    import unifideck.stores.gamevault.markers as markers_mod
+    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
     _save_install_info("7", title="T", install_path="/p", exe_path="/p/e.exe")
 
     installer = GameVaultInstaller(default_install_root="/root", download_dir="/dl")
@@ -231,8 +233,8 @@ def test_installer_expands_user_paths():
 
 
 async def test_uninstall_game_missing_install_returns_failure(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.install as install_mod
-    monkeypatch.setattr(install_mod, "_MARKER_DIR", tmp_path)
+    import unifideck.stores.gamevault.markers as markers_mod
+    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
     installer = GameVaultInstaller(default_install_root="/root", download_dir="/dl")
 
     result = await installer.uninstall_game("never-installed")
@@ -242,8 +244,8 @@ async def test_uninstall_game_missing_install_returns_failure(tmp_path, monkeypa
 
 
 async def test_uninstall_game_removes_dir_and_marker(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.install as install_mod
-    monkeypatch.setattr(install_mod, "_MARKER_DIR", tmp_path)
+    import unifideck.stores.gamevault.markers as markers_mod
+    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
     game_dir = tmp_path / "installed_game"
     game_dir.mkdir()
     (game_dir / "Game.exe").write_bytes(b"x")
@@ -257,3 +259,36 @@ async def test_uninstall_game_removes_dir_and_marker(tmp_path, monkeypatch):
     assert result.success is True
     assert not game_dir.exists()
     assert _load_install_info("55") is None
+
+
+# ── _find_executable must degrade, not eliminate ─────────────────────
+#
+# The keyword filter expresses a preference. When it rejects every
+# candidate, returning None produced an install that reported success and
+# could never launch: the first real GameVault install extracted a repack
+# whose only executable was ``Setup.exe``, the filter rejected it on
+# "setup", the marker got ``exe_path: ""`` and reconcile logged
+#
+#   mark_installed gamevault:1 — empty exe_path; launcher will not be able
+#   to resolve a target
+def test_find_executable_falls_back_when_everything_is_filtered(tmp_path):
+    """A repack whose only executable is its installer."""
+    repack = tmp_path / "Ghost of Tsushima [DODI Repack]"
+    repack.mkdir()
+    (repack / "Setup.exe").write_bytes(b"x" * 8_000_000)
+
+    assert _find_executable(str(tmp_path)) == str(repack / "Setup.exe")
+
+
+def test_find_executable_still_prefers_a_real_game_exe(tmp_path):
+    """The fallback must not weaken the preference when both exist."""
+    (tmp_path / "Setup.exe").write_bytes(b"x" * 9_000_000)
+    (tmp_path / "GhostOfTsushima.exe").write_bytes(b"x" * 1000)
+
+    assert _find_executable(str(tmp_path)) == str(tmp_path / "GhostOfTsushima.exe")
+
+
+def test_find_executable_returns_none_when_there_is_no_exe(tmp_path):
+    (tmp_path / "readme.txt").write_text("no executables here")
+
+    assert _find_executable(str(tmp_path)) is None

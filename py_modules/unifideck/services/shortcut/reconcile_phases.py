@@ -101,7 +101,7 @@ class _ReconcilePhasesMixin:
         # ``SweepableStores``, which only ``_sweepable_stores`` can build.
         if valid_stores is None:
             valid_stores = SweepableStores(frozenset(g.store for g in games))
-        removed = self._reconcile_phase_prune_map(valid_keys)
+        removed = self._reconcile_phase_prune_map(valid_keys, valid_stores)
         self._shortcuts = self._ensure_shortcuts_root(self._shortcuts)
         shortcuts_dict = self._shortcuts["shortcuts"]
         added, kept, reclaimed = self._reconcile_phase_sync_games(
@@ -157,10 +157,31 @@ class _ReconcilePhasesMixin:
     # ── Phase helpers ──────────────────────────────────────
 
     def _reconcile_phase_prune_map(
-        self: Any, valid_keys: set[str],
+        self: Any, valid_keys: set[str], valid_stores: SweepableStores,
     ) -> int:
-        """Phase 1: drop ``_games_map`` keys absent from ``valid_keys``."""
-        stale_keys = [k for k in self._games_map if k not in valid_keys]
+        """Phase 1: drop ``_games_map`` keys absent from ``valid_keys``.
+
+        **Scoped by ``valid_stores``, for the same reason the shortcut sweep
+        below is.** A store that could not answer this sync contributes no
+        games, so every one of its keys looks stale — and pruning them is
+        §3.5 finding B one layer down: the shortcut survives (that sweep is
+        already scoped) but loses the games.map row the launcher resolves its
+        executable from. The shortcut then sits in the library looking
+        installed and does nothing when launched, which reads to the user as
+        "it turned into a plain non-Steam shortcut".
+
+        Measured on GameVault, whose server is a machine the user runs and
+        so is routinely offline: the fetch failed, the sync correctly logged
+        "keeping its existing shortcuts rather than treating this as an empty
+        library", and the row was pruned two lines later anyway.
+
+        A store that answered and no longer lists a game still drops it —
+        that is a real removal, and it is what this phase is for.
+        """
+        stale_keys = [
+            k for k in self._games_map
+            if k not in valid_keys and k.split(":", 1)[0] in valid_stores
+        ]
         for key in stale_keys:
             del self._games_map[key]
         return len(stale_keys)
