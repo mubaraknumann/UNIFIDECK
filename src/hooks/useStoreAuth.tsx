@@ -15,8 +15,11 @@
  *  - `busy`        : true when an auth call is in flight
  */
 import { useCallback, useState } from "react";
+import { call } from "@decky/api";
 import { showModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
+import { rpcRoutes } from "../api/rpc-routes";
+import { prepareForSync } from "../lib/steam-bridge/prepare-sync";
 import { useAuth } from "../contexts/AuthContext";
 import { useStores } from "../contexts/StoreContext";
 import { useToast } from "./useToast";
@@ -83,14 +86,30 @@ export function useStoreAuth(store: StoreId): UseStoreAuthResult {
     // coordinates exactly the handshake this store does not have, so the
     // flow takes the modal route before the dispatcher is ever asked. The
     // chain itself lives in ``connectGameVault``; everything after it —
-    // notifyConnected, the toasts, the AuthResult shape — matches the
-    // dispatcher path below so the two cannot report success differently.
+    // notifyConnected, the toasts, the post-login sync, the AuthResult shape
+    // — is kept in step with the dispatcher path below by hand, so the two
+    // cannot report success differently. That is not free: the sync kick was
+    // missing here for exactly that reason, and a freshly connected GameVault
+    // showed nothing until the user pressed Sync themselves.
     if (store === "gamevault") {
       const result = await connectGameVault({ setBusy });
       if (result === null) return null;
       if (result.success) {
         auth.notifyConnected(store);
         toast.success(t("auth.toasts.connected", { store: storeName }));
+        // The dispatcher's post-login sync, which this branch never reaches.
+        // Fire-and-forget for the same reason it is there: the backend queues
+        // it behind any in-flight sync (SyncService._enqueue), and awaiting
+        // would leave the Sign In button spinning for a whole sync.
+        // ``prepareForSync`` first — a bare requestAuthSync is the gap that
+        // made the automatic sync behave differently from the manual one.
+        void prepareForSync()
+          .then(() =>
+            call<[StoreId], unknown>(rpcRoutes.requestAuthSync, store),
+          )
+          .catch((e) => {
+            console.error(`[useStoreAuth:${store}] requestAuthSync failed:`, e);
+          });
       } else {
         toast.error(
           t("auth.toasts.failed", { store: storeName }),

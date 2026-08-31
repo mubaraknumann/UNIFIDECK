@@ -66,6 +66,53 @@ def test_directory_prefix_is_dropped():
     )
 
 
+# ── Paths written by the other OS ────────────────────────────────────
+def test_windows_drive_path_is_reduced_to_its_filename():
+    """A self-hosted Windows server hands back its own path spelling.
+
+    ``pathlib.Path`` on the Deck is ``PosixPath``, which does not split on
+    ``\\``, so this used to yield the whole string as the shortcut name.
+    """
+    parsed = parse_archive_name(
+        r"C:\Users\numan\Vault\files"
+        r"\Brogue Community Edition (v1.15.1) (W_P) (2024).zip",
+    )
+    assert parsed.title == "Brogue Community Edition"
+    assert parsed.version == "v1.15.1"
+    assert parsed.game_type == "W_P"
+    assert parsed.year == 2024
+
+
+def test_windows_forward_slash_path_is_reduced_to_its_filename():
+    assert parse_archive_name(
+        "C:/Users/numan/Vault/files/Warzone 2100 (4.7.0).zip",
+    ).title == "Warzone 2100 (4.7.0)"
+
+
+def test_unc_path_is_reduced_to_its_filename():
+    assert parse_archive_name(
+        r"\\nas\vault\Endless Sky (2019).zip",
+    ).title == "Endless Sky"
+
+
+def test_a_bare_name_containing_a_backslash_is_left_alone():
+    """The guard on the ``lv_`` ids.
+
+    A backslash is a legal character in a Linux filename, and local mode
+    parses bare names straight off the vault folder. Splitting on ``\\``
+    unconditionally would change ``ParsedName.identity``, which re-keys the
+    ``lv_<sha1>`` game id and orphans an existing shortcut's appId, playtime
+    and artwork. Only a drive-letter or UNC *prefix* triggers Windows
+    semantics.
+    """
+    assert parse_archive_name(r"My\Game (2021).zip").title == r"My\Game"
+
+
+def test_a_bare_backslash_name_keeps_its_identity():
+    """Belt and braces on the same hazard, at the level ids derive from."""
+    assert parse_archive_name(r"My\Game (2021).zip").identity == "my game|2021"
+
+
 # ── Game type ────────────────────────────────────────────────────────
 @pytest.mark.parametrize(
     ("token", "is_linux", "is_installer"),

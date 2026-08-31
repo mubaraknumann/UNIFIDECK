@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import Game
 
-from .filename import parse_archive_name
+from .filename import leaf_name, parse_archive_name
 
 if TYPE_CHECKING:
     from .auth import GameVaultAuth
@@ -187,15 +187,36 @@ class RemoteCatalog:
 
     @staticmethod
     def _extract_title(item: dict[str, Any]) -> str:
-        """Prefer IGDB/metadata title, then parse from file_path."""
-        # New API: metadata.title → boxart.title → file_path parsing
+        r"""The best display title the API offered, in curation order.
+
+        ``metadata`` first: GameVault's ``metadata`` is the *effective* merged
+        record — provider data with the owner's ``user_metadata`` layered over
+        it — and the server's own clients prefer it, so a user who renamed a
+        game in GameVault gets that name here.
+
+        Then the entity's own top-level ``title``. This is the field that used
+        to be missing, and its absence was the whole bug: ``metadata`` is
+        ``null`` until a metadata provider has enriched the game, and on a
+        self-hosted server with no IGDB credentials that is *every* game. So
+        the code fell straight through to the filename parser and shipped
+        ``C:\Users\numan\Vault\files\Endless Sky`` as the shortcut name — which
+        also starved every title-matched enrichment source we have (SGDB, the
+        Steam CDN, unifiDB, Metacritic).
+
+        ``sort_title`` is deliberately not consulted: it is lowercased, so it
+        can only ever produce a worse ``AppName``.
+        """
         metadata = item.get("metadata") or {}
         if isinstance(metadata, dict):
             title = metadata.get("title") or metadata.get("name", "")
             if isinstance(title, str) and title:
                 return title
 
-        # Legacy / fallback: derive from file path
+        top_level = item.get("title")
+        if isinstance(top_level, str) and top_level:
+            return top_level
+
+        # Last resort: derive from the file path.
         file_path = item.get("file_path") or item.get("path", "")
         if isinstance(file_path, str) and file_path:
             return _parse_title_from_filename(file_path)
@@ -227,10 +248,14 @@ def _parse_title_from_filename(file_path: str) -> str:
     A thin adapter over :func:`~.filename.parse_archive_name`, which owns the
     naming grammar for both modes. Kept as a named function because it is the
     fallback the remote path reaches for when the server's metadata lookup
-    found nothing, and because falling back to the raw *file_path* — rather
-    than to an empty title — is behaviour worth stating where it is used.
+    found nothing, and because falling back to the *filename* — rather than to
+    an empty title — is behaviour worth stating where it is used.
+
+    The fallback is ``leaf_name``, not the raw *file_path*: a full Windows
+    path as an ``AppName`` is precisely the reported symptom, and it should
+    not survive even the last-ditch branch.
     """
-    return parse_archive_name(file_path).title or file_path
+    return parse_archive_name(file_path).title or leaf_name(file_path)
 
 
 async def _read_page(

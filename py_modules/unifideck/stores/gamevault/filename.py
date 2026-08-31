@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 # Windows/Linux × portable/setup, as GameVault spells them. ``_SETUP_TYPES``
@@ -120,6 +120,31 @@ class ParsedName:
         return f"{_normalise_for_identity(self.title)}|{self.year or ''}"
 
 
+# A path only Windows could have written: a drive letter, or a UNC share.
+# A GameVault server stores each library file's path as its own OS spells it,
+# so a self-hosted Windows server hands a Linux client
+# ``C:\Users\me\Vault\files\Game.zip`` — and ``Path(...).name`` there is
+# ``PosixPath``, which does not treat ``\`` as a separator and so returns the
+# *whole string* as the filename. That is how a shortcut ended up named
+# ``C:\Users\numan\Vault\files\Endless Sky``.
+#
+# Gated on the prefix rather than splitting on ``[\\/]`` unconditionally, and
+# that is load-bearing: local mode parses *bare* filenames
+# (``local_catalog._scan``), a backslash is a legal character in a Linux
+# filename, and ``ParsedName.identity`` is what ``lv_`` game ids — and
+# therefore Steam appIds, playtime and grid files — derive from. Splitting a
+# bare ``My\Game.zip`` would silently re-key that shortcut and orphan it.
+# No real vault filename starts with ``X:\``, ``X:/`` or ``\\``.
+_WINDOWS_PATH_RE = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
+
+
+def leaf_name(file_path: str) -> str:
+    """The filename part of *file_path*, whichever OS wrote it."""
+    if _WINDOWS_PATH_RE.match(file_path):
+        return PureWindowsPath(file_path).name
+    return PurePosixPath(file_path).name
+
+
 def strip_extension(name: str) -> str:
     """*name* without a recognised archive/executable extension."""
     lowered = name.lower()
@@ -143,7 +168,7 @@ def parse_archive_name(file_path: str) -> ParsedName:
     title. That tolerance is the point — ``Game (Deluxe Edition) (2019).zip``
     must keep its edition, while ``(2019)`` is metadata.
     """
-    stem = strip_extension(Path(file_path).name)
+    stem = strip_extension(leaf_name(file_path))
     fields: dict[str, Any] = {}
 
     while (match := _TRAILING_TOKEN_RE.search(stem)) is not None:

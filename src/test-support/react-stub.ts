@@ -14,6 +14,28 @@ function useMemo<T>(factory: () => T, _deps?: readonly unknown[]): T {
   return factory();
 }
 
+/**
+ * `useState` that never re-renders: the setter mutates a cell the hook body
+ * cannot observe again, because the body is only ever run once per call here.
+ * Enough to unit-test a hook whose *effects* are the thing under test
+ * (`useStoreAuth` firing the post-login sync) and honest about what it does
+ * not cover: nothing that depends on reading state back after a set.
+ */
+function useState<T>(initial: T): [T, (next: T) => void] {
+  let value = initial;
+  return [
+    value,
+    (next: T) => {
+      value = next;
+    },
+  ];
+}
+
+/** `useCallback`: hand the function straight back, deps ignored. */
+function useCallback<T>(fn: T, _deps?: readonly unknown[]): T {
+  return fn;
+}
+
 const React = {
   createElement: (
     type: unknown,
@@ -21,7 +43,9 @@ const React = {
     ...children: unknown[]
   ): Record<string, unknown> => ({ type, props, children }),
   useMemo,
+  useState,
+  useCallback,
 };
 
-export { useMemo };
+export { useMemo, useState, useCallback };
 export default React;

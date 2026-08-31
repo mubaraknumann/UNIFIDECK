@@ -82,6 +82,13 @@ def test_parse_title_falls_back_to_filename_when_result_empty():
     assert _parse_title_from_filename("(2020).zip") == "(2020).zip"
 
 
+def test_parse_title_fallback_never_returns_a_whole_windows_path():
+    """Even the last-ditch branch must not ship a path as the AppName."""
+    assert _parse_title_from_filename(
+        r"C:\Users\numan\Vault\files\(2020).zip",
+    ) == "(2020).zip"
+
+
 # ── _extract_title ────────────────────────────────────────────────────
 def test_extract_title_prefers_metadata_title():
     reader = _reader()
@@ -105,6 +112,82 @@ def test_extract_title_falls_back_to_id_placeholder():
     reader = _reader()
     item = {"id": 42}
     assert reader._extract_title(item) == "GameVault Game #42"
+
+
+def test_extract_title_prefers_top_level_over_file_path():
+    """The field that was missing, and the whole of the reported bug.
+
+    ``metadata`` is null until a provider has enriched the game, which on a
+    self-hosted server with no IGDB credentials is every game — but the
+    server's own indexer always fills the top-level ``title``.
+    """
+    reader = _reader()
+    item = {
+        "id": 3,
+        "metadata": None,
+        "title": "Endless Sky",
+        "file_path": r"C:\Users\numan\Vault\files\Endless Sky.zip",
+    }
+    assert reader._extract_title(item) == "Endless Sky"
+
+
+def test_extract_title_prefers_metadata_over_top_level():
+    """Pins the precedence: curated metadata beats the server's own guess."""
+    reader = _reader()
+    item = {"metadata": {"title": "Curated"}, "title": "Server Guess"}
+    assert reader._extract_title(item) == "Curated"
+
+
+def test_extract_title_of_a_windows_path_is_never_the_whole_path():
+    """No ``title`` at all, so the filename parser is the only source left.
+
+    It must still not produce ``C:\\Users\\numan\\Vault\\files\\Warzone 2100``
+    — a path-shaped AppName also starves every title-matched enrichment
+    source we have (SGDB, the Steam CDN, unifiDB, Metacritic).
+    """
+    reader = _reader()
+    item = {
+        "id": 10,
+        "metadata": None,
+        "file_path": (
+            r"C:\Users\numan\Vault\files\Warzone 2100 (W_P) (2024).zip"
+        ),
+    }
+    result = reader._extract_title(item)
+    assert result == "Warzone 2100"
+    assert "\\" not in result
+    assert "C:" not in result
+
+
+def test_extract_title_of_a_real_server_item():
+    """Verbatim from a GameVault v17.0.0 server with no metadata provider."""
+    reader = _reader()
+    item = {
+        "id": 1,
+        "file_path": (
+            r"C:\Users\numan\Vault\files"
+            r"\Brogue Community Edition (v1.15.1) (W_P) (2024).zip"
+        ),
+        "size": "1746464",
+        "title": "Brogue Community Edition",
+        "sort_title": "brogue community edition",
+        "version": "v1.15.1",
+        "versions": [],
+        "release_date": "2024-01-01T00:00:00.000Z",
+        "early_access": False,
+        "download_count": 0,
+        "type": "WINDOWS_PORTABLE",
+        "provider_metadata": [],
+        "metadata": None,
+    }
+    assert reader._extract_title(item) == "Brogue Community Edition"
+
+
+def test_extract_title_ignores_sort_title():
+    """``sort_title`` is lowercased, so it can only ever be a worse AppName."""
+    reader = _reader()
+    item = {"id": 1, "metadata": None, "sort_title": "endless sky"}
+    assert reader._extract_title(item) == "GameVault Game #1"
 
 
 # ── _extract_cover_url ───────────────────────────────────────────────
