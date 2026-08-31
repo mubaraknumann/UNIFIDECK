@@ -14,6 +14,7 @@ call in the package, and it was already being tested directly.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .games_map import UNIFIDECK_TAG, GameMapEntry, generate_app_id
@@ -305,10 +306,47 @@ class _ReconcilePhasesMixin:
         exe = game.exe_path or ""
         if game.installed and exe:
             self._games_map[key] = GameMapEntry(
-                exe=exe, work_dir=game.install_path or "", app_id=app_id,
+                exe=self._durable_exe(key, exe),
+                work_dir=game.install_path or "",
+                app_id=app_id,
             )
         elif not (game.installed and key in self._games_map):
             self._games_map.pop(key, None)
+
+    def _durable_exe(self: Any, key: str, store_exe: str) -> str:
+        """The exe to record: an established one wins while it still exists.
+
+        The row is also where "Change executable" stores the user's choice
+        for the direct-launch stores, so overwriting it from the library
+        silently reverts that choice on the next sync. GOG hit this: its
+        ``get_library`` carries ``exe_path`` from a fresh disk scan
+        (``exe_key="executable"``) because it must discover installs Unifideck
+        did not perform, and the scan knows nothing about what the user
+        picked. Amazon and Epic were unaffected only because neither carries
+        an exe at all — which is what made the bug invisible: the guard below
+        was written on the docstring's claim that *no* library-sourced game
+        carries one.
+
+        The disk check is what keeps this from going stale. A recorded exe
+        that no longer exists means the install moved or was replaced, and
+        then the store's fresh value is the better answer. "Reset to default"
+        (``reset_game_executable``) remains the explicit way back.
+        """
+        existing = self._games_map.get(key)
+        recorded = getattr(existing, "exe", "") or ""
+        if not recorded or recorded == store_exe:
+            return store_exe
+        if not Path(recorded).is_file():
+            logger.info(
+                "[ShortcutService] %s recorded exe is gone, taking the "
+                "store's: %s", key, store_exe,
+            )
+            return store_exe
+        logger.debug(
+            "[ShortcutService] %s keeping established exe %s (store offered "
+            "%s)", key, recorded, store_exe,
+        )
+        return recorded
 
     def _try_reclaim_orphan(
         self: Any,

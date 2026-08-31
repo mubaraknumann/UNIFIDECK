@@ -61,7 +61,18 @@ class GameVaultLibraryReader:
                 if install_info:
                     game.installed = True
                     game.install_path = install_info.get("install_path")
-                    game.exe_path = install_info.get("exe_path")
+                    # ``exe_path`` is deliberately NOT carried. The launch
+                    # target is written once, at install time, and after that
+                    # it belongs to the user: a GameVault archive is whatever
+                    # its owner uploaded, so the auto-detected executable is a
+                    # guess more often than for any other store, and Change
+                    # Executable is the fix. Reconcile only overwrites a
+                    # games.map row when the synced game carries an exe — so
+                    # by carrying none, a sync can never revert that choice.
+                    # (Epic and Amazon behave the same way; GOG carries one
+                    # because it must discover installs it did not perform,
+                    # which is why it needed the separate fix in
+                    # ``_update_games_map_row``.)
                 games.append(game)
         logger.info("[GameVaultLibrary] %d game(s) fetched", len(games))
         return games

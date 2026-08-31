@@ -210,6 +210,18 @@ class GameVaultStore(StoreBase):
         """GameVault does not expose a server-side update API."""
         return []
 
+    async def get_installed_path(self, game_id: str) -> str | None:
+        """Install dir per our own marker, or ``None`` if not installed.
+
+        The hook every store implements. It matters more here than
+        elsewhere: it is what lets Change Executable resolve a directory when
+        the games.map row is missing, which for this store is the situation
+        the picker exists for.
+        """
+        info = self._installer.get_install_info(game_id)
+        path = (info or {}).get("install_path")
+        return path if isinstance(path, str) and path else None
+
     async def get_game_size(self, game_id: str) -> int | None:
         headers = await self._auth.get_auth_headers()
         if not headers:

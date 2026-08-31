@@ -238,43 +238,18 @@ class GameVaultInstaller:
     # ── Marker helpers (called by store.py) ────────────────────────
 
     def get_install_info(self, game_id: str) -> dict[str, Any] | None:
-        """The persisted install marker, healing an empty ``exe_path``.
+        """The persisted install marker for *game_id*, verbatim.
 
-        The marker is what ``get_library`` overlays onto the ``Game``, and
-        reconcile writes the games.map launch row from that — but **only when
-        the exe is non-empty**, because a library-sourced game legitimately
-        arrives without one. So a marker with ``exe_path: ""`` is not merely
-        incomplete, it is unrecoverable: every sync reads it, declines to
-        write a row, and the game stays unlaunchable.
-
-        That state was reachable: before ``_find_executable`` learned to fall
-        back, an archive whose only executable looked like a utility wrote an
-        empty marker. Re-scanning here costs a directory walk once — the
-        result is persisted — and turns a permanently broken install into a
-        self-correcting one, including for markers written by the version
-        that had the bug.
+        Deliberately does not guess. An earlier version re-scanned the
+        install directory when ``exe_path`` was empty and wrote the guess
+        back — which then flowed through ``get_library`` into the games.map
+        row on every sync, overwriting whatever launch target the user had
+        chosen in Change Executable. Choosing the executable matters more
+        for this store than for any other, because a GameVault archive is
+        whatever its owner uploaded; so the guess belongs at install time
+        only, and fixing a bad one belongs to the user.
         """
-        info = _load_install_info(game_id)
-        if info is None or info.get("exe_path"):
-            return info
-        install_path = info.get("install_path") or ""
-        if not install_path or not Path(install_path).is_dir():
-            return info
-        found = _find_executable(install_path)
-        if not found:
-            return info
-        logger.info(
-            "[GameVaultInstaller] healed empty exe_path for %s → %s",
-            game_id, found,
-        )
-        info["exe_path"] = found
-        _save_install_info(
-            game_id,
-            title=info.get("title", ""),
-            install_path=install_path,
-            exe_path=found,
-        )
-        return info
+        return _load_install_info(game_id)
 
     def get_installed(self) -> dict[str, dict[str, Any]]:
         """``{game_id: marker}`` for every installed GameVault game."""

@@ -158,7 +158,14 @@ async def test_get_library_marks_installed_games():
     assert len(games) == 1
     assert games[0].installed is True
     assert games[0].install_path == "/games/mygame"
-    assert games[0].exe_path == "/games/mygame/Game.exe"
+    # The exe is deliberately NOT carried, even though the marker has one.
+    # Reconcile only rewrites a games.map row when the synced game brings an
+    # exe, so carrying it would revert the user's Change Executable choice on
+    # every sync — which matters more for this store than any other, because
+    # a GameVault archive is whatever its owner uploaded and the
+    # auto-detected target is a guess. The launch target is written once at
+    # install time and belongs to the user after that.
+    assert not games[0].exe_path
 
 
 async def test_get_library_uninstalled_games_stay_uninstalled():
