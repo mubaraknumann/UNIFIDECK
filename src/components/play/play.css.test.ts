@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * Every `unifideck-*-btn` class a component puts on a button must have a rule
@@ -25,12 +26,18 @@ function walk(dir: string): string[] {
 
 const BUTTON_CLASS = /"(unifideck-[a-z0-9-]+-btn)"/g;
 
+// Paths come from `import.meta.url`, not `__dirname`: this file is ESM, where
+// `__dirname` exists only because Vitest shims it in. The shim is not part of
+// the module format, so it disappears under any other runner. Same idiom
+// vitest.config.ts already uses.
+const here = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
+
 // Read as text rather than imported: play.css.ts pulls in @decky/ui, which
 // needs a React runtime this suite deliberately does not have.
-const CSS = readFileSync(join(__dirname, "play.css.ts"), "utf-8");
+const CSS = readFileSync(here("./play.css.ts"), "utf-8");
 
 const used = new Set<string>();
-for (const file of walk(join(__dirname, "..", ".."))) {
+for (const file of walk(here("../../"))) {
   const source = readFileSync(file, "utf-8");
   if (file.endsWith("play.css.ts")) continue;
   for (const [, name] of source.matchAll(BUTTON_CLASS)) used.add(name);
