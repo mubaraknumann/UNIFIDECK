@@ -169,3 +169,89 @@ def test_prefer_native_still_falls_back_to_windows_when_mislabelled(tmp_path):
     assert find_executable(str(tmp_path), prefer_native=True) == str(
         tmp_path / "Game.exe",
     )
+
+
+# ── MonoKickstart Linux builds ───────────────────────────────────────
+# A GOG Linux game ships a PE32 ``.exe`` that is a Mono assembly, plus a bash
+# script named after the game and native ``.so``s in ``lib64``. Proton cannot
+# run the assembly; the script is the entry point, and the launcher already
+# routes a non-``.exe`` target down its native path. See UD notes for Bastion.
+def _mono_linux_build(root, *, title: str = "Bastion"):
+    """A GOG-shaped native Linux build under ``root/game``."""
+    game = root / "game"
+    game.mkdir(parents=True)
+    (game / f"{title}.exe").write_bytes(b"MZ" + b"\x00" * (3 * 1024 * 1024))
+    launcher = game / title
+    launcher.write_text("#!/bin/bash\ncd \"`dirname \"$0\"`\"\n")
+    launcher.chmod(0o755)
+    (game / "monoconfig").write_text("<configuration/>")
+    lib64 = game / "lib64"
+    lib64.mkdir()
+    (lib64 / "libmono-2.0.so.1").write_bytes(b"\x7fELF" + b"\x00" * 100)
+    return game
+
+
+def test_shebang_script_is_a_native_candidate(tmp_path):
+    """An extensionless bash script is launchable; the ELF-only probe missed it."""
+    script = tmp_path / "Bastion"
+    script.write_text("#!/bin/bash\necho hi\n")
+    script.chmod(0o755)
+    assert find_executable(str(tmp_path)) == str(script)
+
+
+def test_mono_linux_build_picks_the_script_not_the_exe(tmp_path):
+    """The whole Bastion defect, end to end: no ``prefer_native`` token needed."""
+    game = _mono_linux_build(tmp_path)
+    assert find_executable(str(tmp_path), title="Bastion") == str(
+        game / "Bastion",
+    )
+
+
+def test_mono_linux_build_is_fixed_without_a_title(tmp_path):
+    """The demotion alone is enough — ``title`` only sharpens the score."""
+    game = _mono_linux_build(tmp_path)
+    assert find_executable(str(tmp_path)) == str(game / "Bastion")
+
+
+def test_mono_marker_via_lib64_only(tmp_path):
+    """``libmono-*.so`` in a pruned lib dir is detected by name, not by walking."""
+    game = tmp_path / "game"
+    game.mkdir()
+    (game / "Game.exe").write_bytes(b"MZ" + b"\x00" * 1000)
+    script = game / "Game"
+    script.write_text("#!/bin/sh\n")
+    script.chmod(0o755)
+    lib64 = game / "lib64"
+    lib64.mkdir()
+    (lib64 / "libmono-2.0.so.1").write_bytes(b"\x7fELF")
+    assert find_executable(str(tmp_path)) == str(script)
+
+
+def test_mono_exe_still_wins_when_there_is_no_script(tmp_path):
+    """Demotion, not rejection: a lone assembly beats returning nothing."""
+    game = tmp_path / "game"
+    game.mkdir()
+    exe = game / "Game.exe"
+    exe.write_bytes(b"MZ" + b"\x00" * 1000)
+    (game / "monoconfig").write_text("<configuration/>")
+    assert find_executable(str(tmp_path)) == str(exe)
+
+
+def test_a_plain_windows_game_is_unaffected_by_the_mono_probe(tmp_path):
+    """No Mono markers → the ``.exe`` keeps winning over an incidental script."""
+    (tmp_path / "Game.exe").write_bytes(b"MZ" + b"\x00" * (5 * 1024 * 1024))
+    helper = tmp_path / "runme"
+    helper.write_text("#!/bin/sh\n")
+    helper.chmod(0o755)
+    assert find_executable(str(tmp_path)) == str(tmp_path / "Game.exe")
+
+
+def test_title_match_ignores_punctuation_and_case(tmp_path):
+    """``Baldurs Gate`` the title vs ``BaldursGate`` the file."""
+    script = tmp_path / "BaldursGate"
+    script.write_text("#!/bin/sh\n")
+    script.chmod(0o755)
+    _elf(tmp_path / "other_bin", size=20_000_000)
+    assert find_executable(
+        str(tmp_path), title="Baldur's Gate",
+    ) == str(script)

@@ -37,7 +37,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from unifideck.core.safe_delete import safe_rmtree
+from unifideck.core.safe_delete import foreign_installs_under, safe_rmtree
 from unifideck.core.types import InstallResult, Result
 
 from .archive import extract_archive, mkdir_p
@@ -55,29 +55,53 @@ logger = logging.getLogger(__name__)
 STORE_NAME = "gamevault"
 
 
-def _would_delete_the_archive(install_path: str, archive_path: str) -> bool:
-    """True when removing *install_path* would take *archive_path* with it.
+_MAX_DIR_ATTEMPTS = 20
 
-    Local mode's one unforgivable failure: the archive is the user's own
-    file and usually their only copy. Remote mode cannot hit this — its
-    archive is a staged download that was already released — so the check
-    costs nothing there and is the whole guarantee here.
 
-    Resolves both sides first, so a symlinked vault cannot slip past on a
-    string comparison. An unresolvable path is treated as unsafe.
+def _free_game_dir(target_dir: Path, dir_name: str, game_id: str) -> Path:
+    """A directory under *target_dir* that no other store's install owns.
+
+    ``dir_name`` is the title reduced to a folder name, which is exactly what
+    the other stores derive too — so ``<root>/Bastion`` is GOG's folder for
+    Bastion *and* the natural one for a ``Bastion.zip`` in the vault. Sharing
+    it is not survivable: GOG's install planner treats unrecognised data in
+    its target as orphaned and deletes the directory, which is how a real
+    device lost this extraction four times in one evening.
+
+    Uniquifies rather than failing. The user asked for an install and there is
+    a correct place to put it; refusing would just make them rename files.
+
+    Blocking (reads games.map, stats directories) — call from a thread.
     """
-    if not archive_path:
-        return False
-    try:
-        install = Path(install_path).expanduser().resolve()
-        archive = Path(archive_path).expanduser().resolve()
-    except (OSError, RuntimeError):
-        return True
-    try:
-        archive.relative_to(install)
-    except ValueError:
-        return False
-    return True
+    first = target_dir / dir_name
+    for attempt in range(_MAX_DIR_ATTEMPTS):
+        candidate = first if attempt == 0 else target_dir / (
+            f"{dir_name} (GameVault)" if attempt == 1
+            else f"{dir_name} (GameVault {attempt})"
+        )
+        foreign = foreign_installs_under(
+            candidate, owner_key=f"{STORE_NAME}:{game_id}",
+        )
+        if not foreign:
+            if candidate != first:
+                logger.info(
+                    "[GameVaultInstaller] %s is owned by another store; "
+                    "installing to %s instead", first, candidate,
+                )
+            return candidate
+        logger.warning(
+            "[GameVaultInstaller] %s holds install(s) for %s; trying the "
+            "next name", candidate, ", ".join(sorted(foreign)),
+        )
+    # Every candidate was taken, which means something is badly wrong with
+    # games.map rather than with this install. Fall back to the plain name so
+    # the install still happens; the ownership guard in ``uninstall_game``
+    # still protects the user's archive.
+    logger.error(
+        "[GameVaultInstaller] no free directory near %s after %d tries; "
+        "using it anyway", first, _MAX_DIR_ATTEMPTS,
+    )
+    return first
 
 
 class GameVaultInstaller:
@@ -111,13 +135,16 @@ class GameVaultInstaller:
             if progress_callback:
                 await progress_callback({"phase": "extracting"})
 
-            game_dir = target_dir / acquired.dir_name
+            game_dir = await asyncio.to_thread(
+                _free_game_dir, target_dir, acquired.dir_name, game_id,
+            )
             await extract_archive(acquired.path, game_dir)
 
             exe_path = await asyncio.to_thread(
                 find_executable,
                 str(game_dir),
                 prefer_native=acquired.prefer_native,
+                title=acquired.title,
             )
             save_install_info(
                 game_id,
@@ -151,18 +178,18 @@ class GameVaultInstaller:
     async def uninstall_game(self, game_id: str) -> Result:
         """Remove the extracted game and its marker.
 
-        Only ever touches ``install_path`` — the directory this pipeline
-        created — and never the archive the game came from. In local mode
-        that archive belongs to the user and is usually their only copy.
+        Only ever touches ``install_path``, the directory this pipeline
+        created. The vault archive lives outside it, so it is not at risk:
+        ``install_path`` is always ``<install root>/<game dir>``, and the
+        extraction created that directory. An archive can only be inside it
+        if the user put it there by hand, and then it is part of the folder
+        they asked to remove.
 
-        The guarantee is checked **here, at the moment of deletion**, against
-        the ``archive_path`` recorded in the marker. An earlier version
-        instead refused to *connect* when the vault and the install root
-        overlapped, which was both more annoying and weaker: the install root
-        is not fixed at connect time. Every install goes through the shared
-        storage picker, so the user can send any single game anywhere,
-        including into the vault folder — and a connect-time check cannot see
-        a choice made days later.
+        (An earlier version compared ``install_path`` against the marker's
+        ``archive_path`` and, on a match, skipped the deletion and dropped the
+        marker. That protected a file the pipeline cannot place there, and paid
+        for it by orphaning the whole install — possibly tens of GB — with
+        nothing left tracking it.)
 
         Deletion goes through :func:`safe_rmtree`, the shared guard the other
         stores' uninstallers use, because the install path is user-chosen and
@@ -176,15 +203,6 @@ class GameVaultInstaller:
                 store=STORE_NAME,
             )
         install_path = str(info.get("install_path", ""))
-        archive_path = str(info.get("archive_path", ""))
-        if install_path and _would_delete_the_archive(install_path, archive_path):
-            logger.error(
-                "[GameVaultInstaller] refusing to remove %s: it contains the "
-                "source archive %s. Removing the install record only.",
-                install_path, archive_path,
-            )
-            remove_install_info(game_id)
-            return Result(success=True, store=STORE_NAME)
         if install_path:
             removed = await asyncio.to_thread(safe_rmtree, install_path)
             if removed:

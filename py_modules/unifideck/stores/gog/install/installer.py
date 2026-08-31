@@ -38,7 +38,7 @@ from unifideck.stores.gog.tokens import GOGTokenManager
 
 from .helpers import _InstallHelpers
 from .marker import _PostInstallMarker
-from .planner import GOGInstallPlanner
+from .planner import INSTALL_MODE_BLOCKED, GOGInstallPlanner
 from .progress import _GogdlProgressMonitor, format_gogdl_error
 from .uninstall_pipeline import _UninstallPipeline
 
@@ -262,6 +262,15 @@ class GOGInstaller:
             ctx.game_id,
             target_folder,
         )
+        # The target directory holds another store's install. Every other mode
+        # would either delete it or download over it, so stop here: the user
+        # picks a different location (or uninstalls the other game) instead of
+        # discovering afterwards that their files are gone.
+        if ctx.install_mode == INSTALL_MODE_BLOCKED:
+            return self._install_failed(
+                ctx.game_id,
+                "install_folder_owned_by_another_store",
+            )
         # Wipe the local manifest ONLY for a fresh download. A stale manifest
         # left over from a prior uninstall would make gogdl ``download`` report
         # "Nothing to do" and skip the transfer, so a fresh install must clear

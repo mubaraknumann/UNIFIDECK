@@ -45,11 +45,10 @@ def save_install_info(
 ) -> None:
     """Record that *game_id* is installed at *install_path*.
 
-    ``archive_path`` is the file the install came from. It is diagnostic for
-    the remote mode (that staged copy is deleted straight afterwards) and
-    load-bearing for the local one, where it names the user's own archive —
-    which is precisely the file uninstall must never touch. Recording it
-    makes that separation auditable from the marker alone.
+    ``archive_path`` is the file the install came from, recorded for
+    diagnostics: it is how you tell from the marker alone which of two
+    same-named archives in a vault actually produced this install. Nothing
+    branches on it — uninstall removes ``install_path`` and never consults it.
     """
     try:
         _marker_dir().mkdir(parents=True, exist_ok=True)

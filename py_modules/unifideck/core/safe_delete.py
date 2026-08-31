@@ -93,8 +93,7 @@ def foreign_installs_under(
     Both sides are ``resolve()``d so a symlinked SD-card mount cannot slip a
     match past a string comparison, and an unresolvable candidate is reported
     as foreign — the conservative answer when the question is "is it safe to
-    delete this?". Mirrors the check in the GameVault installer's
-    ``_would_delete_the_archive``.
+    delete this?".
     """
     from unifideck.services.shortcut.games_map import parse_games_map
     from unifideck.utils.paths import get_games_map_path

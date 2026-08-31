@@ -305,41 +305,32 @@ async def test_uninstall_game_removes_dir_and_marker(tmp_path, markers_in):
     assert load_install_info("55") is None
 
 
-async def test_uninstall_refuses_to_delete_a_dir_holding_the_archive(
+async def test_uninstall_removes_the_install_dir_and_leaves_the_vault_alone(
     tmp_path, markers_in,
 ):
-    """The guarantee, checked where it can actually be broken.
+    """The archive survives because it is outside the directory being removed.
 
-    Every install goes through the shared storage picker, so the user can
-    send a single game anywhere — including into the vault folder itself.
-    A connect-time "keep these two folders apart" rule cannot see a choice
-    made days later; this one is checked at the moment of deletion, against
-    the ``archive_path`` in the marker.
-
-    The install record still goes, so the shortcut flips to not-installed;
-    only the files survive.
+    That is structural, not a check: ``install_path`` is always
+    ``<install root>/<game dir>`` and the extraction created that directory,
+    so a vault archive is never inside it.
     """
     vault = tmp_path / "vault"
     vault.mkdir()
     archive = _zip_with(vault, "My Game (2016).zip", {"Game.exe": b"x" * 100})
     installer = GameVaultInstaller(
         source=_FakeSource(archive),
-        # The user pointed this install straight at their vault.
-        default_install_root=str(tmp_path),
+        default_install_root=str(tmp_path / "installs"),
     )
-    save_install_info(
-        "g1",
-        title="My Game",
-        install_path=str(vault),
-        exe_path="",
-        archive_path=str(archive),
-    )
+
+    installed = await installer.install_game("g1")
+    game_dir = Path(installed.install_path)
+    assert (game_dir / "Game.exe").exists()
 
     result = await installer.uninstall_game("g1")
 
     assert result.success is True
+    assert not game_dir.exists()
     assert archive.exists()
-    assert vault.exists()
     assert load_install_info("g1") is None
 
 
@@ -446,3 +437,88 @@ def test_installer_expands_user_paths(tmp_path):
         default_install_root="~/Games/GameVault",
     )
     assert "~" not in str(installer._default_install_root)
+
+
+# ── install-directory ownership ──────────────────────────────────────
+# ``<install_root>/<title>`` is the folder name every store derives, so two
+# stores routinely pick the same one. That is not survivable: GOG's install
+# planner deletes unrecognised data in its target, which on a real device
+# destroyed a GameVault extraction of Bastion four times in one evening.
+@pytest.fixture
+def games_map_at(tmp_path, monkeypatch):
+    """Point ``foreign_installs_under`` at a games.map this test controls.
+
+    Patched at ``unifideck.utils.paths``, not on ``safe_delete``: the helper
+    imports ``get_games_map_path`` inside the function body, so the module
+    attribute is what it actually resolves at call time.
+    """
+    path = tmp_path / "games.map"
+    path.write_text("")
+    monkeypatch.setattr(
+        "unifideck.utils.paths.get_games_map_path", lambda config=None: str(path),
+    )
+    return path
+
+
+async def test_install_avoids_a_directory_another_store_owns(
+    tmp_path, markers_in, games_map_at,
+):
+    root = tmp_path / "installs"
+    taken = root / "My Game"
+    taken.mkdir(parents=True)
+    games_map_at.write_text(
+        f"gog:1423058311={taken}/game/Game.exe\t{taken}\t-123\n",
+    )
+    archive = _zip_with(tmp_path, "g.zip", {"Game.exe": b"x" * 2000})
+    installer = GameVaultInstaller(
+        source=_FakeSource(archive), default_install_root=str(root),
+    )
+
+    result = await installer.install_game("g1")
+
+    assert result.success is True
+    assert result.install_path == str(root / "My Game (GameVault)")
+    assert (root / "My Game (GameVault)" / "Game.exe").exists()
+    # GOG's directory was left exactly as it was.
+    assert list(taken.iterdir()) == []
+    assert load_install_info("g1")["install_path"] == str(
+        root / "My Game (GameVault)",
+    )
+
+
+async def test_install_reuses_its_own_directory_on_reinstall(
+    tmp_path, markers_in, games_map_at,
+):
+    """A row this game owns is not foreign — reinstall must not drift."""
+    root = tmp_path / "installs"
+    mine = root / "My Game"
+    mine.mkdir(parents=True)
+    games_map_at.write_text(
+        f"gamevault:g1={mine}/Game.exe\t{mine}\t-123\n",
+    )
+    archive = _zip_with(tmp_path, "g.zip", {"Game.exe": b"x" * 2000})
+    installer = GameVaultInstaller(
+        source=_FakeSource(archive), default_install_root=str(root),
+    )
+
+    result = await installer.install_game("g1")
+
+    assert result.install_path == str(mine)
+
+
+async def test_install_ignores_an_unrelated_row_elsewhere(
+    tmp_path, markers_in, games_map_at,
+):
+    """Ownership is by path containment, not by name similarity."""
+    root = tmp_path / "installs"
+    other = tmp_path / "somewhere else" / "My Game"
+    other.mkdir(parents=True)
+    games_map_at.write_text(f"gog:99={other}/Game.exe\t{other}\t-1\n")
+    archive = _zip_with(tmp_path, "g.zip", {"Game.exe": b"x" * 2000})
+    installer = GameVaultInstaller(
+        source=_FakeSource(archive), default_install_root=str(root),
+    )
+
+    result = await installer.install_game("g1")
+
+    assert result.install_path == str(root / "My Game")

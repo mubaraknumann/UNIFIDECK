@@ -238,10 +238,10 @@ class GameVaultAuth:
         One folder, not two. The install location is asked per install by the
         shared storage picker, which already handles SD cards and USB drives
         for all seven stores; a GameVault-only copy of that setting would be
-        a second answer to a question already answered. The
-        "uninstall must never eat my archive" guarantee moved to the moment
-        of deletion — see ``_would_delete_the_archive`` — where it holds no
-        matter where the user sent that particular game.
+        a second answer to a question already answered. Uninstall cannot eat
+        the archive wherever the user sends a given game: it removes only
+        ``<install root>/<game dir>``, the directory the extraction created,
+        and the archive is not in there.
         """
         try:
             vault = await asyncio.to_thread(prepare_vault, vault_dir)
