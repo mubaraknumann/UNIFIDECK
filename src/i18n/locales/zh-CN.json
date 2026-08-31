@@ -585,11 +585,14 @@
       "never": "无记录"
     },
     "compatibility": {
-      "modalTitle": "Steam Deck 兼容性",
+      "modalTitleDeck": "Steam Deck 兼容性",
+      "modalTitleMachine": "Steam Machine 兼容性",
+      "modalTitleSteamOS": "SteamOS 兼容性",
       "viewOnProtonDb": "在 ProtonDB 上查看",
       "close": "关闭",
       "verified": "已验证",
       "playable": "可玩",
+      "compatible": "兼容",
       "unsupported": "不支持",
       "unknown": "未知"
     },

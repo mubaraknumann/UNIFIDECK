@@ -585,11 +585,14 @@
       "never": "なし"
     },
     "compatibility": {
-      "modalTitle": "Steam Deck 互換性",
+      "modalTitleDeck": "Steam Deck 互換性",
+      "modalTitleMachine": "Steam Machine 互換性",
+      "modalTitleSteamOS": "SteamOS 互換性",
       "viewOnProtonDb": "ProtonDB で見る",
       "close": "閉じる",
       "verified": "確認済み",
       "playable": "プレイ可能",
+      "compatible": "互換性あり",
       "unsupported": "非対応",
       "unknown": "不明"
     },

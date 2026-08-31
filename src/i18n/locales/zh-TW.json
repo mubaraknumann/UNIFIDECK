@@ -585,11 +585,14 @@
       "never": "無記錄"
     },
     "compatibility": {
-      "modalTitle": "Steam Deck 相容性",
+      "modalTitleDeck": "Steam Deck 相容性",
+      "modalTitleMachine": "Steam Machine 相容性",
+      "modalTitleSteamOS": "SteamOS 相容性",
       "viewOnProtonDb": "在 ProtonDB 檢視",
       "close": "關閉",
       "verified": "已驗證",
       "playable": "可遊玩",
+      "compatible": "相容",
       "unsupported": "不支援",
       "unknown": "不明"
     },
@@ -602,7 +605,7 @@
   },
   "achievementsModal": {
     "title": "成就",
-    "progress": "{{unlocked}} / {{total}}（{{percent}}%）",
+    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
     "refresh": "重新整理",
     "close": "關閉",
     "loading": "正在載入成就…",
@@ -610,7 +613,7 @@
     "hidden": "隱藏成就",
     "unlockedOn": "{{date}} 解鎖",
     "error": "無法載入成就。",
-    "errorOffline": "請連上網際網路以查看成就。",
+    "errorOffline": "連接到網際網路以檢視成就。",
     "errorAuth": "登入此遊戲的商店以檢視成就。",
     "errorUnavailable": "此遊戲不支援成就。"
   },
@@ -622,7 +625,7 @@
   "collectionSettings": {
     "title": "STEAM 收藏",
     "enabled": "已啟用收藏",
-    "disabled": "已停用收藏"
+    "disabled": "已禁用收藏"
   },
   "installLanguageModal": {
     "title": "選擇語言",
@@ -1047,29 +1050,6 @@
   "reconcile": {
     "repairedTitle": "程式庫資料已修復",
     "repairedBody": "已補齊上次同步中斷遺留的 {{artwork}} 項封面、{{metadata}} 項中繼資料和 {{compat}} 項相容性資訊。"
-  },
-  "achievements": {
-    "unlockedTitle": "成就已解鎖",
-    "unlockedBody": "{{name}}"
-  },
-  "achievementsModal": {
-    "title": "成就",
-    "progress": "{{unlocked}} / {{total}} ({{percent}}%)",
-    "refresh": "重新整理",
-    "close": "關閉",
-    "loading": "正在載入成就…",
-    "empty": "此遊戲沒有成就。",
-    "hidden": "隱藏成就",
-    "unlockedOn": "{{date}} 解鎖",
-    "error": "無法載入成就。",
-    "errorOffline": "連接到網際網路以檢視成就。",
-    "errorAuth": "登入此遊戲的商店以檢視成就。",
-    "errorUnavailable": "此遊戲不支援成就。"
-  },
-  "collectionSettings": {
-    "title": "STEAM 收藏",
-    "enabled": "已啟用收藏",
-    "disabled": "已禁用收藏"
   },
   "gamevault": {
     "connectTitle": "連線至 GameVault",

@@ -182,7 +182,7 @@ The `Plugin` class in `main.py` is composed from the RPC mixin classes enumerate
 | `AccountRPCMixin`          | `check_account_switch`, `migrate_account_data`                                  |
 | `AchievementsRPCMixin`     | `get_game_achievements`, `get_last_session_achievements`                         |
 | `CloudSaveRPCMixin`        | `get_cloud_save_status`, `cloud_save_pull`, `cloud_save_push`, `set_game_save_path` |
-| `UIRPCMixin`               | `get_game_metadata_display`, `get_language_preference`, `set_language_preference` |
+| `UIRPCMixin`               | `get_game_metadata_display`, `get_language_preference`, `set_language_preference`, `get_device_type` |
 | `UpdaterRPCMixin`          | `check_plugin_update`, `get_available_versions`, `log_update_event`              |
 
 ---

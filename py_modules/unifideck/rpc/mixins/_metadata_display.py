@@ -23,6 +23,8 @@ from typing import Any
 from unifideck.core.compat_bridge import appid_candidates
 from unifideck.core.store_urls import store_search_url
 
+from ._compat_payload import active_track, compat_block
+
 logger = logging.getLogger(__name__)
 
 # Re-exported for the existing importers of this module. The table
@@ -301,34 +303,6 @@ def pick_genres(
     return []
 
 
-def deck_compat_enum(compat_entry: dict[str, Any]) -> int:
-    """Map ``deck_status`` string → numeric compatibility enum (0..3)."""
-    status = str(compat_entry.get("deck_status", "")).lower()
-    return {"verified": 3, "playable": 2, "unsupported": 1}.get(status, 0)
-
-
-def deck_test_results(compat_entry: dict[str, Any]) -> list[dict[str, Any]]:
-    """Extract per-test ``{text, passed}`` rows from the compat cache.
-
-    Populated by ``CompatLibrary._fetch_deck_verified`` after parsing
-    Steam's saleaction ``resolved_items`` payload. Empty list when
-    the cache entry pre-dates the test-result wiring or the upstream
-    response omitted the items.
-    """
-    results = compat_entry.get("deck_test_results")
-    if not isinstance(results, list):
-        return []
-    out: list[dict[str, Any]] = []
-    for item in results:
-        if not isinstance(item, dict):
-            continue
-        text = item.get("text")
-        if not isinstance(text, str) or not text:
-            continue
-        out.append({"text": text, "passed": bool(item.get("passed"))})
-    return out
-
-
 def build_payload(
     game: Any,
     enriched: dict[str, Any],
@@ -353,8 +327,10 @@ def build_payload(
         "release_date": pick_release_date(steam_meta, enriched),
         "metacritic": pick_metacritic(steam_meta, enriched),
         "description": pick_description(steam_meta, enriched),
-        "deck_compatibility": deck_compat_enum(compat_entry),
-        "deck_test_results": deck_test_results(compat_entry),
+        # Every device's rating, plus which one this device is, so the
+        # panel can name the hardware it is describing.
+        "compat_device": active_track(),
+        "compat": compat_block(compat_entry),
         "genres": pick_genres(steam_meta, enriched),
         "homepage_url": homepage,
     }

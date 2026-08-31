@@ -585,11 +585,14 @@
       "never": "Hiçbir Zaman"
     },
     "compatibility": {
-      "modalTitle": "Steam Deck Uyumluluğu",
+      "modalTitleDeck": "Steam Deck Uyumluluğu",
+      "modalTitleMachine": "Steam Machine Uyumluluğu",
+      "modalTitleSteamOS": "SteamOS Uyumluluğu",
       "viewOnProtonDb": "ProtonDB'de Görüntüle",
       "close": "Kapat",
       "verified": "ONAYLANDI",
       "playable": "OYNANABİLİR",
+      "compatible": "UYUMLU",
       "unsupported": "DESTEKLENMİYOR",
       "unknown": "BİLİNMİYOR"
     },

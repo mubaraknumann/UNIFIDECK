@@ -21,6 +21,18 @@ vi.mock("../library-filters", () => ({
 vi.mock("@decky/api", () => ({
   call: vi.fn(),
 }));
+// Collection names are translated strings, so the compat-tab keys have
+// to resolve to something before they can be compared.
+vi.mock("i18next", () => ({
+  default: {
+    t: (key: string) =>
+      ({
+        "deckTabs.greatOnDeck": "Great on Deck",
+        "deckTabs.greatOnMachine": "Great on Machine",
+        "deckTabs.steamOSCompatible": "SteamOS Compatible",
+      }[key] ?? key),
+  },
+}));
 
 import {
   deleteAllUnifideckCollections,
@@ -110,6 +122,46 @@ describe("deleteAllUnifideckCollections", () => {
 
     expect(store.GetCollection).not.toHaveBeenCalled();
     expect(store.NewUnsavedCollection).not.toHaveBeenCalled();
+  });
+});
+
+describe("cross-device compat collections", () => {
+  /**
+   * Collections are account-global and cloud-synced, but the compat
+   * tab is named after the local device. Without the valid-name union,
+   * a user's Deck and Steam Machine delete each other's compat
+   * collection on every boot, forever.
+   */
+  it("keeps the other devices' compat collections", async () => {
+    const { map } = makeStore([
+      "[Unifideck] Alpha",
+      "[Unifideck] Great on Deck",
+      "[Unifideck] Great on Machine",
+      "[Unifideck] SteamOS Compatible",
+    ]);
+    window.localStorage.setItem(COLLECTIONS_ENABLED_KEY, "1");
+
+    await syncUnifideckCollections();
+
+    const names = Array.from(map.values()).map((c) => c.displayName);
+    expect(names).toContain("[Unifideck] Great on Deck");
+    expect(names).toContain("[Unifideck] Great on Machine");
+    expect(names).toContain("[Unifideck] SteamOS Compatible");
+  });
+
+  it("still deletes a genuinely stale [Unifideck] collection", async () => {
+    const { map } = makeStore([
+      "[Unifideck] Alpha",
+      "[Unifideck] Great on Machine",
+      "[Unifideck] Some Removed Tab",
+    ]);
+    window.localStorage.setItem(COLLECTIONS_ENABLED_KEY, "1");
+
+    await syncUnifideckCollections();
+
+    const names = Array.from(map.values()).map((c) => c.displayName);
+    expect(names).not.toContain("[Unifideck] Some Removed Tab");
+    expect(names).toContain("[Unifideck] Great on Machine");
   });
 });
 

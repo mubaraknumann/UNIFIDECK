@@ -14,8 +14,25 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from unifideck.compatibility.deck_verified import (
+    TRACK_NAMES,
+    TrackResult,
+    spec_for,
+)
 from unifideck.compatibility.library import CompatLibrary, CompatRating
 from unifideck.services.compatibility.service import CompatibilityService
+
+
+def _tracks(**kw: int) -> dict[str, TrackResult]:
+    """Build a fetch result. ``_tracks(deck=2)`` -> Deck Playable."""
+    out = {n: TrackResult() for n in TRACK_NAMES}
+    for name, category in kw.items():
+        statuses = spec_for(name).statuses  # type: ignore[union-attr]
+        out[name] = TrackResult(
+            category=category, status=statuses.get(category, "unknown"),
+        )
+    return out
+
 
 
 class _Store:
@@ -150,8 +167,8 @@ async def test_self_heal_stamps_dtr_checked_and_runs_once() -> None:
         "deck_status": "playable", "deck_test_results": [],
     })
     lib = CompatLibrary(cache=cache)  # type: ignore[arg-type]
-    fetch = AsyncMock(return_value=("unknown", []))  # upstream has nothing
-    with patch.object(lib, "_fetch_deck_verified", new=fetch):
+    fetch = AsyncMock(return_value=_tracks())  # upstream has nothing
+    with patch.object(lib, "_fetch_compat", new=fetch):
         first = await lib.get_for_appid(_REAL)
         second = await lib.get_for_appid(_REAL)
     fetch.assert_awaited_once()  # second read is terminal, no re-fetch

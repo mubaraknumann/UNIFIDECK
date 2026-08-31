@@ -585,11 +585,14 @@
       "never": "Nie"
     },
     "compatibility": {
-      "modalTitle": "Steam Deck Kompatibilität",
+      "modalTitleDeck": "Steam Deck Kompatibilität",
+      "modalTitleMachine": "Steam Machine Kompatibilität",
+      "modalTitleSteamOS": "SteamOS-Kompatibilität",
       "viewOnProtonDb": "Auf ProtonDB ansehen",
       "close": "Schließen",
       "verified": "VERIFIZIERT",
       "playable": "SPIELBAR",
+      "compatible": "KOMPATIBEL",
       "unsupported": "NICHT UNTERSTÜTZT",
       "unknown": "UNBEKANNT"
     },

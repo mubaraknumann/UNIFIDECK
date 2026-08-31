@@ -20,9 +20,11 @@ import {
   getCachedCompatByTitle,
   getCachedRating,
   loadCompatCacheFromBackend,
-  meetsGreatOnDeckCriteria,
+  meetsGreatOnCurrentDevice,
 } from "../protondb-cache";
 import { getCompatByShortcutAppId, loadFacets } from "../library-facets";
+import { activeCompatTrack } from "../device-type";
+import { overviewCompatCategory } from "../steam-bridge/compat-packed";
 import { invalidateGameSize } from "../game-size-cache";
 import type { SteamAppOverview } from "../../types/steam";
 
@@ -248,7 +250,12 @@ const filterFunctions: { [K in FilterType]: FilterFn<K> } = {
     return store === params.store;
   },
   deckCompat: (_p, app) => {
-    if (app.steam_deck_compat_category === DECK_VERIFIED) return true;
+    // Read the bits for the device actually running. Steam packs a
+    // separate rating per device, and on a Machine the Deck's bits are
+    // not the ones its own filters and badges use.
+    if (overviewCompatCategory(app, activeCompatTrack()) === DECK_VERIFIED) {
+      return true;
+    }
     const cached = unifideckGameCache.get(app.appid);
     if (cached) {
       // Prefer the shortcut-keyed facet compat — the backend already
@@ -256,12 +263,12 @@ const filterFunctions: { [K in FilterType]: FilterFn<K> } = {
       // centralised title matcher, so no fuzzy lookup against the
       // lossy ``display_name`` is needed here.
       const facetCompat = getCompatByShortcutAppId(app.appid);
-      if (facetCompat) return meetsGreatOnDeckCriteria(facetCompat);
+      if (facetCompat) return meetsGreatOnCurrentDevice(facetCompat);
       // Fallback: title-keyed compat for shortcuts the metadata phase
       // never mapped to a Steam AppID (no facet yet).
       const title = app.display_name || "";
       if (!title) return false;
-      return meetsGreatOnDeckCriteria(getCachedCompatByTitle(title));
+      return meetsGreatOnCurrentDevice(getCachedCompatByTitle(title));
     }
     // Native Steam game (not a Unifideck shortcut): ``app.appid`` is a
     // real Steam AppID, so the appid-keyed ProtonDB rating applies.

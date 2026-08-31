@@ -7,11 +7,13 @@
  * two Steam globals not abstracted by `SteamBridge` because the
  * collection APIs are too coupled to Steam's React tree to project.
  */
+import i18n from "i18next";
 import {
   getUnifideckTabs,
   isTabMasterInstalled,
   type UnifideckTab,
 } from "./tab-container";
+import { COMPAT_TAB_TITLE_KEYS } from "../device-type";
 import { runFilters } from "../library-filters";
 import { EventBusClient } from "../../api/event-bus-client";
 import { Events } from "../../types/events";
@@ -211,8 +213,22 @@ function tabName(tab: UnifideckTab): string {
   return `${COLLECTION_PREFIX}${tab.title}`;
 }
 
+/**
+ * Names `cleanupStaleCollections` must NOT delete.
+ *
+ * The compat tab's title is named after the device ("Great on Deck" vs
+ * "Great on Machine"), but collections are account-global and synced
+ * through Steam Cloud. So a user with both a Deck and a Steam Machine
+ * would have each device treat the other's compat collection as stale
+ * and delete it, on every boot, forever. Recognise all three device
+ * names as valid even though only the local one is ever created.
+ */
 function validCollectionNames(): Set<string> {
-  return new Set(getUnifideckTabs().map(tabName));
+  const names = new Set(getUnifideckTabs().map(tabName));
+  for (const key of COMPAT_TAB_TITLE_KEYS) {
+    names.add(`${COLLECTION_PREFIX}${i18n.t(key)}`);
+  }
+  return names;
 }
 
 async function deleteCollection(c: Collection): Promise<void> {

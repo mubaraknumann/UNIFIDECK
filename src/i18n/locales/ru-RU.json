@@ -585,11 +585,14 @@
       "never": "Никогда"
     },
     "compatibility": {
-      "modalTitle": "Совместимость со Steam Deck",
+      "modalTitleDeck": "Совместимость со Steam Deck",
+      "modalTitleMachine": "Совместимость со Steam Machine",
+      "modalTitleSteamOS": "Совместимость со SteamOS",
       "viewOnProtonDb": "Посмотреть на ProtonDB",
       "close": "Закрыть",
       "verified": "СОВМЕСТИМО",
       "playable": "МОЖНО ИГРАТЬ",
+      "compatible": "ПОДДЕРЖИВАЕТСЯ",
       "unsupported": "НЕ ПОДДЕРЖИВАЕТСЯ",
       "unknown": "НЕИЗВЕСТНО"
     },

@@ -585,11 +585,14 @@
       "never": "없음"
     },
     "compatibility": {
-      "modalTitle": "Steam Deck 호환성 정보",
+      "modalTitleDeck": "Steam Deck 호환성 정보",
+      "modalTitleMachine": "Steam Machine 호환성 정보",
+      "modalTitleSteamOS": "SteamOS 호환성 정보",
       "viewOnProtonDb": "ProtonDB에서 확인하기",
       "close": "닫기",
       "verified": "완벽 지원",
       "playable": "플레이 가능",
+      "compatible": "호환 가능",
       "unsupported": "지원 안 함",
       "unknown": "정보 없음"
     },

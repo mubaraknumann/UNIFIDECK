@@ -1,7 +1,7 @@
 /**
  * GameInfoCompatRow — top action row of the game info panel.
  *
- * Renders the Steam Deck compatibility badge, the Details and
+ * Renders the compatibility badge for the running device, the Details and
  * Synopsis toggle buttons, the Install / Uninstall / Cancel
  * action button (live progress when downloading), and the
  * comma-dot-separated genre tags underneath.
@@ -24,6 +24,7 @@ import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
 import { UninstallConfirmModal } from "../modals/UninstallConfirmModal";
 import { GameInfoDetailsModal } from "./GameInfoDetailsModal";
+import { CompatBadge, asCategory } from "./CompatBadge";
 import { GameAchievementsModal } from "./GameAchievementsModal";
 import { useStoreCapability } from "../../hooks/useStoreCapability";
 import type { GameMetadata } from "../../types/api";
@@ -35,20 +36,6 @@ interface Props {
   onToggleSynopsis: () => void;
   bridge?: SteamBridge;
 }
-
-const COMPAT_COLORS: Record<0 | 1 | 2 | 3, { bg: string; fg: string }> = {
-  3: { bg: "#59bf40", fg: "#ffffff" },
-  2: { bg: "#ffc82c", fg: "#000000" },
-  1: { bg: "#ff4444", fg: "#ffffff" },
-  0: { bg: "#666666", fg: "#ffffff" },
-};
-
-const COMPAT_LABEL_KEY: Record<0 | 1 | 2 | 3, string> = {
-  3: "gameInfoPanel.compatibility.verified",
-  2: "gameInfoPanel.compatibility.playable",
-  1: "gameInfoPanel.compatibility.unsupported",
-  0: "gameInfoPanel.compatibility.unknown",
-};
 
 /** Inline-flex sizing for every DialogButton in the panel.
  *  @decky/ui's DialogButton defaults to ``width: 100%`` (settings-
@@ -143,7 +130,8 @@ export const GameInfoCompatRow: FC<Props> = ({
   // is the real gate: cloud titles are never installed.
   const showAction = !!game && Boolean(game.is_installed) && !isDownloading;
 
-  const compatColors = COMPAT_COLORS[meta.deck_compatibility];
+  const compatTrack = meta.compat_device;
+  const compatCategory = asCategory(meta.compat?.[compatTrack]?.category);
 
   return (
     // "grid" rather than "row" — this Focusable lays out as a COLUMN and its
@@ -166,20 +154,15 @@ export const GameInfoCompatRow: FC<Props> = ({
           gap: 8,
         }}
       >
-        <span
+        <CompatBadge
+          category={compatCategory}
+          track={compatTrack}
           style={{
             padding: "4px 12px",
-            borderRadius: 4,
-            background: compatColors.bg,
-            color: compatColors.fg,
             fontWeight: 700,
-            fontSize: 12,
             letterSpacing: 0.5,
-            textTransform: "uppercase",
           }}
-        >
-          {t(COMPAT_LABEL_KEY[meta.deck_compatibility])}
-        </span>
+        />
         <DialogButton
           className="unifideck-nav-button"
           style={buttonStyle}

@@ -20,6 +20,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from ._compat_payload import active_track, slim_cache_entry
+
 logger = logging.getLogger(__name__)
 
 class StoreRPCMixin:
@@ -296,7 +298,7 @@ class StoreRPCMixin:
     # bullet 4, register item 35.
 
     async def get_protondb_cache(self) -> dict[str, Any]:
-        """Return every cached ProtonDB / Deck-Verified entry.
+        """Return every cached rating, resolved for **this** device.
 
         Used by the frontend ``protondb-cache`` module to populate the
         in-memory rating lookup that drives compat badges and the
@@ -304,10 +306,19 @@ class StoreRPCMixin:
         namespace populated by :class:`CompatLibrary` — never triggers
         a fresh network fetch from here.
 
+        The active device's track is resolved **here** rather than in
+        the frontend: ``loadDeviceType()`` is async and can answer after
+        this payload has been consumed, which would mis-filter the first
+        render of the compatibility tab on a Steam Machine.
+
+        Each row is projected down to what the frontend reads, which
+        makes this smaller than the whole cached entry it used to
+        return while carrying strictly more information.
+
         Returns:
             Mapping of ``str(app_id)`` →
-            ``{"protondb_tier": str | None, "deck_status": str,
-              "title": str, "sources": list[str]}``.
+            ``{"title": str, "protondb_tier": str | None,
+              "compat_status": str, "sources": list[str]}``.
             Empty dict when the cache is cold or unregistered.
         """
         stores = getattr(self.cache, "_stores", None)
@@ -317,4 +328,9 @@ class StoreRPCMixin:
         data = getattr(compat_store, "_data", None)
         if not isinstance(data, dict):
             return {}
-        return dict(data)
+        track = active_track()
+        return {
+            key: slim_cache_entry(entry, track)
+            for key, entry in data.items()
+            if isinstance(entry, dict)
+        }

@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 
 from unifideck.compatibility import CompatLibrary
+from unifideck.compatibility.library import needs_refetch
 from unifideck.core.sync_generation import UNTAGGED_RUN_ID, run_id_of
 from unifideck.core.types import Game
 from unifideck.core.types.events import Events
@@ -345,17 +346,15 @@ class CompatibilityService:
 
     @staticmethod
     def _needs_self_heal(entry: dict[str, Any]) -> bool:
-        """Pre-``deck_test_results`` cache entries get ONE upgrade fetch.
+        """Cache entries below the current schema get ONE upgrade fetch.
 
-        The ``dtr_checked`` stamp (written by ``CompatLibrary``)
-        marks the upgrade as attempted so games with genuinely no
-        published test results stop re-fetching every sync.
+        The schema stamp (written by ``CompatLibrary``) marks the
+        upgrade as attempted, so a title with genuinely no published
+        rating stops re-fetching every sync. This is the twin of
+        ``CompatLibrary.needs_refetch`` and delegates to it — the two
+        deciding differently would mean re-fetching forever or never.
         """
-        return (
-            entry.get("deck_status", "unknown") != "unknown"
-            and not entry.get("deck_test_results")
-            and not entry.get("dtr_checked")
-        )
+        return needs_refetch(entry)
 
     async def _fetch_one(
         self,

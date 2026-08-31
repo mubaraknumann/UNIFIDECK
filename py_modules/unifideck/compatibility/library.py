@@ -12,6 +12,12 @@ import aiohttp
 from unifideck.core.compat_bridge import appid_candidates
 from unifideck.utils.config_helpers import get_cfg
 
+from .deck_verified import (
+    TRACK_NAMES,
+    TrackResult,
+    parse_compat_response,
+)
+
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
     from unifideck.core.cache_manager import CacheManager
@@ -20,12 +26,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 PROTONDB_TIERS = ("platinum", "gold", "silver", "bronze", "borked")
-DECK_CATEGORIES: dict[int, str] = {
- 0: "unknown",
- 1: "unsupported",
- 2: "playable",
- 3: "verified",
-}
+
+#: Bumped when the cached entry shape changes in a way a warm cache
+#: cannot satisfy. Entries stamped below this are re-fetched once. The
+#: 7-day TTL alone would leave a Steam Machine owner on "Unknown" for a
+#: week, which is unacceptable for the device this exists to serve.
+COMPAT_SCHEMA = 2
 
 PROTONDB_URL = (
  "https://www.protondb.com/api/v1/reports/summaries/{appid}.json"
@@ -39,66 +45,86 @@ DECK_VERIFIED_URL = (
 DEFAULT_USER_AGENT = "Unifideck/1.0 (compat-library)"
 CACHE_NAMESPACE = "compat"
 
-# Valve's Steam Deck verification report loc-tokens, mapped to the
-# human-readable strings the Steam client shows next to each
-# check/warning in its native compatibility modal. Ported from
-# staging's ``DECK_TEST_RESULT_TOKENS`` (main.py:4488) so our
-# panel's "Details" modal can render the same reasoning Steam does
-# instead of an opaque "no detailed test results available".
-DECK_TEST_RESULT_TOKENS: dict[str, str] = {
-    "#SteamDeckVerified_TestResult_DefaultControllerConfigFullyFunctional":
-        "All functionality is accessible when using the default controller "
-        "configuration",
-    "#SteamDeckVerified_TestResult_ControllerGlyphsMatchDeckDevice":
-        "This game shows Steam Deck controller icons",
-    "#SteamDeckVerified_TestResult_InterfaceTextIsLegible":
-        "In-game interface text is legible on Steam Deck",
-    "#SteamDeckVerified_TestResult_DefaultConfigurationIsPerformant":
-        "This game's default graphics configuration performs well on Steam Deck",
-    "#SteamDeckVerified_TestResult_LauncherInteractionIssues":
-        "This game's launcher/setup tool may require the touchscreen or "
-        "virtual keyboard, or have difficult to read text",
-    "#SteamDeckVerified_TestResult_NativeResolutionNotDefault":
-        "This game supports Steam Deck's native display resolution but does "
-        "not set it by default and may require you to configure the display "
-        "resolution manually",
-    "#SteamDeckVerified_TestResult_ControllerGlyphsDoNotMatchDeckDevice":
-        "This game sometimes shows non-Steam-Deck controller icons",
-    "#SteamDeckVerified_TestResult_ExternalControllersNotSupportedLocalMultiplayer":
-        "This game does not default to external Bluetooth/USB controllers "
-        "on Deck, and may require manually switching the active controller "
-        "via the Quick Access Menu",
-    "#SteamOS_TestResult_GameStartupFunctional":
-        "This game runs successfully on SteamOS",
-}
-
-# ``display_type`` value in a ``resolved_items`` entry that means
-# "passed" (green checkmark). Anything else is treated as a warning.
-_DECK_TEST_PASSED_DISPLAY_TYPE = 4
 
 
 @dataclass
 class CompatRating:
-    """Compat rating."""
+    """One title's rating on every device, plus its ProtonDB tier.
+
+    Per-track fields are **flat** (``machine_status``, not
+    ``tracks["machine"].status``) so an entry cached before those fields
+    existed rehydrates for free: ``_rating_from_cached`` filters unknown
+    keys, and anything absent takes the dataclass default. A nested dict
+    would need a hand-written normaliser and a shape check on every read.
+
+    Both the raw ``category`` int and the ``status`` string are kept.
+    They do different jobs -- the int is Valve's own, and goes verbatim
+    into Steam's compat bitfield; the string is ours, for our UI.
+    Deriving either from the other corrupts the SteamOS track, whose
+    integers do not mean verified/playable.
+    """
 
     appid: int | None = None
     title: str = ""
     protondb_tier: str | None = None
     deck_status: str = "unknown"
+    deck_category: int = 0
     deck_test_results: list[dict[str, Any]] = field(default_factory=list)
+    steamos_status: str = "unknown"
+    steamos_category: int = 0
+    steamos_test_results: list[dict[str, Any]] = field(default_factory=list)
+    machine_status: str = "unknown"
+    machine_category: int = 0
+    machine_test_results: list[dict[str, Any]] = field(default_factory=list)
+    frame_status: str = "unknown"
+    frame_category: int = 0
+    frame_test_results: list[dict[str, Any]] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)
     error: str | None = None
+    #: 0 means an entry written before tracks existed. See COMPAT_SCHEMA.
+    schema: int = 0
+
+    def track(self, name: str) -> TrackResult:
+        """This title's rating on one device track."""
+        return TrackResult(
+            category=getattr(self, f"{name}_category", 0),
+            status=getattr(self, f"{name}_status", "unknown"),
+            test_results=list(getattr(self, f"{name}_test_results", [])),
+        )
+
+    def apply(self, tracks: dict[str, TrackResult]) -> None:
+        """Adopt freshly fetched tracks, keeping cached ones on failure.
+
+        A track is only adopted when Valve actually rated it
+        (``category > 0``). A transient fetch failure returns zeros for
+        every track, and must not downgrade a rating we already hold.
+        """
+        for name in TRACK_NAMES:
+            fresh = tracks.get(name)
+            if fresh is None or fresh.category <= 0:
+                continue
+            setattr(self, f"{name}_category", fresh.category)
+            setattr(self, f"{name}_status", fresh.status)
+            setattr(self, f"{name}_test_results", list(fresh.test_results))
+
     def to_dict(self) -> dict[str, Any]:
-        """To dict."""
-        return {
-        "appid": self.appid,
-        "title": self.title,
-        "protondb_tier": self.protondb_tier,
-        "deck_status": self.deck_status,
-        "deck_test_results": list(self.deck_test_results),
-        "sources": list(self.sources),
-        "error": self.error,
+        """Serialise for the cache. Mirrors the dataclass exactly."""
+        payload: dict[str, Any] = {
+            "appid": self.appid,
+            "title": self.title,
+            "protondb_tier": self.protondb_tier,
+            "sources": list(self.sources),
+            "error": self.error,
+            "schema": self.schema,
         }
+        for name in TRACK_NAMES:
+            payload[f"{name}_status"] = getattr(self, f"{name}_status")
+            payload[f"{name}_category"] = getattr(self, f"{name}_category")
+            payload[f"{name}_test_results"] = list(
+                getattr(self, f"{name}_test_results"),
+            )
+        return payload
+
 
 # Marker keys (``dtr_checked``) live alongside the rating fields in
 # the cached dict — filter to real dataclass fields so cached-entry
@@ -113,8 +139,28 @@ def _rating_from_cached(cached: dict[str, Any]) -> CompatRating:
     )
 
 
+def needs_refetch(cached: dict[str, Any]) -> bool:
+    """Whether a cached entry predates the current schema.
+
+    Replaces the old ``dtr_checked`` heuristic ("has a status but no
+    test results"), which it subsumes: a schema-0 entry is re-fetched
+    once, and that fills both the missing tracks and any missing test
+    results in the same round trip.
+    """
+    try:
+        return int(cached.get("schema", 0)) < COMPAT_SCHEMA
+    except (TypeError, ValueError):
+        return True
+
+
 def _stamped(result: CompatRating) -> dict[str, Any]:
-    """``to_dict`` plus the ``dtr_checked`` one-shot self-heal marker."""
+    """Serialise with the current schema stamp.
+
+    ``dtr_checked`` is still written so that downgrading to an older
+    plugin build does not re-trigger *its* one-shot self-heal against
+    every entry this build wrote.
+    """
+    result.schema = COMPAT_SCHEMA
     payload = result.to_dict()
     payload["dtr_checked"] = True
     return payload
@@ -128,44 +174,6 @@ def parse_protondb_response(payload: dict[str, Any]) -> str | None:
     if isinstance(tier, str) and tier in PROTONDB_TIERS:
         return tier
     return None
-def parse_deck_verified_response(
-    payload: dict[str, Any],
-) -> tuple[str, list[dict[str, Any]]]:
-    """Parse the Steam Deck verification report.
-
-    Returns ``(status, test_results)`` — ``status`` is one of
-    ``"verified"``/``"playable"``/``"unsupported"``/``"unknown"``,
-    ``test_results`` is a list of ``{text, passed}`` entries
-    matching what Steam's native modal renders. Empty list when the
-    upstream payload didn't include ``resolved_items`` (typical for
-    non-Steam apps or games without a published verification).
-    """
-    if not isinstance(payload, dict):
-        return "unknown", []  # type: ignore[unreachable]
-    results = payload.get("results")
-    if not isinstance(results, dict):
-        return "unknown", []
-    try:
-        cat = int(results.get("resolved_category", 0))
-    except (TypeError, ValueError):
-        cat = 0
-    status = DECK_CATEGORIES.get(cat, "unknown")
-    items = results.get("resolved_items")
-    test_results: list[dict[str, Any]] = []
-    if isinstance(items, list):
-        for entry in items:
-            if not isinstance(entry, dict):
-                continue
-            token = str(entry.get("loc_token", ""))
-            text = DECK_TEST_RESULT_TOKENS.get(token)
-            if not text:
-                continue
-            passed = (
-                entry.get("display_type") == _DECK_TEST_PASSED_DISPLAY_TYPE
-            )
-            test_results.append({"text": text, "passed": passed})
-    return status, test_results
-
 def _cfg(config: ConfigManager | None, key: str, default: Any) -> Any:
 
     """Cfg."""
@@ -216,39 +224,23 @@ class CompatLibrary:
         cached = None if refresh else self._cache_get(str(appid))
         if cached is not None:
             result = _rating_from_cached(cached)
-            # Self-healing upgrade from entries cached before
-            # ``deck_test_results`` was added to ``to_dict``: when
-            # the entry has a known verification status but no
-            # test-result entries, re-fetch only the deck-verified
-            # side and merge the results. ProtonDB is left alone
-            # (it was already populated correctly in the old
-            # format). The ``dtr_checked`` stamp makes this a
-            # one-shot upgrade — games with genuinely no published
-            # test results used to re-hit the endpoint every sync
-            # forever.
-            if (
-                result.deck_status != "unknown"
-                and not result.deck_test_results
-                and not cached.get("dtr_checked")
-            ):
-                status, test_results = await self._fetch_deck_verified(
-                    appid, session,
-                )
-                if status != "unknown":
-                    # Only adopt a real answer — a transient fetch
-                    # failure must not downgrade the cached status.
-                    result.deck_status = status
-                    result.deck_test_results = test_results
+            # One-shot upgrade of an entry written before the current
+            # schema. A schema-0 entry holds only the Deck rating (and
+            # possibly no test results), so re-fetch once and fill in
+            # every track. ProtonDB is left alone — it was already
+            # correct in the old format. The stamp is what stops a
+            # title with genuinely no published rating from re-hitting
+            # the endpoint every sync forever.
+            if needs_refetch(cached):
+                result.apply(await self._fetch_compat(appid, session))
                 self._cache_set(str(appid), _stamped(result))
             return result
         result = CompatRating(appid=appid)
         result.protondb_tier = await self._fetch_protondb(appid, session)
         if result.protondb_tier is not None:
             result.sources.append("protondb")
-        status, test_results = await self._fetch_deck_verified(appid, session)
-        result.deck_status = status
-        result.deck_test_results = test_results
-        if status != "unknown":
+        result.apply(await self._fetch_compat(appid, session))
+        if any(result.track(n).category > 0 for n in TRACK_NAMES):
             result.sources.append("deck_verified")
         self._cache_set(str(appid), _stamped(result))
         return result
@@ -381,18 +373,17 @@ class CompatLibrary:
             return None
         return parse_protondb_response(payload)
 
-    async def _fetch_deck_verified(
+    async def _fetch_compat(
         self,
         appid: int,
         session: aiohttp.ClientSession | None = None,
-    ) -> tuple[str, list[dict[str, Any]]]:
-        """Fetch Steam Deck verification status + per-test reasoning.
+    ) -> dict[str, TrackResult]:
+        """Fetch every device's verification status + per-test reasoning.
 
-        Returns ``(status, test_results)``; mirrors the shape of
-        :func:`parse_deck_verified_response`. Failures degrade to
-        ``("unknown", [])`` so callers never have to handle
-        exceptions. Runs behind the shared ``STEAM_STORE_GATE``
-        (same host as storesearch/appdetails).
+        One request answers all four tracks. Failures degrade to
+        all-unknown so callers never have to handle exceptions. Runs
+        behind the shared ``STEAM_STORE_GATE`` (same host as
+        storesearch/appdetails).
         """
         from unifideck.steam.http_retry import STEAM_STORE_GATE
         url = DECK_VERIFIED_URL.format(appid=appid)
@@ -404,8 +395,8 @@ class CompatLibrary:
             gate=STEAM_STORE_GATE,
         )
         if not isinstance(payload, dict):
-            return "unknown", []
-        return parse_deck_verified_response(payload)
+            return {name: TrackResult() for name in TRACK_NAMES}
+        return parse_compat_response(payload)
 
     async def _get_json(
         self,

@@ -271,3 +271,23 @@ def _isolate_launcher_bridge(tmp_path, monkeypatch):
         "EVENTS_FILE",
         tmp_path / "launcher_events.jsonl",
     )
+
+
+@pytest.fixture(autouse=True)
+def _pin_device_type(monkeypatch):
+    """Pin the detected device to a Deck for every test.
+
+    Compat facets, badges and the tab filter are resolved against the
+    *running* device, which is read from DMI. That makes any assertion
+    about them depend on where the suite runs: this dev Deck reports
+    ``Jupiter`` and resolves the Deck track, while CI has no DMI at all
+    and resolves the generic SteamOS one — silently changing which
+    rating a facet carries.
+
+    Pinning here rather than per-test means a new compat assertion
+    cannot accidentally encode the developer's hardware. A test that
+    wants a different device overrides this env var itself (see
+    ``tests/unit/test_device_type.py``), which is also how the Machine
+    path is exercised in production.
+    """
+    monkeypatch.setenv("UNIFIDECK_DEVICE_TYPE", "deck")

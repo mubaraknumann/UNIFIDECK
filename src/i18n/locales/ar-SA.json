@@ -585,11 +585,14 @@
       "never": "أبداً"
     },
     "compatibility": {
-      "modalTitle": "التوافق مع Steam Deck",
+      "modalTitleDeck": "التوافق مع Steam Deck",
+      "modalTitleMachine": "التوافق مع Steam Machine",
+      "modalTitleSteamOS": "التوافق مع SteamOS",
       "viewOnProtonDb": "عرض على ProtonDB",
       "close": "إغلاق",
       "verified": "معتمد بالكامل",
       "playable": "قابل للعب",
+      "compatible": "متوافق",
       "unsupported": "غير مدعوم",
       "unknown": "غير معروف"
     },

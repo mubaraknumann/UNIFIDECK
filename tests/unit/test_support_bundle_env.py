@@ -173,7 +173,8 @@ def test_missing_dmi_degrades_instead_of_crashing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     """CI containers and VMs have no DMI directory."""
-    monkeypatch.setattr(probe_device, "_DMI", tmp_path / "absent")
+    monkeypatch.delenv("UNIFIDECK_DEVICE_TYPE", raising=False)
+    monkeypatch.setattr(probe_device, "DMI_PATH", tmp_path / "absent")
     block = probe_device.device_block()
     assert block["available"] is False
     assert "note" in block

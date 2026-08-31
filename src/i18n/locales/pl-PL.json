@@ -585,11 +585,14 @@
       "never": "Nigdy"
     },
     "compatibility": {
-      "modalTitle": "Zgodność ze Steam Deckiem",
+      "modalTitleDeck": "Zgodność ze Steam Deckiem",
+      "modalTitleMachine": "Zgodność ze Steam Machine",
+      "modalTitleSteamOS": "Zgodność z SteamOS",
       "viewOnProtonDb": "Zobacz na ProtonDB",
       "close": "Zamknij",
       "verified": "ZWERYFIKOWANA",
       "playable": "GRYWALNA",
+      "compatible": "ZGODNA",
       "unsupported": "NIEWSPIERANA",
       "unknown": "NIEZNANA"
     },
