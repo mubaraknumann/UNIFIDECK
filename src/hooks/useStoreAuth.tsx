@@ -102,17 +102,18 @@ export function useStoreAuth(store: StoreId): UseStoreAuthResult {
               setBusy(true);
               try {
                 const raw = await call<
-                  [string, string, Record<string, unknown>],
+                  [string, string, string, boolean, string],
                   unknown
-                >(rpcRoutes.storeAuth, "gamevault", "start", {
-                  server_url: serverUrl,
+                >(
+                  rpcRoutes.connectGamevault,
+                  serverUrl,
                   username,
                   password,
-                  verify_ssl: verifySsl,
-                  download_dir: downloadDir || null,
-                });
+                  verifySsl,
+                  downloadDir,
+                );
                 const result = unwrapRpcEnvelope<AuthResult>(raw, {
-                  route: rpcRoutes.storeAuth,
+                  route: rpcRoutes.connectGamevault,
                   throwing: false,
                 });
                 if (result?.success) {

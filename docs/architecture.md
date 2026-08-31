@@ -167,7 +167,7 @@ The `Plugin` class in `main.py` is composed from the RPC mixin classes enumerate
 
 | Mixin                      | Surface (representative)                                                        |
 | -------------------------- | ------------------------------------------------------------------------------- |
-| `StoreRPCMixin`            | `check_store_status`, `get_store_infos`, `store_auth`, `clear_store_auths`       |
+| `StoreRPCMixin`            | `check_store_status`, `get_store_infos`, `store_auth`, `connect_gamevault`, `clear_store_auths` |
 | `SyncRPCMixin`             | `sync_libraries`, `force_sync_libraries`, `get_game_info`, `get_sync_progress`   |
 | `DownloadRPCMixin`         | `install_game`, `uninstall_game`, `update_game`, `cancel_download`, `get_download_queue`, `get_available_updates` |
 | `StorageRPCMixin`          | `get_storage_locations`, `get_browseable_devices`, `set_custom_install_path`    |

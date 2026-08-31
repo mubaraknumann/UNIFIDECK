@@ -183,6 +183,10 @@ class GameVaultAuth:
         verify_ssl: bool,
     ) -> AuthResult:
         url = f"{server_url.rstrip('/')}/api/auth/basic/login"
+        # Log every outcome below. A sign-in that fails is the thing a user
+        # reports, and the first field report of this store produced not one
+        # line in the plugin log to work from.
+        logger.info("[GameVaultAuth] login POST %s (verify_ssl=%s)", url, verify_ssl)
         try:
             import aiohttp
             connector = aiohttp.TCPConnector(ssl=verify_ssl)
@@ -193,12 +197,19 @@ class GameVaultAuth:
                     timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
                     if resp.status == 401:
+                        logger.warning(
+                            "[GameVaultAuth] login rejected (HTTP 401) for %s", url,
+                        )
                         return AuthResult(
                             success=False,
                             error="Invalid username or password",
                             store="gamevault",
                         )
                     if resp.status != 200:
+                        logger.warning(
+                            "[GameVaultAuth] login failed: HTTP %s from %s",
+                            resp.status, url,
+                        )
                         return AuthResult(
                             success=False,
                             error=f"Server returned HTTP {resp.status}",
@@ -220,6 +231,10 @@ class GameVaultAuth:
 
         token = data.get("access_token") or data.get("token", "")
         if not token:
+            logger.warning(
+                "[GameVaultAuth] login returned no token; response keys=%s",
+                sorted(data) if isinstance(data, dict) else type(data).__name__,
+            )
             return AuthResult(
                 success=False,
                 error="Server response contained no token",
@@ -227,6 +242,7 @@ class GameVaultAuth:
             )
         self._cfg["access_token"] = token
         self._cfg["token_expiry"] = self._parse_jwt_expiry(token) or 0
+        logger.info("[GameVaultAuth] login OK, token cached")
         return AuthResult(
             success=True,
             action="authenticated",

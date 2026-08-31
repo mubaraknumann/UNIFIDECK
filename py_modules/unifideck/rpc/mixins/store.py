@@ -61,6 +61,61 @@ class StoreRPCMixin:
         )
         return result
 
+    async def connect_gamevault(
+        self,
+        server_url: str,
+        username: str,
+        password: str,
+        verify_ssl: bool = True,
+        download_dir: str = "",
+    ) -> Any:
+        """Sign in to a self-hosted GameVault server.
+
+        A route of its own rather than a payload bolted onto
+        :meth:`store_auth`. That method takes ``(store, action)`` and nothing
+        else on purpose: its old ``"complete"`` + ``{code}`` kwargs channel
+        was removed with Ubisoft's API login, and re-opening a generic
+        passthrough so one store can smuggle credentials through it would
+        undo that for every store. GameVault is the only connector whose
+        sign-in is a form rather than a browser or a Steam shortcut — it does
+        not go through ``AuthDispatcher`` on the frontend either — so the one
+        flow that needs a payload gets one named, typed entry point.
+
+        Args:
+            server_url: base URL of the user's GameVault server.
+            username: GameVault account name.
+            password: GameVault password. Never logged; the store persists
+                it 0600 because the server issues no refresh grant, so the
+                credentials are what re-authenticate unattended.
+            verify_ssl: False to accept a self-signed certificate, which a
+                LAN server commonly has.
+            download_dir: staging directory for downloaded archives. Empty
+                means the configured default.
+
+        Returns:
+            ``AuthResult`` — ``success`` plus ``error`` when it failed.
+        """
+        logger.info(
+            "[StoreAuth:gamevault] connect server=%s user=%s verify_ssl=%s "
+            "download_dir=%s",
+            server_url, username, verify_ssl, download_dir or "(default)",
+        )
+        result = await self.registry.auth_action(
+            "gamevault",
+            "start",
+            server_url=server_url,
+            username=username,
+            password=password,
+            verify_ssl=verify_ssl,
+            download_dir=download_dir or None,
+        )
+        logger.info(
+            "[StoreAuth:gamevault] connect success=%s error=%s",
+            getattr(result, "success", None),
+            getattr(result, "error", None),
+        )
+        return result
+
     async def check_store_status(self) -> Any:
         """Probe every registered store for its current login state.
 
