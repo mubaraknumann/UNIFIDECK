@@ -9,15 +9,46 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from unifideck.core.types import Game
+
 from unifideck.stores.gamevault.library import (
     GameVaultFetchError,
     GameVaultLibraryReader,
+    RemoteCatalog,
     _parse_title_from_filename,
 )
 
 
-def _reader() -> GameVaultLibraryReader:
-    return GameVaultLibraryReader(installer=MagicMock())
+def _reader() -> RemoteCatalog:
+    """The remote catalog — owner of the API-item parsing helpers below."""
+    return RemoteCatalog(MagicMock())
+
+
+class _FakeCatalog:
+    """A ``CatalogSource`` that answers with whatever it was handed.
+
+    The reader is mode-agnostic now, so its tests describe the overlay and
+    the never-truncate rule rather than any particular transport.
+    """
+
+    def __init__(self, games=None, error: Exception | None = None) -> None:
+        self._games = games or []
+        self._error = error
+
+    async def fetch(self):
+        if self._error is not None:
+            raise self._error
+        return list(self._games)
+
+
+def _game(game_id: str = "1", title: str = "My Game") -> Game:
+    return Game(
+        app_id=0,
+        store="gamevault",
+        store_game_id=game_id,
+        title=title,
+        installed=False,
+    )
 
 
 # ── _parse_title_from_filename ───────────────────────────────────────
@@ -142,18 +173,11 @@ async def test_get_library_marks_installed_games():
         "install_path": "/games/mygame",
         "exe_path": "/games/mygame/Game.exe",
     }
-    reader = GameVaultLibraryReader(installer=installer)
-
-    async def _fake_fetch(server_url, auth_headers, verify_ssl):
-        return [{"id": 1, "metadata": {"title": "My Game"}}]
-
-    reader._fetch_all_pages = _fake_fetch  # type: ignore[method-assign]
-
-    games = await reader.get_library(
-        server_url="https://gv.example.com",
-        auth_headers={},
-        verify_ssl=True,
+    reader = GameVaultLibraryReader(
+        installer=installer, catalog=_FakeCatalog([_game()]),
     )
+
+    games = await reader.get_library()
 
     assert len(games) == 1
     assert games[0].installed is True
@@ -171,18 +195,11 @@ async def test_get_library_marks_installed_games():
 async def test_get_library_uninstalled_games_stay_uninstalled():
     installer = MagicMock()
     installer.get_install_info.return_value = None
-    reader = GameVaultLibraryReader(installer=installer)
-
-    async def _fake_fetch(server_url, auth_headers, verify_ssl):
-        return [{"id": 2, "metadata": {"title": "Not Installed"}}]
-
-    reader._fetch_all_pages = _fake_fetch  # type: ignore[method-assign]
-
-    games = await reader.get_library(
-        server_url="https://gv.example.com",
-        auth_headers={},
-        verify_ssl=True,
+    reader = GameVaultLibraryReader(
+        installer=installer, catalog=_FakeCatalog([_game("2", "Not Installed")]),
     )
+
+    games = await reader.get_library()
 
     assert games[0].installed is False
 
@@ -197,19 +214,15 @@ async def test_get_library_uninstalled_games_stay_uninstalled():
 # talks to a self-hosted server that is offline routinely, so this is the
 # expected case, not the exotic one.
 async def test_a_failed_page_aborts_the_fetch_instead_of_returning_partial():
-    reader = _reader()
-
-    async def _fail(server_url, auth_headers, verify_ssl):
-        raise GameVaultFetchError("server returned HTTP 502 for offset=500")
-
-    reader._fetch_all_pages = _fail  # type: ignore[method-assign]
+    reader = GameVaultLibraryReader(
+        installer=MagicMock(),
+        catalog=_FakeCatalog(
+            error=GameVaultFetchError("server returned HTTP 502 for offset=500"),
+        ),
+    )
 
     with pytest.raises(GameVaultFetchError):
-        await reader.get_library(
-            server_url="https://gv.example.com",
-            auth_headers={},
-            verify_ssl=True,
-        )
+        await reader.get_library()
 
 
 async def test_store_turns_a_failed_fetch_into_none_never_empty():

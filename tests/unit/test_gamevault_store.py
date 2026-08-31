@@ -128,48 +128,25 @@ async def test_get_library_returns_none_on_exception():
 
 
 # ── install_game ──────────────────────────────────────────────────────
-async def test_install_game_fails_fast_without_auth():
-    store = _make_store()
-    store._auth.get_auth_headers = AsyncMock(return_value=None)
-
-    result = await store.install_game("123")
-
-    assert result.success is False
-    assert result.error == "Not authenticated"
-    store._installer.install_game.assert_not_called()
-
-
 async def test_install_game_forwards_to_installer():
+    """The store is a pass-through now; the transport is the source's job.
+
+    ``server_url``, ``download_dir`` and the auth check used to be threaded
+    through this call. They moved into ``RemoteArchiveSource`` when the two
+    modes were folded onto one pipeline — see
+    ``test_gamevault_sources.py`` — so that install, uninstall, size and
+    library have no mode branch left to get wrong.
+    """
     store = _make_store()
     store._installer.install_game = AsyncMock(return_value=MagicMock(success=True))
 
     await store.install_game("123", base_path="/games", progress_cb=None)
 
     store._installer.install_game.assert_awaited_once()
-    _, kwargs = store._installer.install_game.call_args
+    args, kwargs = store._installer.install_game.call_args
+    assert args == ("123",)
     assert kwargs["install_path"] == "/games"
-    assert kwargs["server_url"] == "https://gv.example.com"
-
-
-async def test_install_game_download_dir_precedence(monkeypatch):
-    """kwargs['download_dir'] should win over the saved auth.download_dir."""
-    store = _make_store(download_dir="/saved/dir")
-    store._installer.install_game = AsyncMock(return_value=MagicMock(success=True))
-
-    await store.install_game("123", download_dir="/override/dir")
-
-    _, kwargs = store._installer.install_game.call_args
-    assert kwargs["download_dir"] == "/override/dir"
-
-
-async def test_install_game_falls_back_to_saved_download_dir():
-    store = _make_store(download_dir="/saved/dir")
-    store._installer.install_game = AsyncMock(return_value=MagicMock(success=True))
-
-    await store.install_game("123")
-
-    _, kwargs = store._installer.install_game.call_args
-    assert kwargs["download_dir"] == "/saved/dir"
+    assert set(kwargs) == {"install_path", "progress_callback"}
 
 
 # ── uninstall_game / update_game / check_for_updates ───────────────────
@@ -229,12 +206,6 @@ async def test_check_for_updates_always_empty():
 
 
 # ── get_game_size ─────────────────────────────────────────────────────
-async def test_get_game_size_returns_none_without_auth():
-    store = _make_store()
-    store._auth.get_auth_headers = AsyncMock(return_value=None)
-    assert await store.get_game_size("123") is None
-
-
 async def test_get_game_size_forwards_to_installer():
     store = _make_store()
     store._installer.get_game_size = AsyncMock(return_value=1234)

@@ -1,11 +1,27 @@
-"""GameVault authentication — JWT-based HTTP Basic flow.
+"""GameVault connection state — the config file, and the remote sign-in.
 
-Persists credentials and tokens to a JSON config file on disk so
-the server_url / username / password / access_token survive restarts.
+This module owns ``gamevault_config.json`` for **both** modes. There is no
+second config class for local mode: the load / save / 0600 / clear cycle is
+the same cycle, and a copy of it is how the two would drift apart on the day
+one of them learned to encrypt.
+
+What differs is one key, ``mode``:
+
+* ``"remote"`` — ``server_url`` + ``username`` + ``password``, exchanged for
+  a JWT against a self-hosted server.
+* ``"local"``  — ``vault_dir``, no network, no secret. Where a game is
+  *installed* is deliberately not here: that is the shared storage picker's
+  decision, made per install, for every store alike.
+
+A successful connect writes a **fresh** config rather than merging into the
+old one, because the modes are mutually exclusive: leaving a stale
+``password`` behind after switching to local would keep a secret on disk that
+nothing can any longer use.
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -15,9 +31,16 @@ from typing import Any
 
 from unifideck.core.types import AuthResult, Result
 
+from .local_catalog import prepare_vault
+
 logger = logging.getLogger(__name__)
 
 _CONFIG_PATH_DEFAULT = "~/.local/share/unifideck/gamevault_config.json"
+
+MODE_REMOTE = "remote"
+MODE_LOCAL = "local"
+
+STORE_NAME = "gamevault"
 
 
 class GameVaultAuth:
@@ -99,6 +122,16 @@ class GameVaultAuth:
     # ── Public helpers (used by store.py) ───────────────────────────
 
     @property
+    def mode(self) -> str:
+        """``"local"`` or ``"remote"``. Absent in configs written before
+        local mode existed, which were all remote."""
+        return str(self._cfg.get("mode") or MODE_REMOTE)
+
+    @property
+    def is_local(self) -> bool:
+        return self.mode == MODE_LOCAL
+
+    @property
     def server_url(self) -> str | None:
         return self._cfg.get("server_url")
 
@@ -110,7 +143,21 @@ class GameVaultAuth:
     def download_dir(self) -> str | None:
         return self._cfg.get("download_dir") or None
 
+    @property
+    def vault_dir(self) -> str | None:
+        return self._cfg.get("vault_dir") or None
+
     def is_authenticated(self) -> bool:
+        """Is there a usable connection on record?
+
+        For local mode this asks only whether the user configured one.
+        whether the folder is reachable *right now* is a different question,
+        answered by ``GameVaultStore.is_available`` against the vault
+        sentinel — an unmounted SD card must not read as "signed out", or the
+        user would be asked to reconnect every time they booted undocked.
+        """
+        if self.is_local:
+            return bool(self._cfg.get("vault_dir"))
         if not self._cfg.get("server_url"):
             return False
         if self._is_token_valid():
@@ -163,17 +210,62 @@ class GameVaultAuth:
         """
         result = await self._do_login(server_url, username, password, verify_ssl)
         if result.success:
-            update: dict[str, Any] = {
+            fresh: dict[str, Any] = {
+                "mode": MODE_REMOTE,
                 "server_url": server_url.rstrip("/"),
                 "username": username,
                 "password": password,
                 "verify_ssl": verify_ssl,
+                # _do_login has already written the new token into _cfg.
+                "access_token": self._cfg.get("access_token", ""),
+                "token_expiry": self._cfg.get("token_expiry", 0),
             }
             if download_dir is not None:
-                update["download_dir"] = download_dir
-            self._cfg.update(update)
+                fresh["download_dir"] = download_dir
+            # Replace, don't merge: a vault_dir left over from local mode
+            # would make ``is_local`` lie the next time the file is read.
+            self._cfg = fresh
             self._save_config()
         return result
+
+    async def start_local_auth(self, *, vault_dir: str) -> AuthResult:
+        """Connect to a folder of archives on this device.
+
+        No network and no secret: "connecting" means agreeing on one folder,
+        creating it, and marking it so a later sync can tell an empty vault
+        from a missing one.
+
+        One folder, not two. The install location is asked per install by the
+        shared storage picker, which already handles SD cards and USB drives
+        for all seven stores; a GameVault-only copy of that setting would be
+        a second answer to a question already answered. The
+        "uninstall must never eat my archive" guarantee moved to the moment
+        of deletion — see ``_would_delete_the_archive`` — where it holds no
+        matter where the user sent that particular game.
+        """
+        try:
+            vault = await asyncio.to_thread(prepare_vault, vault_dir)
+        except ValueError as exc:
+            logger.warning("[GameVaultAuth] local connect rejected: %s", exc)
+            return AuthResult(success=False, error=str(exc), store=STORE_NAME)
+        except OSError as exc:
+            logger.warning("[GameVaultAuth] could not create vault: %s", exc)
+            return AuthResult(
+                success=False,
+                error=f"Could not create the vault folder: {exc}",
+                store=STORE_NAME,
+            )
+
+        self._cfg = {"mode": MODE_LOCAL, "vault_dir": str(vault)}
+        self._save_config()
+        logger.info("[GameVaultAuth] local vault connected: %s", vault)
+        return AuthResult(
+            success=True,
+            action="authenticated",
+            tokens_cached=False,
+            store=STORE_NAME,
+            metadata={"mode": MODE_LOCAL, "vault_dir": str(vault)},
+        )
 
     async def _do_login(
         self,

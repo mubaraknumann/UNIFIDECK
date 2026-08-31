@@ -116,6 +116,49 @@ class StoreRPCMixin:
         )
         return result
 
+    async def connect_gamevault_local(self, vault_dir: str = "") -> Any:
+        """Use a folder of game archives on this device as the library.
+
+        The offline half of GameVault: no server, no account, no network.
+        The user picks a folder, drops archives in it, and they appear in
+        the library on the next sync.
+
+        A route of its own rather than a ``mode`` argument on
+        :meth:`connect_gamevault`, because the two parameter sets are
+        disjoint — one takes a URL and a password, the other a path — and a
+        single route would have to accept both and validate that exactly one
+        set arrived. The store still reaches the same
+        ``registry.auth_action("gamevault", "start", ...)`` entry point, so
+        there is one auth path underneath, not two.
+
+        There is deliberately **no install-location argument**. Every install
+        already goes through the shared storage picker, which knows about SD
+        cards and USB drives and applies to all seven stores; a per-store
+        copy of that setting would be a second answer to a question already
+        answered, and the two would disagree the first time one was changed.
+
+        Args:
+            vault_dir: folder the user will drop game archives into. Empty
+                means the configured default, so connecting with an untouched
+                form is a complete action — the folder is created for the
+                user rather than demanded from them. Created along with a
+                marker file that lets a later sync tell an empty vault from
+                an unmounted drive.
+
+        Returns:
+            ``AuthResult`` — ``success`` plus ``error`` when it failed.
+        """
+        logger.info("[StoreAuth:gamevault] connect local vault=%s", vault_dir)
+        result = await self.registry.auth_action(
+            "gamevault", "start", mode="local", vault_dir=vault_dir,
+        )
+        logger.info(
+            "[StoreAuth:gamevault] connect local success=%s error=%s",
+            getattr(result, "success", None),
+            getattr(result, "error", None),
+        )
+        return result
+
     async def check_store_status(self) -> Any:
         """Probe every registered store for its current login state.
 

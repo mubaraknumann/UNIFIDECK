@@ -1,241 +1,281 @@
-"""Tests for ``stores.gamevault.install`` — archive detection, exe finding,
-and install-marker persistence.
+"""Tests for ``stores.gamevault.install`` and ``.archive``.
 
-No dedicated GameVault tests existed before this file, despite 1139 lines
-of store code across install.py/library.py/auth.py/store.py. Priority here
-is ``_find_executable`` — its lack of "trainer"/"cheat" in ``_UTIL_KEYWORDS``
-plus size-favouring scoring is what silently picked a bundled trainer.exe
-over the real game exe on a live install (Tempest Rising / GameVault),
-making Unifideck launch the trainer instead of the game.
+Covers the shared install pipeline, archive-format detection and the install
+marker. The pieces that used to live here and now have their own files:
+executable scoring → ``test_gamevault_exe_finder.py``; the download and
+``Content-Disposition`` handling → ``test_gamevault_sources.py``.
+
+The pipeline is deliberately exercised through a fake ``ArchiveSource``
+rather than through either real one. That is the shape of the design: the
+installer is not supposed to know whether it is unpacking a download or a
+file the user already had, and a test that reached for a real source would
+be re-testing the transport instead of the pipeline.
 """
 from __future__ import annotations
 
-from unifideck.stores.gamevault.archive import _detect_format
-from unifideck.stores.gamevault.install import (
-    GameVaultInstaller,
-    _find_executable,
-    _parse_filename_from_cd,
+import zipfile
+from pathlib import Path
+
+import pytest
+
+from unifideck.stores.gamevault.archive import (
+    available_extractors,
+    detect_format,
+    extract_archive,
 )
+from unifideck.stores.gamevault.install import GameVaultInstaller
 from unifideck.stores.gamevault.markers import (
-    _load_install_info,
-    _remove_install_info,
-    _save_install_info,
+    load_install_info,
+    remove_install_info,
+    save_install_info,
 )
+from unifideck.stores.gamevault.sources import AcquiredArchive
 
 
-# ── _detect_format ──────────────────────────────────────────────────
+class _FakeSource:
+    """An ``ArchiveSource`` over a file that is already on disk."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        title: str = "My Game",
+        dir_name: str = "My Game",
+        prefer_native: bool = False,
+        is_installer: bool = False,
+        error: Exception | None = None,
+    ) -> None:
+        self._acquired = AcquiredArchive(
+            path=path,
+            title=title,
+            dir_name=dir_name,
+            prefer_native=prefer_native,
+            is_installer=is_installer,
+        )
+        self._error = error
+        self.released: list[AcquiredArchive | None] = []
+
+    async def acquire(self, game_id, *, progress_callback):
+        if self._error is not None:
+            raise self._error
+        return self._acquired
+
+    def release(self, acquired):
+        self.released.append(acquired)
+
+    async def size(self, game_id):
+        return 4242
+
+
+def _zip_with(tmp_path: Path, name: str, members: dict[str, bytes]) -> Path:
+    archive = tmp_path / name
+    with zipfile.ZipFile(archive, "w") as zf:
+        for member, data in members.items():
+            zf.writestr(member, data)
+    return archive
+
+
+@pytest.fixture
+def markers_in(tmp_path, monkeypatch):
+    """Redirect the marker directory at its single binding."""
+    import unifideck.stores.gamevault.markers as markers_mod
+    marker_dir = tmp_path / "markers"
+    marker_dir.mkdir()
+    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: marker_dir)
+    return marker_dir
+
+
+# ── detect_format ────────────────────────────────────────────────────
 def test_detect_format_zip(tmp_path):
     p = tmp_path / "archive.bin"
     p.write_bytes(b"PK\x03\x04" + b"\x00" * 20)
-    assert _detect_format(p) == "zip"
+    assert detect_format(p) == "zip"
 
 
 def test_detect_format_rar(tmp_path):
     p = tmp_path / "archive.bin"
     p.write_bytes(b"Rar!\x1a\x07\x00" + b"\x00" * 20)
-    assert _detect_format(p) == "rar"
+    assert detect_format(p) == "rar"
 
 
 def test_detect_format_7z(tmp_path):
     p = tmp_path / "archive.bin"
-    p.write_bytes(b"7z\xbc\xaf'\x1c\x00\x04" + b"\x00" * 20)
-    assert _detect_format(p) == "7z"
+    p.write_bytes(b"7z\xbc\xaf'\x1c" + b"\x00" * 20)
+    assert detect_format(p) == "7z"
 
 
 def test_detect_format_7z_inside_sfx(tmp_path):
-    """A self-extracting exe wrapper: the 7z signature is buried, not at
-    offset 0 — the sniffer must scan the first 512KB, not just the header."""
-    p = tmp_path / "setup.exe"
-    p.write_bytes(b"MZ" + b"\x00" * 1000 + b"7z\xbc\xaf'\x1c" + b"\x00" * 20)
-    assert _detect_format(p) == "7z"
+    p = tmp_path / "archive.bin"
+    p.write_bytes(b"MZ" + b"\x00" * 2048 + b"7z\xbc\xaf'\x1c" + b"\x00" * 20)
+    assert detect_format(p) == "7z"
 
 
 def test_detect_format_unknown(tmp_path):
     p = tmp_path / "archive.bin"
-    p.write_bytes(b"not an archive at all")
-    assert _detect_format(p) is None
+    p.write_bytes(b"NOPE" + b"\x00" * 20)
+    assert detect_format(p) is None
 
 
 def test_detect_format_missing_file_returns_none(tmp_path):
-    assert _detect_format(tmp_path / "does-not-exist.bin") is None
+    assert detect_format(tmp_path / "nope.bin") is None
 
 
-# ── _find_executable ─────────────────────────────────────────────────
-def test_find_executable_picks_the_only_exe(tmp_path):
-    (tmp_path / "Game.exe").write_bytes(b"x" * 1000)
-    assert _find_executable(str(tmp_path)) == str(tmp_path / "Game.exe")
+# ── the extractor ladder ─────────────────────────────────────────────
+def test_bsdtar_is_first_in_the_available_ladder():
+    """``bsdtar`` must be preferred wherever it exists.
 
-
-def test_find_executable_filters_utility_keywords(tmp_path):
-    (tmp_path / "Game.exe").write_bytes(b"x" * 1000)
-    (tmp_path / "unins000.exe").write_bytes(b"x" * 1000)
-    (tmp_path / "vcredist_x64.exe").write_bytes(b"x" * 1000)
-    (tmp_path / "UE4PrereqSetup_x64.exe").write_bytes(b"x" * 1000)
-    result = _find_executable(str(tmp_path))
-    assert result == str(tmp_path / "Game.exe")
-
-
-def test_find_executable_no_candidates_returns_none(tmp_path):
-    (tmp_path / "readme.txt").write_text("hi")
-    assert _find_executable(str(tmp_path)) is None
-
-
-def test_find_executable_prefers_shallower_path(tmp_path):
-    """Two otherwise-equal exes: the shallower one should win the
-    depth-based score component."""
-    (tmp_path / "Game.exe").write_bytes(b"x" * 1000)
-    nested = tmp_path / "bin" / "redist" / "tools"
-    nested.mkdir(parents=True)
-    (nested / "Other.exe").write_bytes(b"x" * 1000)
-    assert _find_executable(str(tmp_path)) == str(tmp_path / "Game.exe")
-
-
-def test_find_executable_prefers_larger_file_at_equal_depth(tmp_path):
-    (tmp_path / "Small.exe").write_bytes(b"x" * 1000)
-    (tmp_path / "Big.exe").write_bytes(b"x" * (10 * 1024 * 1024))
-    assert _find_executable(str(tmp_path)) == str(tmp_path / "Big.exe")
-
-
-def test_find_executable_does_not_filter_trainer_or_cheat_by_name(tmp_path):
-    """Regression documentation, not a desired behaviour: KNOWN GAP.
-
-    ``_UTIL_KEYWORDS`` has no "trainer"/"cheat" entry, so a large trainer
-    exe bundled inside a game's install dir can outscore (and thus
-    replace) the real game exe purely on file size. This test pins the
-    CURRENT behaviour so a future fix (adding those keywords, or scoping
-    detection to the top-level dir only) has to consciously change this
-    test rather than silently regress it back.
+    Stock SteamOS ships ``bsdtar`` and does not ship ``7z``. The two used to
+    be separate ladders, and the 7z one required the ``7z`` binary outright,
+    so a ``.7z`` upload failed on an untouched Deck after the user had
+    already waited out a multi-gigabyte download.
     """
-    (tmp_path / "Game.exe").write_bytes(b"x" * (1 * 1024 * 1024))
-    (tmp_path / "trainer.exe").write_bytes(b"x" * (20 * 1024 * 1024))
-    # Today: the larger trainer.exe wins. This is the exact bug reproduced
-    # live with Tempest Rising.
-    assert _find_executable(str(tmp_path)) == str(tmp_path / "trainer.exe")
+    available = available_extractors()
+    if "bsdtar" in available:
+        assert available[0] == "bsdtar"
 
 
-# ── install marker persistence ───────────────────────────────────────
-def test_save_and_load_install_info_roundtrip(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.markers as markers_mod
-    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
+async def test_extract_zip_uses_the_stdlib_and_needs_no_tool(tmp_path):
+    archive = _zip_with(tmp_path, "g.zip", {"Game.exe": b"x" * 100})
+    dest = tmp_path / "out"
 
-    _save_install_info(
-        "123", title="My Game", install_path="/games/mygame", exe_path="/games/mygame/Game.exe",
-    )
-    info = _load_install_info("123")
-    assert info == {
-        "game_id": "123",
-        "title": "My Game",
-        "install_path": "/games/mygame",
-        "exe_path": "/games/mygame/Game.exe",
-    }
+    await extract_archive(archive, dest)
+
+    assert (dest / "Game.exe").read_bytes() == b"x" * 100
 
 
-def test_load_install_info_missing_returns_none(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.markers as markers_mod
-    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
-    assert _load_install_info("does-not-exist") is None
+async def test_extract_unknown_format_raises(tmp_path):
+    junk = tmp_path / "junk.bin"
+    junk.write_bytes(b"NOPE" + b"\x00" * 32)
+
+    with pytest.raises(RuntimeError, match="Unknown archive format"):
+        await extract_archive(junk, tmp_path / "out")
 
 
-def test_load_install_info_corrupt_json_returns_none(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.markers as markers_mod
-    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
-    marker = tmp_path / "999.json"
-    marker.write_text("{not valid json")
-    assert _load_install_info("999") is None
-
-
-def test_remove_install_info_deletes_marker(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.markers as markers_mod
-    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
-    _save_install_info("42", title="T", install_path="/p", exe_path="/p/e.exe")
-    assert (tmp_path / "42.json").exists()
-    _remove_install_info("42")
-    assert not (tmp_path / "42.json").exists()
-
-
-def test_remove_install_info_missing_is_a_noop(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.markers as markers_mod
-    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
-    _remove_install_info("never-existed")  # must not raise
-
-
-def test_get_installed_reads_all_markers(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.markers as markers_mod
-    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
-    _save_install_info("1", title="A", install_path="/a", exe_path="/a/a.exe")
-    _save_install_info("2", title="B", install_path="/b", exe_path="/b/b.exe")
-
-    installer = GameVaultInstaller(default_install_root="/root", download_dir="/dl")
-    installed = installer.get_installed()
-
-    assert set(installed.keys()) == {"1", "2"}
-    assert installed["1"]["title"] == "A"
-
-
-def test_get_installed_empty_dir_returns_empty(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.markers as markers_mod
-    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
-    installer = GameVaultInstaller(default_install_root="/root", download_dir="/dl")
-    assert installer.get_installed() == {}
-
-
-def test_get_installed_missing_dir_returns_empty(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.markers as markers_mod
-    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path / "does-not-exist")
-    installer = GameVaultInstaller(default_install_root="/root", download_dir="/dl")
-    assert installer.get_installed() == {}
-
-
-def test_get_install_info_delegates_to_module_function(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.markers as markers_mod
-    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
-    _save_install_info("7", title="T", install_path="/p", exe_path="/p/e.exe")
-
-    installer = GameVaultInstaller(default_install_root="/root", download_dir="/dl")
-    assert installer.get_install_info("7")["title"] == "T"
-
-
-# ── Content-Disposition filename parsing ─────────────────────────────
-def test_parse_filename_from_cd_simple():
-    assert _parse_filename_from_cd('attachment; filename="Game.zip"') == "Game.zip"
-
-
-def test_parse_filename_from_cd_no_quotes():
-    assert _parse_filename_from_cd("attachment; filename=Game.zip") == "Game.zip"
-
-
-def test_parse_filename_from_cd_rfc5987_charset_prefix():
-    """KNOWN GAP: the capture regex ``[^"\\';\\r\\n]+`` stops at the FIRST
-    apostrophe, so it never actually reaches the ``''`` split branch for a
-    real RFC 5987 ``filename*=UTF-8''...`` value — it captures only the
-    charset token. Pinned as documentation of current behaviour, not the
-    intended one.
-    """
-    header = "attachment; filename*=UTF-8''My%20Game.zip"
-    assert _parse_filename_from_cd(header) == "UTF-8"
-
-
-def test_parse_filename_from_cd_missing_returns_none():
-    assert _parse_filename_from_cd("attachment") is None
-
-
-def test_parse_filename_from_cd_empty_string_returns_none():
-    assert _parse_filename_from_cd("") is None
-
-
-# ── GameVaultInstaller construction ───────────────────────────────────
-def test_installer_expands_user_paths():
+# ── the shared install pipeline ──────────────────────────────────────
+async def test_install_extracts_and_registers(tmp_path, markers_in):
+    archive = _zip_with(tmp_path, "g.zip", {"Game.exe": b"x" * 2000})
+    source = _FakeSource(archive)
     installer = GameVaultInstaller(
-        default_install_root="~/Games/GameVault", download_dir="~/dl",
+        source=source, default_install_root=str(tmp_path / "installs"),
     )
-    assert "~" not in str(installer._default_install_root)
-    assert "~" not in str(installer._download_dir)
+
+    result = await installer.install_game("g1")
+
+    assert result.success is True
+    game_dir = tmp_path / "installs" / "My Game"
+    assert (game_dir / "Game.exe").exists()
+    assert result.install_path == str(game_dir)
+    assert result.metadata["exe_path"] == str(game_dir / "Game.exe")
+
+    marker = load_install_info("g1")
+    assert marker["install_path"] == str(game_dir)
+    assert marker["archive_path"] == str(archive)
 
 
-async def test_uninstall_game_missing_install_returns_failure(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.markers as markers_mod
-    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
-    installer = GameVaultInstaller(default_install_root="/root", download_dir="/dl")
+async def test_install_reports_progress_phases(tmp_path, markers_in):
+    archive = _zip_with(tmp_path, "g.zip", {"Game.exe": b"x" * 10})
+    seen: list[str] = []
+
+    async def progress(payload):
+        seen.append(payload.get("phase", ""))
+
+    installer = GameVaultInstaller(
+        source=_FakeSource(archive),
+        default_install_root=str(tmp_path / "installs"),
+    )
+    await installer.install_game("g1", progress_callback=progress)
+
+    assert "extracting" in seen
+
+
+async def test_install_releases_the_source_on_success(tmp_path, markers_in):
+    archive = _zip_with(tmp_path, "g.zip", {"Game.exe": b"x"})
+    source = _FakeSource(archive)
+    installer = GameVaultInstaller(
+        source=source, default_install_root=str(tmp_path / "installs"),
+    )
+
+    await installer.install_game("g1")
+
+    assert len(source.released) == 1
+
+
+async def test_install_releases_the_source_on_failure(tmp_path, markers_in):
+    """``release`` runs from a ``finally``, so a failure still hands back.
+
+    Without it, remote mode would leak a multi-gigabyte staged download for
+    every failed install.
+    """
+    source = _FakeSource(tmp_path / "nope.zip", error=RuntimeError("boom"))
+    installer = GameVaultInstaller(
+        source=source, default_install_root=str(tmp_path / "installs"),
+    )
+
+    result = await installer.install_game("g1")
+
+    assert result.success is False
+    assert result.error == "boom"
+    assert source.released == [None]
+
+
+async def test_install_passes_the_native_hint_to_the_exe_finder(
+    tmp_path, markers_in,
+):
+    """A ``(L_P)`` archive resolves its native binary, not the bundled exe."""
+    archive = _zip_with(
+        tmp_path,
+        "g.zip",
+        {"Game.exe": b"x" * 5_000_000, "start.sh": b"#!/bin/sh\n"},
+    )
+    installer = GameVaultInstaller(
+        source=_FakeSource(archive, prefer_native=True),
+        default_install_root=str(tmp_path / "installs"),
+    )
+
+    result = await installer.install_game("g1")
+
+    assert result.metadata["exe_path"].endswith("start.sh")
+
+
+async def test_install_surfaces_the_installer_flag(tmp_path, markers_in):
+    archive = _zip_with(tmp_path, "g.zip", {"Setup.exe": b"x" * 100})
+    installer = GameVaultInstaller(
+        source=_FakeSource(archive, is_installer=True),
+        default_install_root=str(tmp_path / "installs"),
+    )
+
+    result = await installer.install_game("g1")
+
+    assert result.metadata["is_installer"] is True
+
+
+async def test_install_honours_an_explicit_install_path(tmp_path, markers_in):
+    archive = _zip_with(tmp_path, "g.zip", {"Game.exe": b"x"})
+    elsewhere = tmp_path / "sdcard"
+    installer = GameVaultInstaller(
+        source=_FakeSource(archive),
+        default_install_root=str(tmp_path / "installs"),
+    )
+
+    result = await installer.install_game("g1", install_path=str(elsewhere))
+
+    assert result.install_path == str(elsewhere / "My Game")
+
+
+async def test_get_game_size_comes_from_the_source(tmp_path):
+    installer = GameVaultInstaller(
+        source=_FakeSource(tmp_path / "x.zip"),
+        default_install_root=str(tmp_path),
+    )
+    assert await installer.get_game_size("g1") == 4242
+
+
+# ── uninstall ────────────────────────────────────────────────────────
+async def test_uninstall_game_missing_install_returns_failure(tmp_path, markers_in):
+    installer = GameVaultInstaller(
+        source=_FakeSource(tmp_path / "x.zip"),
+        default_install_root=str(tmp_path),
+    )
 
     result = await installer.uninstall_game("never-installed")
 
@@ -243,52 +283,166 @@ async def test_uninstall_game_missing_install_returns_failure(tmp_path, monkeypa
     assert result.error == "Game not installed"
 
 
-async def test_uninstall_game_removes_dir_and_marker(tmp_path, monkeypatch):
-    import unifideck.stores.gamevault.markers as markers_mod
-    monkeypatch.setattr(markers_mod, "_marker_dir", lambda: tmp_path)
-    game_dir = tmp_path / "installed_game"
-    game_dir.mkdir()
+async def test_uninstall_game_removes_dir_and_marker(tmp_path, markers_in):
+    game_dir = tmp_path / "installs" / "installed_game"
+    game_dir.mkdir(parents=True)
     (game_dir / "Game.exe").write_bytes(b"x")
-    _save_install_info(
-        "55", title="T", install_path=str(game_dir), exe_path=str(game_dir / "Game.exe"),
+    save_install_info(
+        "55",
+        title="T",
+        install_path=str(game_dir),
+        exe_path=str(game_dir / "Game.exe"),
     )
-    installer = GameVaultInstaller(default_install_root="/root", download_dir="/dl")
+    installer = GameVaultInstaller(
+        source=_FakeSource(tmp_path / "x.zip"),
+        default_install_root=str(tmp_path / "installs"),
+    )
 
     result = await installer.uninstall_game("55")
 
     assert result.success is True
     assert not game_dir.exists()
-    assert _load_install_info("55") is None
+    assert load_install_info("55") is None
 
 
-# ── _find_executable must degrade, not eliminate ─────────────────────
-#
-# The keyword filter expresses a preference. When it rejects every
-# candidate, returning None produced an install that reported success and
-# could never launch: the first real GameVault install extracted a repack
-# whose only executable was ``Setup.exe``, the filter rejected it on
-# "setup", the marker got ``exe_path: ""`` and reconcile logged
-#
-#   mark_installed gamevault:1 — empty exe_path; launcher will not be able
-#   to resolve a target
-def test_find_executable_falls_back_when_everything_is_filtered(tmp_path):
-    """A repack whose only executable is its installer."""
-    repack = tmp_path / "Ghost of Tsushima [DODI Repack]"
-    repack.mkdir()
-    (repack / "Setup.exe").write_bytes(b"x" * 8_000_000)
+async def test_uninstall_refuses_to_delete_a_dir_holding_the_archive(
+    tmp_path, markers_in,
+):
+    """The guarantee, checked where it can actually be broken.
 
-    assert _find_executable(str(tmp_path)) == str(repack / "Setup.exe")
+    Every install goes through the shared storage picker, so the user can
+    send a single game anywhere — including into the vault folder itself.
+    A connect-time "keep these two folders apart" rule cannot see a choice
+    made days later; this one is checked at the moment of deletion, against
+    the ``archive_path`` in the marker.
+
+    The install record still goes, so the shortcut flips to not-installed;
+    only the files survive.
+    """
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    archive = _zip_with(vault, "My Game (2016).zip", {"Game.exe": b"x" * 100})
+    installer = GameVaultInstaller(
+        source=_FakeSource(archive),
+        # The user pointed this install straight at their vault.
+        default_install_root=str(tmp_path),
+    )
+    save_install_info(
+        "g1",
+        title="My Game",
+        install_path=str(vault),
+        exe_path="",
+        archive_path=str(archive),
+    )
+
+    result = await installer.uninstall_game("g1")
+
+    assert result.success is True
+    assert archive.exists()
+    assert vault.exists()
+    assert load_install_info("g1") is None
 
 
-def test_find_executable_still_prefers_a_real_game_exe(tmp_path):
-    """The fallback must not weaken the preference when both exist."""
-    (tmp_path / "Setup.exe").write_bytes(b"x" * 9_000_000)
-    (tmp_path / "GhostOfTsushima.exe").write_bytes(b"x" * 1000)
+async def test_uninstall_never_touches_the_source_archive(tmp_path, markers_in):
+    """The local-mode promise, asserted end to end.
 
-    assert _find_executable(str(tmp_path)) == str(tmp_path / "GhostOfTsushima.exe")
+    Install from an archive the user owns, then uninstall: the extracted
+    tree goes and the archive stays. It is the single behaviour a user would
+    never forgive getting wrong, so it is pinned end to end as well as at
+    the guard.
+    """
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    archive = _zip_with(vault, "My Game (2016).zip", {"Game.exe": b"x" * 100})
+    installer = GameVaultInstaller(
+        source=_FakeSource(archive),
+        default_install_root=str(tmp_path / "installs"),
+    )
+
+    await installer.install_game("g1")
+    game_dir = tmp_path / "installs" / "My Game"
+    assert game_dir.exists()
+
+    result = await installer.uninstall_game("g1")
+
+    assert result.success is True
+    assert not game_dir.exists()
+    assert archive.exists()
 
 
-def test_find_executable_returns_none_when_there_is_no_exe(tmp_path):
-    (tmp_path / "readme.txt").write_text("no executables here")
+# ── install marker persistence ───────────────────────────────────────
+def test_save_and_load_install_info_roundtrip(markers_in):
+    save_install_info(
+        "123",
+        title="My Game",
+        install_path="/games/mygame",
+        exe_path="/games/mygame/Game.exe",
+        archive_path="/vault/My Game.zip",
+    )
+    assert load_install_info("123") == {
+        "game_id": "123",
+        "title": "My Game",
+        "install_path": "/games/mygame",
+        "exe_path": "/games/mygame/Game.exe",
+        "archive_path": "/vault/My Game.zip",
+    }
 
-    assert _find_executable(str(tmp_path)) is None
+
+def test_save_install_info_archive_path_defaults_to_empty(markers_in):
+    save_install_info("1", title="T", install_path="/p", exe_path="/p/e.exe")
+    assert load_install_info("1")["archive_path"] == ""
+
+
+def test_load_install_info_missing_returns_none(markers_in):
+    assert load_install_info("nope") is None
+
+
+def test_load_install_info_corrupt_json_returns_none(markers_in):
+    (markers_in / "bad.json").write_text("{not json")
+    assert load_install_info("bad") is None
+
+
+def test_remove_install_info_deletes_marker(markers_in):
+    save_install_info("9", title="T", install_path="/p", exe_path="")
+    remove_install_info("9")
+    assert load_install_info("9") is None
+
+
+def test_remove_install_info_missing_is_a_noop(markers_in):
+    remove_install_info("absent")
+
+
+def test_get_installed_reads_all_markers(tmp_path, markers_in):
+    save_install_info("1", title="A", install_path="/a", exe_path="")
+    save_install_info("2", title="B", install_path="/b", exe_path="")
+    installer = GameVaultInstaller(
+        source=_FakeSource(tmp_path / "x.zip"),
+        default_install_root=str(tmp_path),
+    )
+    assert set(installer.get_installed()) == {"1", "2"}
+
+
+def test_get_installed_empty_dir_returns_empty(tmp_path, markers_in):
+    installer = GameVaultInstaller(
+        source=_FakeSource(tmp_path / "x.zip"),
+        default_install_root=str(tmp_path),
+    )
+    assert installer.get_installed() == {}
+
+
+def test_get_install_info_delegates_to_module_function(tmp_path, markers_in):
+    save_install_info("7", title="T", install_path="/p", exe_path="/p/e.exe")
+    installer = GameVaultInstaller(
+        source=_FakeSource(tmp_path / "x.zip"),
+        default_install_root=str(tmp_path),
+    )
+    assert installer.get_install_info("7")["title"] == "T"
+
+
+# ── construction ─────────────────────────────────────────────────────
+def test_installer_expands_user_paths(tmp_path):
+    installer = GameVaultInstaller(
+        source=_FakeSource(tmp_path / "x.zip"),
+        default_install_root="~/Games/GameVault",
+    )
+    assert "~" not in str(installer._default_install_root)

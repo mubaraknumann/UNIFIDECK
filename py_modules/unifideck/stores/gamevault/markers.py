@@ -35,13 +35,22 @@ def _marker_path(game_id: str) -> Path:
     return _marker_dir() / f"{game_id}.json"
 
 
-def _save_install_info(
+def save_install_info(
     game_id: str,
     *,
     title: str,
     install_path: str,
     exe_path: str,
+    archive_path: str = "",
 ) -> None:
+    """Record that *game_id* is installed at *install_path*.
+
+    ``archive_path`` is the file the install came from. It is diagnostic for
+    the remote mode (that staged copy is deleted straight afterwards) and
+    load-bearing for the local one, where it names the user's own archive —
+    which is precisely the file uninstall must never touch. Recording it
+    makes that separation auditable from the marker alone.
+    """
     try:
         _marker_dir().mkdir(parents=True, exist_ok=True)
         _marker_path(game_id).write_text(
@@ -51,6 +60,7 @@ def _save_install_info(
                     "title": title,
                     "install_path": install_path,
                     "exe_path": exe_path,
+                    "archive_path": archive_path,
                 },
                 indent=2,
             )
@@ -59,7 +69,7 @@ def _save_install_info(
         logger.exception("[GameVaultInstaller] Could not save marker")
 
 
-def _load_install_info(game_id: str) -> dict[str, Any] | None:
+def load_install_info(game_id: str) -> dict[str, Any] | None:
     p = _marker_path(game_id)
     try:
         if p.exists():
@@ -71,7 +81,7 @@ def _load_install_info(game_id: str) -> dict[str, Any] | None:
     return None
 
 
-def _remove_install_info(game_id: str) -> None:
+def remove_install_info(game_id: str) -> None:
     p = _marker_path(game_id)
     try:
         if p.exists():
@@ -80,7 +90,7 @@ def _remove_install_info(game_id: str) -> None:
         logger.warning("[GameVaultInstaller] Could not remove marker: %s", exc)
 
 
-def _load_all_install_info() -> dict[str, dict[str, Any]]:
+def load_all_install_info() -> dict[str, dict[str, Any]]:
     """``{game_id: marker}`` for every readable marker on disk.
 
     Lives here rather than in ``install.py`` so that every read of the

@@ -1,9 +1,16 @@
 """GameVault archive handling — detect the format, unpack it.
 
-Split out of ``install.py`` to keep that file under the 550-LOC volumetry
-cap. The GameVault server hands back whatever archive the user put in their
-library, so the format is discovered from magic bytes rather than the
-filename, and unpacking rar/7z shells out to whichever tool the host has.
+The archive is whatever its owner put in the library, so the format is
+discovered from magic bytes rather than the filename, and unpacking anything
+but a zip shells out to whichever tool the host has.
+
+**One ladder for every non-zip format, ``bsdtar`` first.** This used to be two
+ladders: rar tried ``bsdtar`` → ``unrar`` → ``7z``, while 7z required the
+``7z`` binary and nothing else. Stock SteamOS does not ship ``7z`` — it ships
+``bsdtar``, whose libarchive reads 7z, rar, iso and cab — so a ``.7z`` upload
+failed on an untouched Deck *after* the user had waited out a multi-gigabyte
+download. The two ladders had no reason to differ; the difference was just
+where each was written.
 """
 
 from __future__ import annotations
@@ -20,13 +27,30 @@ _ARCH_ZIP = "zip"
 _ARCH_RAR = "rar"
 _ARCH_7Z = "7z"
 
+# Ordered by preference. ``bsdtar`` is in the SteamOS base image and handles
+# every format below; the other two are fallbacks for hosts where libarchive
+# was built without a codec, and ``unrar`` for rar specifically.
+_EXTRACTORS: tuple[str, ...] = ("bsdtar", "7z", "unrar")
 
-def _mkdir_p(path: Path) -> None:
+_SFX_SCAN_BYTES = 512 * 1024
+
+
+def mkdir_p(path: Path) -> None:
     """``mkdir -p``, as a named function so it can go to a thread."""
     path.mkdir(parents=True, exist_ok=True)
 
 
-def _detect_format(path: Path) -> str | None:
+def available_extractors() -> tuple[str, ...]:
+    """Which of :data:`_EXTRACTORS` are on PATH, in preference order.
+
+    Used at connect time to tell the user up front that a format is
+    unreachable on this device, rather than after a download or at the end of
+    a long extract.
+    """
+    return tuple(tool for tool in _EXTRACTORS if shutil.which(tool))
+
+
+def detect_format(path: Path) -> str | None:
     """Detect archive format from magic bytes."""
     try:
         with path.open("rb") as fh:
@@ -40,42 +64,35 @@ def _detect_format(path: Path) -> str | None:
         return _ARCH_RAR
     if header[:6] == b"7z\xbc\xaf'\x1c":
         return _ARCH_7Z
-    # 7z stored inside SFX: scan first 512 KB
+    # 7z stored inside an SFX stub: scan the first 512 KB.
     try:
         with path.open("rb") as fh:
-            chunk = fh.read(512 * 1024)
-        sig = b"7z\xbc\xaf'\x1c"
-        if sig in chunk:
+            chunk = fh.read(_SFX_SCAN_BYTES)
+        if b"7z\xbc\xaf'\x1c" in chunk:
             return _ARCH_7Z
     except OSError as exc:
         logger.warning(
-            "[GameVaultInstaller] could not scan %s for an SFX signature: %s",
+            "[GameVault archive] could not scan %s for an SFX signature: %s",
             path.name, exc,
         )
     return None
 
 
-async def _extract_archive(archive: Path, dest: Path) -> None:
+async def extract_archive(archive: Path, dest: Path) -> None:
     """Unpack *archive* into *dest*, dispatching on its magic bytes.
 
-    Split out of ``install_game``, which was over the 10-call fan-out cap:
-    detection, the destination mkdir and the three per-format extractors are
-    one step of that pipeline, not five. Raises on an unknown or unsupported
-    format so the caller's single failure path reports it, rather than each
-    branch building its own ``InstallResult``.
+    Raises on an unknown or unsupported format so the caller's single failure
+    path reports it, rather than each branch building its own
+    ``InstallResult``.
     """
-    fmt = _detect_format(archive)
+    fmt = detect_format(archive)
     if fmt is None:
         raise RuntimeError(f"Unknown archive format: {archive.name}")
-    await asyncio.to_thread(_mkdir_p, dest)
+    await asyncio.to_thread(mkdir_p, dest)
     if fmt == _ARCH_ZIP:
         await asyncio.to_thread(_extract_zip, archive, dest)
-    elif fmt == _ARCH_RAR:
-        await _extract_rar(archive, dest)
-    elif fmt == _ARCH_7Z:
-        await _extract_with_7z(archive, dest)
-    else:
-        raise RuntimeError(f"Unsupported archive format: {fmt}")
+        return
+    await _extract_with_tool(archive, dest, fmt)
 
 
 def _extract_zip(archive: Path, dest: Path) -> None:
@@ -83,45 +100,41 @@ def _extract_zip(archive: Path, dest: Path) -> None:
         zf.extractall(str(dest))
 
 
-async def _extract_rar(archive: Path, dest: Path) -> None:
-    """Try bsdtar → unrar → 7z for RAR extraction."""
-    for tool in ("bsdtar", "unrar", "7z"):
-        if shutil.which(tool):
-            if tool == "bsdtar":
-                cmd = ["bsdtar", "-xf", str(archive), "-C", str(dest)]
-            elif tool == "unrar":
-                cmd = ["unrar", "x", "-y", str(archive), str(dest) + "/"]
-            else:
-                cmd = ["7z", "x", str(archive), f"-o{dest}", "-y"]
-
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _, stderr = await proc.communicate()
-            if proc.returncode == 0:
-                return
-            logger.warning(
-                "[GameVaultInstaller] %s failed: %s",
-                tool,
-                stderr.decode(errors="replace")[:200],
-            )
-
-    raise RuntimeError("No RAR extraction tool available (bsdtar/unrar/7z)")
+def _command_for(tool: str, archive: Path, dest: Path) -> list[str]:
+    if tool == "bsdtar":
+        return ["bsdtar", "-xf", str(archive), "-C", str(dest)]
+    if tool == "unrar":
+        return ["unrar", "x", "-y", str(archive), str(dest) + "/"]
+    return ["7z", "x", str(archive), f"-o{dest}", "-y"]
 
 
-async def _extract_with_7z(archive: Path, dest: Path) -> None:
-    if not shutil.which("7z"):
-        raise RuntimeError("7z binary not found")
-    cmd = ["7z", "x", str(archive), f"-o{dest}", "-y"]
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    _, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"7z extraction failed: {stderr.decode(errors='replace')[:200]}"
+async def _extract_with_tool(archive: Path, dest: Path, fmt: str) -> None:
+    """Try each available extractor in turn until one succeeds."""
+    tried: list[str] = []
+    for tool in _EXTRACTORS:
+        if tool == "unrar" and fmt != _ARCH_RAR:
+            continue
+        if not shutil.which(tool):
+            continue
+        tried.append(tool)
+        proc = await asyncio.create_subprocess_exec(
+            *_command_for(tool, archive, dest),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
+        _, stderr = await proc.communicate()
+        if proc.returncode == 0:
+            return
+        logger.warning(
+            "[GameVault archive] %s failed on %s: %s",
+            tool, archive.name, stderr.decode(errors="replace")[:200],
+        )
+
+    if not tried:
+        raise RuntimeError(
+            f"No tool available to extract {fmt} "
+            f"(looked for: {', '.join(_EXTRACTORS)})",
+        )
+    raise RuntimeError(
+        f"Could not extract {archive.name} ({fmt}); tried {', '.join(tried)}",
+    )

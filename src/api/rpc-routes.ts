@@ -17,6 +17,7 @@ export const rpcRoutes = {
   // Store + auth (StoreRPCMixin)
   storeAuth: "store_auth",
   connectGamevault: "connect_gamevault",
+  connectGamevaultLocal: "connect_gamevault_local",
   checkStoreStatus: "check_store_status",
   getStoreInfos: "get_store_infos",
   clearStoreAuths: "clear_store_auths",

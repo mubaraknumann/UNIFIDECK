@@ -18,19 +18,31 @@
  *                same time.
  */
 import { FC, useState } from "react";
-import { ConfirmModal, TextField, ToggleField, DialogButton } from "@decky/ui";
-import { openFilePicker, FileSelectionType } from "@decky/api";
+import {
+  ConfirmModal,
+  DialogButton,
+  Field,
+  TextField,
+  ToggleField,
+} from "@decky/ui";
 import { useTranslation } from "react-i18next";
 
+import { StoragePathPicker } from "./StoragePathPicker";
+
 interface Props {
-  closeModal?: () => void;
-  onConnect: (
+  /** Rejecting keeps the modal open with the message shown inline, so a
+   *  wrong password can be corrected without retyping the server URL. The
+   *  caller closes the modal on success — Steam's modal manager overwrites
+   *  any injected ``closeModal``, so routing our own flow through that prop
+   *  loses the callback (see ``pickStorageForInstall``). */
+  onSubmit: (
     serverUrl: string,
     username: string,
     password: string,
     verifySsl: boolean,
     downloadDir: string,
   ) => Promise<void>;
+  onCancel: () => void;
   /** Pre-fill values (e.g. when re-opening an already-configured connection) */
   initialServerUrl?: string;
   initialUsername?: string;
@@ -39,8 +51,8 @@ interface Props {
 }
 
 export const GameVaultCredentialsModal: FC<Props> = ({
-  closeModal,
-  onConnect,
+  onSubmit,
+  onCancel,
   initialServerUrl = "http://",
   initialUsername = "",
   initialDownloadDir = "",
@@ -53,23 +65,9 @@ export const GameVaultCredentialsModal: FC<Props> = ({
   const [password, setPassword] = useState("");
   const [verifySsl, setVerifySsl] = useState(initialVerifySsl);
   const [downloadDir, setDownloadDir] = useState(initialDownloadDir);
+  const [browsing, setBrowsing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const pickDownloadDir = async () => {
-    try {
-      const res = await openFilePicker(
-        FileSelectionType.FOLDER,
-        downloadDir || "/home/deck",
-        false,
-        true,
-      );
-      const picked = res?.realpath || res?.path;
-      if (picked) setDownloadDir(picked);
-    } catch {
-      // user cancelled
-    }
-  };
 
   const handleConnect = async () => {
     if (!serverUrl || serverUrl === "http://" || serverUrl === "https://") {
@@ -88,8 +86,7 @@ export const GameVaultCredentialsModal: FC<Props> = ({
     setError(null);
     setLoading(true);
     try {
-      await onConnect(serverUrl, username, password, verifySsl, downloadDir);
-      closeModal?.();
+      await onSubmit(serverUrl, username, password, verifySsl, downloadDir);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg || t("gamevault.errorConnection"));
@@ -107,7 +104,7 @@ export const GameVaultCredentialsModal: FC<Props> = ({
       strCancelButtonText={t("gamevault.cancel")}
       bOKDisabled={loading}
       onOK={handleConnect}
-      onCancel={closeModal}
+      onCancel={onCancel}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
         {/* ── Server URL ───────────────────────────────────────── */}
@@ -140,30 +137,42 @@ export const GameVaultCredentialsModal: FC<Props> = ({
         />
 
         {/* ── Temp download directory ──────────────────────────── */}
-        <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-          <div style={{ flex: 1 }}>
-            <TextField
-              label={t("gamevault.downloadDir")}
-              description={`${t("gamevault.downloadDirDescription")} (${t(
-                "gamevault.downloadDirPlaceholder",
-              )})`}
-              value={downloadDir}
-              onChange={(e) => setDownloadDir(e.target.value)}
-            />
-          </div>
-          <DialogButton
-            onClick={() => void pickDownloadDir()}
+        {/* Browsed with the shared StoragePathPicker, not
+            ``openFilePicker``: this directory is most useful when it is on a
+            different drive from the install target, which means the device
+            list from ``get_browseable_devices`` is the whole point. */}
+        <TextField
+          label={t("gamevault.downloadDir")}
+          description={`${t("gamevault.downloadDirDescription")} (${t(
+            "gamevault.downloadDirPlaceholder",
+          )})`}
+          value={downloadDir}
+          onChange={(e) => setDownloadDir(e.target.value)}
+        />
+
+        <Field bottomSeparator="none">
+          <DialogButton onClick={() => setBrowsing((open) => !open)}>
+            {browsing ? t("gamevault.browseClose") : t("gamevault.browse")}
+          </DialogButton>
+        </Field>
+
+        {browsing && (
+          <div
             style={{
-              minWidth: 48,
-              width: 48,
-              height: 40,
-              padding: 0,
-              flexShrink: 0,
+              padding: "8px",
+              background: "rgba(0,0,0,0.15)",
+              borderRadius: 6,
             }}
           >
-            📁
-          </DialogButton>
-        </div>
+            <StoragePathPicker
+              startPath={downloadDir || "/home/deck"}
+              onConfirm={(path) => {
+                setDownloadDir(path);
+                setBrowsing(false);
+              }}
+            />
+          </div>
+        )}
 
         {/* ── Error banner ─────────────────────────────────────── */}
         {error && (

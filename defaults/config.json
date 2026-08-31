@@ -124,7 +124,8 @@
     "gamevault": {
       "config_file": "~/.local/share/unifideck/gamevault_config.json",
       "default_install_root": "~/Games/GameVault",
-      "download_dir": "~/.local/share/unifideck/gamevault_downloads"
+      "download_dir": "~/.local/share/unifideck/gamevault_downloads",
+      "default_vault_dir": "~/Games/UnifideckVault"
     }
   },
   "metadata": {

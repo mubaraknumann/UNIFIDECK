@@ -1,24 +1,39 @@
-"""GameVault library reader — fetches paginated game list from the server."""
+"""GameVault library reading — the shared overlay, plus the remote catalog.
+
+:class:`GameVaultLibraryReader` is mode-agnostic: it asks a
+:class:`~.sources.CatalogSource` what games exist and overlays what is
+installed on this device. The dangerous rule — a failed read must raise, not
+return a short list — lives here so both modes obey it by construction rather
+than by each remembering to.
+
+:class:`RemoteCatalog` is the source for a self-hosted server. The local one
+is :class:`~.local_catalog.LocalVaultCatalog`.
+"""
 
 from __future__ import annotations
 
 import logging
-import re
 from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import Game
 
+from .filename import parse_archive_name
+
 if TYPE_CHECKING:
+    from .auth import GameVaultAuth
     from .install import GameVaultInstaller
+    from .sources import CatalogSource
 
 logger = logging.getLogger(__name__)
+
+STORE_NAME = "gamevault"
 
 _PAGE_SIZE = 500          # fetch 500 per page (nestjs-paginate allows unlimited)
 _MAX_GAMES = 5_000        # sanity cap — no home server has >5000 games
 
 
 class GameVaultFetchError(RuntimeError):
-    """The server could not be read, so the library answer is unknown.
+    """The library could not be read, so the answer is unknown.
 
     Distinct from "the user owns nothing": an empty list is a real answer
     the reconcile acts on, and acting on a failed fetch is what removes a
@@ -27,54 +42,69 @@ class GameVaultFetchError(RuntimeError):
 
 
 class GameVaultLibraryReader:
-    """Reads the game list from a self-hosted GameVault server."""
+    """Turns a catalog into a library, with install state overlaid."""
 
-    def __init__(self, installer: GameVaultInstaller) -> None:
+    def __init__(
+        self, installer: GameVaultInstaller, catalog: CatalogSource,
+    ) -> None:
         self._installer = installer
+        self._catalog = catalog
 
-    # ── Public API ──────────────────────────────────────────────────
-
-    async def get_library(
-        self,
-        server_url: str,
-        auth_headers: dict[str, str],
-        verify_ssl: bool,
-        *,
-        force: bool = False,
-    ) -> list[Game]:
-        """Every owned game, or raise if the server could not be read.
+    async def get_library(self, *, force: bool = False) -> list[Game]:
+        """Every owned game, or raise if the catalog could not be read.
 
         **Never returns a short list on failure.** A store that answers a
-        sync with fewer games than the user owns is indistinguishable from
+        sync with fewer games than the user has is indistinguishable from
         one whose library shrank, and the shortcut reconcile believes it:
-        the missing games' shortcuts get swept. A page that fails therefore
-        aborts the whole fetch (``GameVaultFetchError``), which
+        the missing games' shortcuts get swept. A catalog that cannot answer
+        therefore raises :class:`GameVaultFetchError`, which
         ``GameVaultStore.get_library`` turns into ``None`` — the documented
         "could not answer" signal that leaves the existing shortcuts alone.
+
+        This matters for both modes and for the same reason. Remote talks to
+        a home server that is offline routinely; local reads a folder that
+        may be on an SD card that has not mounted yet.
         """
-        raw_games = await self._fetch_all_pages(server_url, auth_headers, verify_ssl)
+        del force  # neither catalog caches; accepted for interface parity
+        games = await self._catalog.fetch()
+        for game in games:
+            install_info = self._installer.get_install_info(game.store_game_id)
+            if install_info:
+                game.installed = True
+                game.install_path = install_info.get("install_path")
+                # ``exe_path`` is deliberately NOT carried. The launch target
+                # is written once, at install time, and after that it belongs
+                # to the user: a GameVault archive is whatever its owner
+                # uploaded, so the auto-detected executable is a guess more
+                # often than for any other store, and Change Executable is
+                # the fix. Reconcile only overwrites a games.map row when the
+                # synced game carries an exe — so by carrying none, a sync can
+                # never revert that choice. (Epic and Amazon behave the same
+                # way; GOG carries one because it must discover installs it
+                # did not perform.)
+        logger.info("[GameVaultLibrary] %d game(s) resolved", len(games))
+        return games
+
+
+class RemoteCatalog:
+    """Reads the game list from a self-hosted GameVault server."""
+
+    def __init__(self, auth: GameVaultAuth) -> None:
+        self._auth = auth
+
+    async def fetch(self) -> list[Game]:
+        headers = await self._auth.get_auth_headers()
+        if not headers:
+            raise GameVaultFetchError("not authenticated")
+        server_url = self._auth.server_url or ""
+        raw_games = await self._fetch_all_pages(
+            server_url, headers, self._auth.verify_ssl,
+        )
         games: list[Game] = []
         for item in raw_games:
             game = self._map_to_game(item)
             if game:
-                install_info = self._installer.get_install_info(game.store_game_id)
-                if install_info:
-                    game.installed = True
-                    game.install_path = install_info.get("install_path")
-                    # ``exe_path`` is deliberately NOT carried. The launch
-                    # target is written once, at install time, and after that
-                    # it belongs to the user: a GameVault archive is whatever
-                    # its owner uploaded, so the auto-detected executable is a
-                    # guess more often than for any other store, and Change
-                    # Executable is the fix. Reconcile only overwrites a
-                    # games.map row when the synced game carries an exe — so
-                    # by carrying none, a sync can never revert that choice.
-                    # (Epic and Amazon behave the same way; GOG carries one
-                    # because it must discover installs it did not perform,
-                    # which is why it needed the separate fix in
-                    # ``_update_games_map_row``.)
                 games.append(game)
-        logger.info("[GameVaultLibrary] %d game(s) fetched", len(games))
         return games
 
     # ── Internal helpers ────────────────────────────────────────────
@@ -140,10 +170,10 @@ class GameVaultLibraryReader:
 
             return Game(
                 app_id=0,               # filled later by sync service
-                store="gamevault",
+                store=STORE_NAME,
                 store_game_id=gv_id,
                 title=title,
-                installed=False,        # overridden by get_library()
+                installed=False,        # overridden by the reader's overlay
                 icon_url=icon_url,
                 metadata={
                     "file_path": item.get("file_path", ""),
@@ -194,28 +224,13 @@ class GameVaultLibraryReader:
 def _parse_title_from_filename(file_path: str) -> str:
     """Derive a human-readable title from a GameVault archive filename.
 
-    GameVault filenames follow a loose convention:
-        ``Title Name (YEAR).ext``  or  ``Title Name.ext``
-
-    1. Strip directory prefix.
-    2. Strip the extension and everything after a ``(YEAR)`` token.
-    3. Replace separators with spaces, strip leading/trailing whitespace.
+    A thin adapter over :func:`~.filename.parse_archive_name`, which owns the
+    naming grammar for both modes. Kept as a named function because it is the
+    fallback the remote path reaches for when the server's metadata lookup
+    found nothing, and because falling back to the raw *file_path* — rather
+    than to an empty title — is behaviour worth stating where it is used.
     """
-    import os
-
-    name = os.path.basename(file_path)
-    # Strip extension
-    for ext in (".exe", ".zip", ".rar", ".7z", ".tar.gz", ".tar.bz2"):
-        if name.lower().endswith(ext):
-            name = name[: -len(ext)]
-            break
-    # Remove trailing (YEAR) / [YEAR]
-    name = re.sub(r"[\(\[]\d{4}[\)\]].*$", "", name).strip()
-    # Replace underscores/dashes used as word separators
-    name = re.sub(r"[_\-]+", " ", name).strip()
-    # Collapse multiple spaces
-    name = re.sub(r"\s{2,}", " ", name)
-    return name or file_path
+    return parse_archive_name(file_path).title or file_path
 
 
 async def _read_page(

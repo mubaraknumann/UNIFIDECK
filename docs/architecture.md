@@ -133,7 +133,7 @@ Seven store connector sub-packages. Each is self-contained with its own auth, li
 | `stores/ubisoft/`   | Ubisoft Connect         | UPC client in a per-game Wine prefix |
 | `stores/battlenet/` | Battle.net              | Battle.net client in a Wine prefix   |
 | `stores/microsoft/` | PC Game Pass / xCloud   | Edge browser + CDP                   |
-| `stores/gamevault/` | GameVault (self-hosted) | The user's own server over HTTP      |
+| `stores/gamevault/` | GameVault (self-hosted) | The user's own server over HTTP, or a local folder of archives |
 
 ### Layer 5 — `services/`
 
@@ -167,7 +167,7 @@ The `Plugin` class in `main.py` is composed from the RPC mixin classes enumerate
 
 | Mixin                      | Surface (representative)                                                        |
 | -------------------------- | ------------------------------------------------------------------------------- |
-| `StoreRPCMixin`            | `check_store_status`, `get_store_infos`, `store_auth`, `connect_gamevault`, `clear_store_auths` |
+| `StoreRPCMixin`            | `check_store_status`, `get_store_infos`, `store_auth`, `connect_gamevault`, `connect_gamevault_local`, `clear_store_auths` |
 | `SyncRPCMixin`             | `sync_libraries`, `force_sync_libraries`, `get_game_info`, `get_sync_progress`   |
 | `DownloadRPCMixin`         | `install_game`, `uninstall_game`, `update_game`, `cancel_download`, `get_download_queue`, `get_available_updates` |
 | `StorageRPCMixin`          | `get_storage_locations`, `get_browseable_devices`, `set_custom_install_path`    |

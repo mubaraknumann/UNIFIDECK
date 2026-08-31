@@ -910,6 +910,9 @@
         },
         "download_dir": {
           "$ref": "#/$defs/nonEmptyString"
+        },
+        "default_vault_dir": {
+          "$ref": "#/$defs/nonEmptyString"
         }
       }
     }

@@ -15,7 +15,6 @@
  *  - `busy`        : true when an auth call is in flight
  */
 import { useCallback, useState } from "react";
-import { call } from "@decky/api";
 import { showModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../contexts/AuthContext";
@@ -24,9 +23,7 @@ import { useToast } from "./useToast";
 import { AuthDispatcher } from "../services/auth/AuthDispatcher";
 import { ChromiumInstallModal } from "../components/modals/ChromiumInstallModal";
 import { STORE_VISUALS } from "../types/store";
-import { GameVaultCredentialsModal } from "../components/modals/GameVaultCredentialsModal";
-import { rpcRoutes } from "../api/rpc-routes";
-import { unwrapRpcEnvelope } from "../api/useRPC";
+import { connectGameVault } from "../lib/gamevault-connect";
 import type { AuthResult, StoreId } from "../types/api";
 
 /**
@@ -80,70 +77,27 @@ export function useStoreAuth(store: StoreId): UseStoreAuthResult {
   const storeName = STORE_VISUALS[store]?.display_name ?? store;
 
   const connect = useCallback(async (): Promise<AuthResult | null> => {
-    // GameVault is a self-hosted server: the user supplies a URL and
-    // credentials, so there is no browser OAuth and no auth shortcut to
-    // launch. AuthDispatcher coordinates exactly that handshake and has no
-    // case for a credential form, so this store takes the modal route
-    // before the dispatcher is ever asked. Everything after the RPC —
+    // GameVault is the only store whose sign-in is a form rather than a
+    // browser OAuth or a Steam auth shortcut, and since local-vault mode it
+    // is a short modal chain rather than a single dialog. AuthDispatcher
+    // coordinates exactly the handshake this store does not have, so the
+    // flow takes the modal route before the dispatcher is ever asked. The
+    // chain itself lives in ``connectGameVault``; everything after it —
     // notifyConnected, the toasts, the AuthResult shape — matches the
     // dispatcher path below so the two cannot report success differently.
     if (store === "gamevault") {
-      return new Promise<AuthResult | null>((resolve) => {
-        showModal(
-          <GameVaultCredentialsModal
-            closeModal={() => resolve(null)}
-            onConnect={async (
-              serverUrl,
-              username,
-              password,
-              verifySsl,
-              downloadDir,
-            ) => {
-              setBusy(true);
-              try {
-                const raw = await call<
-                  [string, string, string, boolean, string],
-                  unknown
-                >(
-                  rpcRoutes.connectGamevault,
-                  serverUrl,
-                  username,
-                  password,
-                  verifySsl,
-                  downloadDir,
-                );
-                const result = unwrapRpcEnvelope<AuthResult>(raw, {
-                  route: rpcRoutes.connectGamevault,
-                  throwing: false,
-                });
-                if (result?.success) {
-                  auth.notifyConnected(store);
-                  toast.success(
-                    t("auth.toasts.connected", { store: storeName }),
-                  );
-                  resolve({ success: true, store });
-                } else {
-                  const error = result?.error ?? "connection_failed";
-                  toast.error(
-                    t("auth.toasts.failed", { store: storeName }),
-                    error,
-                  );
-                  resolve({ success: false, store, error });
-                }
-              } catch (e) {
-                const message = e instanceof Error ? e.message : String(e);
-                toast.error(
-                  t("auth.toasts.failed", { store: storeName }),
-                  message,
-                );
-                resolve({ success: false, store, error: message });
-              } finally {
-                setBusy(false);
-              }
-            }}
-          />,
+      const result = await connectGameVault({ setBusy });
+      if (result === null) return null;
+      if (result.success) {
+        auth.notifyConnected(store);
+        toast.success(t("auth.toasts.connected", { store: storeName }));
+      } else {
+        toast.error(
+          t("auth.toasts.failed", { store: storeName }),
+          result.error,
         );
-      });
+      }
+      return result;
     }
 
     setBusy(true);
