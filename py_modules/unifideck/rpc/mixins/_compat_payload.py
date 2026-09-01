@@ -109,24 +109,46 @@ def compat_status(entry: dict[str, Any], track: str) -> str:
     return "unknown"
 
 
+#: Tracks the ProtonDB bump may speak for. Both are x86 desktop-class
+#: Proton on Valve's 4-value ladder, which is exactly what a ProtonDB
+#: report measures.
+#:
+#: SteamOS is excluded because its integers mean something else (a
+#: 3-value "does this run" enum), and **Frame** is excluded because a
+#: desktop-Linux ProtonDB report says nothing about an ARM64 VR headset.
+#: Bumping Frame would write a rating we invented into Steam's own Frame
+#: slot for a device this plugin does not support.
+_BUMPABLE_TRACKS = frozenset({"deck", "machine"})
+
+
 def compat_categories(entry: dict[str, Any]) -> dict[str, int]:
-    """Every track's raw category int, for the packed bitfield.
+    """Every track's category int, for the packed bitfield.
 
-    Raw on purpose: these go straight into Steam's own
-    ``steam_hw_compat_category_packed`` slots, and the SteamOS track's
-    integers do not mean what the Deck ladder's mean. The optimism bump
-    is applied only to tracks whose enum we know shares Valve's
-    "2 == playable" rung, which is every track except SteamOS.
+    These go straight into Steam's own
+    ``steam_hw_compat_category_packed`` slots, so anything here has to be
+    a number Steam itself would have written. Valve's own value always
+    is; our ProtonDB bump only is for the tracks in
+    :data:`_BUMPABLE_TRACKS`.
     """
-    out: dict[str, int] = {}
-    for name in TRACK_NAMES:
-        raw = raw_category(entry, name)
-        out[name] = raw if name == "steamos" else compat_category(entry, name)
-    return out
+    return {
+        name: (
+            compat_category(entry, name)
+            if name in _BUMPABLE_TRACKS
+            else raw_category(entry, name)
+        )
+        for name in TRACK_NAMES
+    }
 
 
-def test_results(entry: dict[str, Any], track: str) -> list[dict[str, Any]]:
+def track_test_results(
+    entry: dict[str, Any], track: str,
+) -> list[dict[str, Any]]:
     """Per-test rows for ``track`` as ``{token, passed}``.
+
+    Named ``track_test_results`` rather than ``test_results``: pytest
+    collects any imported callable whose name starts with ``test_``,
+    so the shorter name turned every test module that imported it into
+    a spurious "fixture 'entry' not found" error.
 
     Both shapes are accepted. Entries written before the multi-device
     work hold ``{text, passed}`` with pre-resolved English; new ones
@@ -155,12 +177,20 @@ def test_results(entry: dict[str, Any], track: str) -> list[dict[str, Any]]:
 
 
 def compat_block(entry: dict[str, Any]) -> dict[str, Any]:
-    """Every track, for the single-game metadata payload."""
+    """Every track, for the single-game metadata payload.
+
+    Categories come from :func:`compat_categories` rather than being
+    re-derived, so the number the panel could display and the number
+    written into Steam's bitfield can never disagree — and so a future
+    reader who surfaces the Frame track gets Valve's verdict or nothing,
+    not one we inferred.
+    """
+    categories = compat_categories(entry)
     return {
         name: {
-            "category": compat_category(entry, name),
+            "category": categories[name],
             "status": compat_status(entry, name),
-            "test_results": test_results(entry, name),
+            "test_results": track_test_results(entry, name),
         }
         for name in TRACK_NAMES
     }

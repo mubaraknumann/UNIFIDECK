@@ -244,3 +244,31 @@ def test_games_path_falls_back_to_real_appid_enumeration() -> None:
     # steam_real_appid; metacritic comes only from Steam's appdetails.
     rec = build_enrichment_map(_cache_with(), None)[str(_SHORTCUT_UNSIGNED)]
     assert rec["metacritic"] == 81
+
+def test_deck_ladder_matches_the_pre_track_implementation_exhaustively() -> None:
+    """Sweep every (deck_status, protondb_tier) pair the cache can hold.
+
+    The pre-change ladder is inlined here rather than imported, because the
+    point is to pin behaviour that no longer exists in the tree. Verified
+    against this developer's real 1000-entry warm cache at the time of the
+    change: zero mismatches.
+    """
+
+    def pre_change_ladder(entry: dict[str, Any]) -> int:
+        status = str(entry.get("deck_status", "")).lower()
+        category = {"verified": 3, "playable": 2, "unsupported": 1}.get(status, 0)
+        if category == 0:
+            tier = str(entry.get("protondb_tier", "")).lower()
+            if tier in ("platinum", "native"):
+                return 2
+        return category
+
+    statuses = ["verified", "playable", "unsupported", "unknown", "", None]
+    tiers = ["platinum", "native", "gold", "silver", "bronze", "borked",
+             "pending", "", None]
+    for status in statuses:
+        for tier in tiers:
+            entry: dict[str, Any] = {"deck_status": status, "protondb_tier": tier}
+            assert compat_category(entry, "deck") == pre_change_ladder(entry), (
+                f"deck ladder changed for status={status!r} tier={tier!r}"
+            )

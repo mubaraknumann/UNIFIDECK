@@ -119,7 +119,7 @@ export async function loadDeviceType(): Promise<boolean> {
     deviceType = next;
     return true;
   } catch {
-    // Backend not ready — the "deck" default stays.
+    // Backend not ready — the neutral "other" default stays.
     return false;
   }
 }

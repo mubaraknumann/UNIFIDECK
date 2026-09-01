@@ -241,6 +241,7 @@ def launch_xcloud(browser: EdgeBrowser, xcloud_url: str) -> bool:
     if not cmd:
         logger.warning("[Edge] No compatible browser found for xCloud")
         return False
+    from .display import auth_window_flags
     from .edge import _BASE_FLAGS, PROFILE_DIR
 
     # xCloud uses a distinct CDP port so the auth browser (on
@@ -248,8 +249,16 @@ def launch_xcloud(browser: EdgeBrowser, xcloud_url: str) -> bool:
     # can coexist. Convention: auth=9222, xcloud=9223, storefront=9224.
     # The offsets live on EdgeBrowser so all three flavours agree.
     xcloud_cdp_port = browser.xcloud_cdp_port()
-    args = [*cmd, "--kiosk", "--class=unifideck-xcloud", f"--remote-debugging-port={xcloud_cdp_port}", f"--user-data-dir={PROFILE_DIR}", *_BASE_FLAGS, "--autoplay-policy=no-user-gesture-required", "--window-size=1024,720", "--force-device-scale-factor=1.25", "--device-scale-factor=1.25", f"--lang={browser.locale_fn().split('-')[0]}", xcloud_url]
+    # Size to the live display, like the other two window flavours.
+    # This was pinned at 1024x720 @ 1.25 — the Deck's panel geometry —
+    # which on a Steam Machine's TV is a small letterboxed window at
+    # handheld scaling.
+    env = clean_env()
+    window_flags = auth_window_flags(env)
+    args = [*cmd, "--kiosk", "--class=unifideck-xcloud", f"--remote-debugging-port={xcloud_cdp_port}", f"--user-data-dir={PROFILE_DIR}", *_BASE_FLAGS, "--autoplay-policy=no-user-gesture-required", *window_flags, f"--lang={browser.locale_fn().split('-')[0]}", xcloud_url]
     logger.info(
         "[Edge] Launching xCloud kiosk: %s", xcloud_url[:80],
     )
-    return _spawn_edge_process(browser, args, log_mode="a", label="xCloud")
+    return _spawn_edge_process(
+        browser, args, log_mode="a", label="xCloud", env=env,
+    )

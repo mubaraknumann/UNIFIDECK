@@ -62,7 +62,9 @@ function manager(): LocalizationManagerLike | null {
   try {
     const lm = (window as unknown as { LocalizationManager?: unknown })
       .LocalizationManager;
-    return lm && typeof lm === "object" ? (lm as LocalizationManagerLike) : null;
+    return lm && typeof lm === "object"
+      ? (lm as LocalizationManagerLike)
+      : null;
   } catch {
     return null;
   }

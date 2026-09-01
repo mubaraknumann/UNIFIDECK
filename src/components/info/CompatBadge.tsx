@@ -14,15 +14,13 @@ import type { CompatTrack } from "../../lib/steam-bridge/compat-packed";
 
 export type CompatCategory = 0 | 1 | 2 | 3;
 
-export const COMPAT_COLORS: Record<
-  CompatCategory,
-  { bg: string; fg: string }
-> = {
-  3: { bg: "#59bf40", fg: "#ffffff" },
-  2: { bg: "#ffc82c", fg: "#000000" },
-  1: { bg: "#ff4444", fg: "#ffffff" },
-  0: { bg: "#666666", fg: "#ffffff" },
-};
+export const COMPAT_COLORS: Record<CompatCategory, { bg: string; fg: string }> =
+  {
+    3: { bg: "#59bf40", fg: "#ffffff" },
+    2: { bg: "#ffc82c", fg: "#000000" },
+    1: { bg: "#ff4444", fg: "#ffffff" },
+    0: { bg: "#666666", fg: "#ffffff" },
+  };
 
 /**
  * Category → i18n key suffix.
@@ -44,7 +42,9 @@ export function compatLabelKey(
   track: CompatTrack,
 ): string {
   const suffix =
-    track === "steamos" && category === 2 ? "compatible" : LABEL_SUFFIX[category];
+    track === "steamos" && category === 2
+      ? "compatible"
+      : LABEL_SUFFIX[category];
   return `gameInfoPanel.compatibility.${suffix}`;
 }
 

@@ -151,7 +151,7 @@ Infrastructure services that subscribe to the EventBus and own cross-cutting con
 | `services/microsoft_subscription/` | Game Pass entitlement probing                 |
 | `services/launch_history/`         | Per-game launch timestamps                    |
 | `services/achievements/`           | Achievement fetch + last-session summary      |
-| `services/compatibility/`          | ProtonDB + Deck-Verified ratings              |
+| `services/compatibility/`          | ProtonDB + Valve per-device ratings (Deck / Machine / SteamOS) |
 | `services/playtime_sync/`          | Pushes playtime back to GOG/Epic              |
 | `services/support_bundle/`         | Capture Logs: collects the diagnostic zip     |
 | `services/updater/`                | Plugin self-update check and download         |

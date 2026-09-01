@@ -19,7 +19,11 @@ from unifideck.compatibility.deck_verified import (
     TrackResult,
     spec_for,
 )
-from unifideck.compatibility.library import CompatLibrary, CompatRating
+from unifideck.compatibility.library import (
+    COMPAT_SCHEMA,
+    CompatLibrary,
+    CompatRating,
+)
 from unifideck.services.compatibility.service import CompatibilityService
 
 
@@ -91,16 +95,38 @@ _REAL = 945360
 
 
 def test_partition_skips_fully_cached_game() -> None:
+    """A current-schema entry needs nothing, so the sync skips it."""
     cache = _Cache()
     cache.set("steam_real_appid", str(_SHORTCUT), _REAL)
     cache.set("compat", str(_REAL), {
         "deck_status": "playable",
-        "deck_test_results": [{"text": "ok", "passed": True}],
+        "deck_category": 2,
+        "deck_test_results": [{"token": "#ok", "passed": True}],
+        "schema": COMPAT_SCHEMA,
     })
     svc = _service(cache)
     skipped, pending = svc._partition_games([_game(_SHORTCUT, "Among Us")])
     assert [g.title for g in skipped] == ["Among Us"]
     assert pending == []
+
+
+def test_partition_refetches_a_pre_multidevice_entry() -> None:
+    """A schema-0 entry holds only the Deck rating, so it must re-fetch.
+
+    This is the migration: without it a Steam Machine owner with a warm
+    cache would see Unknown for every title until the 7-day TTL expired.
+    """
+    cache = _Cache()
+    cache.set("steam_real_appid", str(_SHORTCUT), _REAL)
+    cache.set("compat", str(_REAL), {
+        "deck_status": "playable",
+        "deck_test_results": [{"text": "ok", "passed": True}],
+        "dtr_checked": True,          # the OLD terminal marker
+    })
+    svc = _service(cache)
+    skipped, pending = svc._partition_games([_game(_SHORTCUT, "Among Us")])
+    assert [g.title for g in pending] == ["Among Us"]
+    assert skipped == []
 
 
 def test_partition_skips_negative_mapping_without_searching() -> None:
@@ -127,18 +153,35 @@ def test_partition_keeps_unresolved_and_uncached_pending() -> None:
 
 
 def test_partition_retries_self_heal_exactly_once() -> None:
+    """The schema stamp is what makes the upgrade one-shot.
+
+    Without it, a title Valve has genuinely never rated re-hits the
+    endpoint on every single sync, forever.
+    """
     cache = _Cache()
     cache.set("steam_real_appid", str(_SHORTCUT), _REAL)
-    # Old-format entry: known status, no test results, no marker →
-    # eligible for ONE upgrade fetch.
+    # Pre-multi-device entry → eligible for ONE upgrade fetch.
     entry: dict[str, Any] = {"deck_status": "playable", "deck_test_results": []}
     cache.set("compat", str(_REAL), entry)
     svc = _service(cache)
     _, pending = svc._partition_games([_game(_SHORTCUT, "Among Us")])
     assert len(pending) == 1
-    # Once stamped, the same entry is terminal.
-    entry["dtr_checked"] = True
+    # Once stamped at the current schema, the same entry is terminal.
+    entry["schema"] = COMPAT_SCHEMA
     cache.set("compat", str(_REAL), entry)
+    skipped, pending = svc._partition_games([_game(_SHORTCUT, "Among Us")])
+    assert len(skipped) == 1
+    assert pending == []
+
+
+def test_partition_treats_a_future_schema_as_current() -> None:
+    """Downgrading the plugin must not re-fetch the whole library."""
+    cache = _Cache()
+    cache.set("steam_real_appid", str(_SHORTCUT), _REAL)
+    cache.set("compat", str(_REAL), {
+        "deck_status": "playable", "schema": COMPAT_SCHEMA + 5,
+    })
+    svc = _service(cache)
     skipped, pending = svc._partition_games([_game(_SHORTCUT, "Among Us")])
     assert len(skipped) == 1
     assert pending == []

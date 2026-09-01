@@ -56,7 +56,6 @@ const RECORD = {
   store_category: [2, 1],
   store_tag: [1, 23],
   protondb_tier: "platinum",
-  deck_status: "verified",
 };
 
 interface TestOverview {

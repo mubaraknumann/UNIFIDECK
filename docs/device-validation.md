@@ -539,3 +539,33 @@ baseline item 29 needs, so there is no pass/fail, only a recorded number.
 
 Setup for these: DV-F8 needs recipe 7, DV-J1 needs recipe 5, DV-T1 needs a
 shortcut you have edited by hand. The rest run as written.
+
+---
+
+## Appendix — Steam Machine (DV-SM)
+
+Every step above is written "on a Steam Deck". These are the additional ones
+for the Steam Machine work. No Steam Machine hardware is available, so they run
+against the forced-device override; DV-SM7 is the only row that genuinely needs
+real Fremont hardware.
+
+```bash
+pnpm run build && ./build-plugin.sh dev quick-install
+sudo systemctl set-environment UNIFIDECK_DEVICE_TYPE=machine
+sudo systemctl restart plugin_loader
+# after the run:
+sudo systemctl unset-environment UNIFIDECK_DEVICE_TYPE && sudo systemctl restart plugin_loader
+```
+
+| # | Step | What must be true |
+|---|---|---|
+| 1. **DV-SM1** | With the override **unset**, open the library and the info panel for a rated game | Byte-identical to before this change: tab reads "Great on Deck", badge and Details modal unchanged. **The regression guard — the one that matters.** |
+| 2. **DV-SM2** | Set `=machine`, restart, open the library | Tab reads "Great on Machine", and **exactly one** compat tab exists — no leftover native "Great on Machine" beside ours |
+| 3. **DV-SM3** | Compare the tab's contents against the DV-SM1 run | Membership **differs** for titles Valve rates differently per device. Identical lists mean the track never switched |
+| 4. **DV-SM4** | Open Details for a game rated on both devices | Title reads "Steam Machine Compatibility"; the test-result rows are the Machine criteria, in the Steam UI language — not the Deck's panel-legibility / APU-performance ones |
+| 5. **DV-SM5** | In the CEF console (`steam-debug`), read a shortcut's overview | `steam_machine_compat_category` is **non-zero**. This is the F2 fix; a zero here means Steam's own filters still cannot see our shortcuts |
+| 6. **DV-SM6** | Enable collections, boot `=deck`, let `[Unifideck] Great on Deck` be created, then restart `=machine` | The Deck collection **survives** alongside the new Machine one. Before the fix, each device deleted the other's on every boot |
+| 7. **DV-SM7** | **On real Steam Machine hardware:** capture a support bundle | `product_name` is `Fremont` and `device_type` is `machine`, with no `device_type_forced`. Also confirms the SteamOS 3-value enum, which is measured but not yet seen on the device it describes |
+| 8. **DV-SM8** | Set `=other`, restart | Tab reads "SteamOS Compatible"; badges use the SteamOS wording (`COMPATIBLE`, not `PLAYABLE`) |
+| 9. **DV-SM9** | Sync once on a warm cache and watch the log | The schema-2 self-heal re-fetches each cached title **once**; a second sync re-fetches nothing |
+| 10. **DV-SM10** | Launch an xCloud title on an external display | The kiosk fills the display instead of a 1024x720 letterbox at 1.25 scale |

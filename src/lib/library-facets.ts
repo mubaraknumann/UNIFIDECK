@@ -1,7 +1,7 @@
 /**
  * Library Facets — per-shortcut enrichment data for Steam's native
  * library Sort menu + Library Filters, plus shortcut-keyed
- * Great-on-Deck resolution.
+ * per-device compatibility resolution.
  *
  * Our custom tabs render through Steam's own grid, which sorts and
  * filters purely on `AppOverview` field values. Non-Steam shortcuts
@@ -11,7 +11,7 @@
  * layer writes them onto the live overviews.
  *
  * The same records carry `protondb_tier` / `compat_status` keyed by the
- * **shortcut** AppID, so Great-on-Deck no longer depends on fuzzy
+ * **shortcut** AppID, so the compat tab no longer depends on fuzzy
  * title matching against the compat cache.
  *
  * Backend keys every record under BOTH the signed and unsigned 32-bit
