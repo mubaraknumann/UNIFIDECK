@@ -18,6 +18,7 @@ from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 from unifideck.launcher.proton.infrastructure.prefix_layout import (
     normalize_prefix_root,
 )
+from unifideck.launcher.proton.infrastructure.setup_env import build_setup_env
 from unifideck.launcher.proton.infrastructure.umu_runtime import (
     UMU_TIMEOUT_RC,
     run_umu_with_retry,
@@ -131,12 +132,11 @@ async def apply_vcruntime_fix(plan: ProtonLaunchPlan) -> bool:
         return False
     marker = prefix_root / _MARKER_NAME
 
-    env = dict(plan.env)
-    env["GAMEID"] = "umu-0"
-    # ``run``, not the inherited ``waitforexitandrun``: the latter's
-    # ``wineserver -w`` deadlocks against a resident wineserver left by the
-    # earlier createprefix/winetricks step. See prefix_init._ensure_created.
-    env["PROTON_VERB"] = "run"
+    # Shared setup-helper env: GAMEID=umu-0 and PROTON_VERB=run (the inherited
+    # ``waitforexitandrun`` would deadlock against the wineserver left by the
+    # earlier createprefix/winetricks step), minus any game-only sidecar.
+    # See infrastructure.setup_env for the full explanation.
+    env = build_setup_env(plan)
     # ``/S`` imports silently — no GUI dialog on success OR error. The
     # error dialog (when C: path was wrong) blocked the launch for as
     # long as it stayed open; the Z: path + /S removes that entirely.

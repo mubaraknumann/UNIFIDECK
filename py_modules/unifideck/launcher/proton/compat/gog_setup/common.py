@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from unifideck.launcher.proton.infrastructure.container_escape import (
     escape_argv,
 )
+from unifideck.launcher.proton.infrastructure.setup_env import build_setup_env
 
 if TYPE_CHECKING:
     from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
@@ -131,21 +132,17 @@ async def run_wine(
     """Run a Windows exe in the game's prefix via umu. True on rc 0.
 
     Reuses the plan's env (PROTONPATH / STEAM_COMPAT_DATA_PATH already
-    set by proton_prepare), overriding GAMEID/STORE/PROTON_VERB for a
-    generic setup invocation. Setup installers often exit non-zero for
+    set by proton_prepare) through ``build_setup_env``, which applies the
+    setup-helper divergences (GAMEID / PROTON_VERB / game-only vars) shared
+    with every other compat step. Setup installers often exit non-zero for
     "already installed", so callers treat failures as non-fatal.
+
+    This is the one setup site with an unbounded ``proc.wait()`` — no
+    timeout, no retry, no wineserver reap — so anything that wedges a helper
+    here wedges the launch outright rather than costing a timeout budget.
     """
-    env = dict(plan.env)
-    # ``PROTON_REMOTE_DEBUG_CMD`` is a game-side sidecar (for example a
-    # CheatDeck trainer), not part of the GOG setup helper. If it reaches
-    # ``scriptinterpreter.exe``, Proton starts the sidecar before the helper
-    # and the helper can wait on that unrelated Wine process indefinitely.
-    # Keep the rest of the launch environment, including
-    # ``PRESSURE_VESSEL_FILESYSTEMS_RW`` for filesystem access.
-    env.pop("PROTON_REMOTE_DEBUG_CMD", None)
-    env["GAMEID"] = "umu-0"
+    env = build_setup_env(plan)
     env["STORE"] = "gog"
-    env["PROTON_VERB"] = "run"
     # Escape Steam's pressure-vessel when Force-Compat wrapped us, or every
     # setup step nests a second container and returns rc=1 — observed as 9
     # straight failures (scriptinterpreter + all four vcredists) in a field

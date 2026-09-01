@@ -18,6 +18,7 @@ from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 from unifideck.launcher.proton.infrastructure.prefix_layout import (
     normalize_prefix_root,
 )
+from unifideck.launcher.proton.infrastructure.setup_env import build_setup_env
 from unifideck.launcher.proton.infrastructure.umu_runtime import (
     UMU_TIMEOUT_RC,
     run_umu_with_retry,
@@ -115,18 +116,14 @@ async def apply_winetricks(plan: ProtonLaunchPlan) -> bool:
         game_title=plan.context.game_key,
     )
 
-    # winetricks runs under the same Proton/prefix the game uses. umu's
-    # GAMEID=umu-0 (generic, no per-game protonfix) + no runtime update
-    # so the redistributable install doesn't churn the umu runtime.
-    env = dict(plan.env)
+    # winetricks runs under the same Proton/prefix the game uses, so it takes
+    # the shared setup-helper env (GAMEID=umu-0, PROTON_VERB=run, no game-only
+    # sidecars — see infrastructure.setup_env for why each one matters), plus
+    # its own prefix pin and no runtime update so the redistributable install
+    # doesn't churn the umu runtime.
+    env = build_setup_env(plan)
     env["WINEPREFIX"] = str(prefix_root)
-    env["GAMEID"] = "umu-0"
     env["UMU_RUNTIME_UPDATE"] = "0"
-    # ``run``, not the inherited ``waitforexitandrun``: the latter does
-    # ``wineserver -w`` first, which deadlocks against a resident wineserver
-    # left by a prior setup step (Proton's steam.exe stub keeps it alive).
-    # See prefix_init._ensure_created for the full explanation.
-    env["PROTON_VERB"] = "run"
     argv = [
         str(plan.python_bin),
         str(plan.umu_wrapper),
