@@ -738,6 +738,11 @@ def test_auth_launch_opts_out_of_the_wineserver_reap(
     """A stop from the UI must unwind through stop_client's SIGTERM.
 
     A SIGKILL loses the token the client rotated into CachedData.db.
+
+    Patched on ``auth_wsi`` rather than on this module: the sign-in run moved
+    there so a first sign-in can measure the gamescope-WSI abort after
+    ``run_umu_with_retry`` returns, which it must, because that abort exits 0.
+    The flag under test moved with it.
     """
     seen: dict[str, Any] = {}
 
@@ -745,7 +750,7 @@ def test_auth_launch_opts_out_of_the_wineserver_reap(
         seen.update(kwargs)
         return 0
 
-    monkeypatch.setattr(handler, "run_umu_with_retry", fake_run)
+    monkeypatch.setattr(handler.auth_wsi, "run_umu_with_retry", fake_run)
     monkeypatch.setattr(handler.watch, "stop_client", lambda p: 0)
     assert asyncio.run(handler.battlenet_auth_launch(plan)) == 0
     assert seen["reap_wineserver"] is False

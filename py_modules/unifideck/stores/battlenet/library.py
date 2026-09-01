@@ -271,6 +271,38 @@ def count_game_account_gated(
     return max(0, len(with_accounts) - len(without))
 
 
+def _log_ownership_inputs(
+    catalog: MergedCatalog,
+    facts: AccountFacts,
+    granted: dict[str, frozenset[Any]],
+) -> None:
+    """Log every input the library size is a function of, once per sync.
+
+    A user whose Battle.net library came back with one game (GitHub #447) had
+    no way to say *which* of the three inputs was short, and neither did we:
+    the catalog read, the account facts and the granted set were all silent.
+    Each of these is a plain count, so this is cheap enough to run every sync
+    and is the only thing that distinguishes the known always-empty facts
+    (register item 29, and ``flags``, which has no producer either) from a PUB
+    cache the client had not finished writing when the first sync ran.
+
+    A real prefix measures ~254 fragments, 38 of them carrying program rules;
+    a first sync racing the client sees far fewer. Print both so the two are
+    told apart from the log alone, without a second round trip to the reporter.
+    """
+    logger.info(
+        "[Battlenet] ownership facts: licences=%d game_accounts=%d flags=%d",
+        len(facts.licence_ids), len(facts.game_account_programs),
+        len(facts.flags),
+    )
+    logger.info(
+        "[Battlenet] PUB catalog: fragments=%d programs=%d titles=%d "
+        "-> granted=%d",
+        catalog.fragment_count, len(catalog.program_configurations),
+        len(catalog.entries), len(granted),
+    )
+
+
 def build_library(
     catalog: MergedCatalog,
     facts: AccountFacts,
@@ -280,6 +312,7 @@ def build_library(
 ) -> list[Game]:
     """Join ownership, catalog metadata and install state into Games."""
     granted = evaluate_catalog(catalog.program_configurations, facts)
+    _log_ownership_inputs(catalog, facts, granted)
     gated = count_game_account_gated(catalog, facts)
     if gated:
         logger.warning(
