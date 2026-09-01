@@ -35,6 +35,28 @@ export const PACKED_SHIFTS: Record<CompatTrack, number> = {
 
 const MASK = 3;
 
+/**
+ * The best rating each track can carry.
+ *
+ * Not uniform: the Deck, Machine and Frame tracks use Valve's 4-value
+ * ladder topping out at 3 (Verified), while the SteamOS track is a
+ * 3-value enum whose best value is 2 (Compatible) and which never
+ * emits 3. Comparing any track against a hardcoded 3 makes the SteamOS
+ * branch unreachable — which silently dropped every Valve-rated native
+ * Steam game out of the compatibility tab on non-Deck SteamOS hardware.
+ */
+export const TOP_CATEGORY: Record<CompatTrack, number> = {
+  deck: 3,
+  steamos: 2,
+  machine: 3,
+  frame: 3,
+};
+
+/** Whether `category` is the best rating `track` can express. */
+export function isTopRated(category: number, track: CompatTrack): boolean {
+  return category >= TOP_CATEGORY[track];
+}
+
 /** Minimal shape we read the packed field off. */
 export interface PackedCompatCarrier {
   steam_hw_compat_category_packed?: number;

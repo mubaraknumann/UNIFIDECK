@@ -121,8 +121,33 @@ def device_override() -> DeviceType | None:
     return forced
 
 
+#: Memoised answer. The device cannot change without a reboot, and this
+#: is called per-shortcut from the facets builder — 1000 titles meant
+#: ~2000 sysfs reads per boot-path RPC, plus one WARNING line per title
+#: when the override is set, which drowned the log a developer
+#: exercising the Machine path needs to read.
+_cached: DeviceType | None = None
+
+
+def reset_cache() -> None:
+    """Drop the memoised answer. For tests only."""
+    global _cached
+    _cached = None
+
+
 def detect_device_type() -> DeviceType:
     """Classify the host as Deck, Steam Machine, or neither.
+
+    Memoised — see :data:`_cached`. Cheap enough to call anywhere.
+    """
+    global _cached
+    if _cached is None:
+        _cached = _classify()
+    return _cached
+
+
+def _classify() -> DeviceType:
+    """The uncached classification.
 
     Non-Valve hardware short-circuits before ``product_name`` is read:
     a third-party board is free to call itself anything, and matching

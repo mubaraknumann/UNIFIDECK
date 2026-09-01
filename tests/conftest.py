@@ -290,4 +290,9 @@ def _pin_device_type(monkeypatch):
     ``tests/unit/test_device_type.py``), which is also how the Machine
     path is exercised in production.
     """
+    from unifideck.utils import device
+
     monkeypatch.setenv("UNIFIDECK_DEVICE_TYPE", "deck")
+    # detect_device_type() is memoised, so a value resolved under one
+    # test's patched DMI would leak into every later test.
+    device.reset_cache()

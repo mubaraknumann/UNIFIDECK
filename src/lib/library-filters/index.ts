@@ -24,7 +24,10 @@ import {
 } from "../protondb-cache";
 import { getCompatByShortcutAppId, loadFacets } from "../library-facets";
 import { activeCompatTrack } from "../device-type";
-import { overviewCompatCategory } from "../steam-bridge/compat-packed";
+import {
+  isTopRated,
+  overviewCompatCategory,
+} from "../steam-bridge/compat-packed";
 import { invalidateGameSize } from "../game-size-cache";
 import type { SteamAppOverview } from "../../types/steam";
 
@@ -61,7 +64,6 @@ export interface TabFilter<T extends FilterType = FilterType> {
 }
 
 const NON_STEAM_APP_TYPE = 1073741824;
-const DECK_VERIFIED = 3;
 
 interface UnifideckCacheEntry {
   store: Exclude<StoreSlug, "steam">;
@@ -253,7 +255,13 @@ const filterFunctions: { [K in FilterType]: FilterFn<K> } = {
     // Read the bits for the device actually running. Steam packs a
     // separate rating per device, and on a Machine the Deck's bits are
     // not the ones its own filters and badges use.
-    if (overviewCompatCategory(app, activeCompatTrack()) === DECK_VERIFIED) {
+    //
+    // The threshold has to be per-track, not a hardcoded 3: the SteamOS
+    // enum's best value is 2, so comparing it against 3 made this fast
+    // path unreachable and dropped every Valve-rated native Steam game
+    // out of the tab on non-Deck SteamOS hardware.
+    const track = activeCompatTrack();
+    if (isTopRated(overviewCompatCategory(app, track), track)) {
       return true;
     }
     const cached = unifideckGameCache.get(app.appid);

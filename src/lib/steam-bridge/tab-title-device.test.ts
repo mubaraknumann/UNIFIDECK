@@ -3,11 +3,10 @@
  * The compatibility tab is titled after the hardware it filters for.
  *
  * Three things must hold: a Steam Machine owner is never told their
- * games are "Great on Deck"; a backend that cannot answer leaves the
- * cached value rather than blanking the tab; and the *unanswered*
- * default is the neutral SteamOS label, not "deck". That last one
- * would ship silently broken, because on the dev Deck a wrong default
- * and the correct answer are the same string.
+ * games are "Great on Deck" once the answer lands; a backend that
+ * cannot answer leaves the cached value rather than blanking the tab;
+ * and the *unanswered* default is "deck", because the device-dependent
+ * consumers run before the RPC resolves and a Deck is the common case.
  *
  * Also covers the hide-list: Steam names its own compat tab after the
  * device too, so we must hide every id it might emit.
@@ -93,14 +92,17 @@ describe("loadDeviceType", () => {
     expect(getDeviceType()).toBe("deck");
   });
 
-  it("defaults to the neutral label before anything answers", async () => {
-    // A device whose RPC never lands must not claim to be a Deck: on a
-    // Steam Machine that is a wrong device name, the exact failure this
-    // module exists to prevent.
+  it("defaults to deck, because the boot window belongs to the Deck", async () => {
+    // An earlier attempt defaulted to "other" on the reasoning that it
+    // never claims unverified hardware. Adversarial review showed that
+    // makes the common device the losing case: the library patch and
+    // the collection manager both run before this RPC answers, so every
+    // Deck boot would render "SteamOS Compatible" and filter on a track
+    // whose enum never reaches the top rating.
     vi.resetModules();
     const fresh = await import("../device-type");
-    expect(fresh.getDeviceType()).toBe("other");
-    expect(fresh.compatTabTitleKey()).toBe("deckTabs.steamOSCompatible");
+    expect(fresh.getDeviceType()).toBe("deck");
+    expect(fresh.compatTabTitleKey()).toBe("deckTabs.greatOnDeck");
   });
 });
 

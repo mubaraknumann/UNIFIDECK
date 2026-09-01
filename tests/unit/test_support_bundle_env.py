@@ -222,7 +222,7 @@ def test_proxy_variables_are_presence_only(monkeypatch: pytest.MonkeyPatch) -> N
 def test_session_env_records_presence_without_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(probe_conflicts.procscan, "iter_processes", lambda: [])
+    monkeypatch.setattr(probe_conflicts.procscan, "iter_processes", list)
     block = probe_conflicts.session_env_block()
     assert block["steam_running"] is False
     assert block["variables"] == {}

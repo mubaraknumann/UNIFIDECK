@@ -13,7 +13,7 @@ import {
   isTabMasterInstalled,
   type UnifideckTab,
 } from "./tab-container";
-import { COMPAT_TAB_TITLE_KEYS } from "../device-type";
+import { COMPAT_TAB_TITLE_KEYS, awaitDeviceType } from "../device-type";
 import { runFilters } from "../library-filters";
 import { EventBusClient } from "../../api/event-bus-client";
 import { Events } from "../../types/events";
@@ -333,6 +333,17 @@ async function syncTab(
 export async function syncUnifideckCollections(): Promise<void> {
   if (!isCollectionsEnabled()) return;
   if (!isCollectionsAvailable()) return;
+  // Collection names are device-specific ("Great on Deck" vs "Great on
+  // Machine") AND account-global + cloud-synced. This runs at plugin
+  // init, before the device-type RPC has answered, so without this
+  // await a Steam Machine would create "[Unifideck] Great on Deck" from
+  // the cached default and push it to every device on the account —
+  // where it is indistinguishable from a real sibling device's
+  // collection, and so deliberately never cleaned up.
+  //
+  // Transient UI is allowed to be briefly wrong and self-correct.
+  // Persistent cloud state is not.
+  await awaitDeviceType();
   await cleanupStaleCollections();
   const cs = getCollectionStore();
   if (!cs) return;

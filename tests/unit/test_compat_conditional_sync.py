@@ -23,6 +23,7 @@ from unifideck.compatibility.library import (
     COMPAT_SCHEMA,
     CompatLibrary,
     CompatRating,
+    needs_refetch,
 )
 from unifideck.services.compatibility.service import CompatibilityService
 
@@ -234,3 +235,62 @@ def test_compat_rating_tolerates_marker_keys() -> None:
     })
     assert isinstance(rating, CompatRating)
     assert rating.deck_status == "verified"
+
+
+@pytest.mark.asyncio
+async def test_failed_migration_fetch_does_not_burn_the_one_shot() -> None:
+    """A timeout must not spend the migration's single attempt.
+
+    The compat namespace is registered with no TTL, so an entry stamped
+    at the current schema without data is stranded Deck-only for the
+    life of the install. ``_fetch_compat`` therefore returns ``None``
+    for a failed request and a dict for "Valve rated nothing", and only
+    the latter stamps.
+    """
+    cache = _Cache()
+    cache.set("compat", str(_REAL), {"deck_status": "playable"})
+    lib = CompatLibrary(cache=cache)  # type: ignore[arg-type]
+    failed = AsyncMock(return_value=None)          # transport failure
+    with patch.object(lib, "_fetch_compat", new=failed):
+        first = await lib.get_for_appid(_REAL)
+        second = await lib.get_for_appid(_REAL)
+    assert first.deck_status == "playable"         # cached value survives
+    assert second.deck_status == "playable"
+    # Not stamped, so it is still eligible — the retry is preserved.
+    stored = cache._stores["compat"].get(str(_REAL))
+    assert isinstance(stored, dict)
+    assert needs_refetch(stored)
+    assert failed.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_answered_migration_stamps_and_stops() -> None:
+    """"Valve rated nothing" is a real answer and does spend the shot."""
+    cache = _Cache()
+    cache.set("compat", str(_REAL), {"deck_status": "playable"})
+    lib = CompatLibrary(cache=cache)  # type: ignore[arg-type]
+    answered = AsyncMock(return_value=_tracks())   # empty but real
+    with patch.object(lib, "_fetch_compat", new=answered):
+        await lib.get_for_appid(_REAL)
+        await lib.get_for_appid(_REAL)
+    answered.assert_awaited_once()
+    stored = cache._stores["compat"].get(str(_REAL))
+    assert isinstance(stored, dict) and not needs_refetch(stored)
+
+
+@pytest.mark.asyncio
+async def test_cold_fetch_with_both_upstreams_down_caches_nothing() -> None:
+    """Otherwise a sync started before the network is up poisons a batch.
+
+    With no TTL, an all-unknown entry written from two failed requests
+    would make the title permanently unrated on every device.
+    """
+    cache = _Cache()
+    lib = CompatLibrary(cache=cache)  # type: ignore[arg-type]
+    with (
+        patch.object(lib, "_fetch_protondb", new=AsyncMock(return_value=None)),
+        patch.object(lib, "_fetch_compat", new=AsyncMock(return_value=None)),
+    ):
+        result = await lib.get_for_appid(_REAL)
+    assert result.deck_status == "unknown"
+    assert cache._stores["compat"].get(str(_REAL)) is None

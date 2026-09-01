@@ -28,9 +28,15 @@ logger = logging.getLogger(__name__)
 PROTONDB_TIERS = ("platinum", "gold", "silver", "bronze", "borked")
 
 #: Bumped when the cached entry shape changes in a way a warm cache
-#: cannot satisfy. Entries stamped below this are re-fetched once. The
-#: 7-day TTL alone would leave a Steam Machine owner on "Unknown" for a
-#: week, which is unacceptable for the device this exists to serve.
+#: cannot satisfy. Entries stamped below this are re-fetched once.
+#:
+#: There is NO expiry backstop behind that one shot:
+#: ``bootstrap/cache_registry.py`` registers ``("compat", 0)`` and
+#: ``CacheManager.register`` no-ops on an already-registered name, so
+#: this class's own ``register(..., ttl_seconds=cache_ttl.compat)`` is
+#: dead and the 604800 in ``defaults/config.json`` never applies.
+#: A wrong entry therefore lasts the life of the install, which is why
+#: the stamp is written only when an upstream actually answered.
 COMPAT_SCHEMA = 2
 
 PROTONDB_URL = (
@@ -232,17 +238,30 @@ class CompatLibrary:
             # title with genuinely no published rating from re-hitting
             # the endpoint every sync forever.
             if needs_refetch(cached):
-                result.apply(await self._fetch_compat(appid, session))
-                self._cache_set(str(appid), _stamped(result))
+                tracks = await self._fetch_compat(appid, session)
+                # Spend the one-shot migration only on a real answer. A
+                # timeout or a 429 that stamped anyway would strand this
+                # title Deck-only for the life of the install — the
+                # compat cache has no TTL to expire it.
+                if tracks is not None:
+                    result.apply(tracks)
+                    self._cache_set(str(appid), _stamped(result))
             return result
         result = CompatRating(appid=appid)
         result.protondb_tier = await self._fetch_protondb(appid, session)
         if result.protondb_tier is not None:
             result.sources.append("protondb")
-        result.apply(await self._fetch_compat(appid, session))
-        if any(result.track(n).category > 0 for n in TRACK_NAMES):
-            result.sources.append("deck_verified")
-        self._cache_set(str(appid), _stamped(result))
+        tracks = await self._fetch_compat(appid, session)
+        if tracks is not None:
+            result.apply(tracks)
+            if any(result.track(n).category > 0 for n in TRACK_NAMES):
+                result.sources.append("deck_verified")
+        # Persist only if at least one upstream actually answered.
+        # Caching an all-unknown entry built from two failed requests
+        # would make this title permanently unrated: the namespace has
+        # no TTL, and the schema stamp makes every later sync skip it.
+        if result.protondb_tier is not None or tracks is not None:
+            self._cache_set(str(appid), _stamped(result))
         return result
     async def get_for_title(
         self,
@@ -377,12 +396,17 @@ class CompatLibrary:
         self,
         appid: int,
         session: aiohttp.ClientSession | None = None,
-    ) -> dict[str, TrackResult]:
+    ) -> dict[str, TrackResult] | None:
         """Fetch every device's verification status + per-test reasoning.
 
-        One request answers all four tracks. Failures degrade to
-        all-unknown so callers never have to handle exceptions. Runs
-        behind the shared ``STEAM_STORE_GATE`` (same host as
+        One request answers all four tracks.
+
+        Returns ``None`` when the request itself failed, and a dict when
+        Valve answered — even if it answered "nothing rated". Those two
+        must not collapse into the same value: the caller stamps the
+        cache entry as migrated, and with the compat namespace carrying
+        no TTL a stamp written on a timeout is permanent. Runs behind the
+        shared ``STEAM_STORE_GATE`` (same host as
         storesearch/appdetails).
         """
         from unifideck.steam.http_retry import STEAM_STORE_GATE
@@ -395,7 +419,7 @@ class CompatLibrary:
             gate=STEAM_STORE_GATE,
         )
         if not isinstance(payload, dict):
-            return {name: TrackResult() for name in TRACK_NAMES}
+            return None
         return parse_compat_response(payload)
 
     async def _get_json(

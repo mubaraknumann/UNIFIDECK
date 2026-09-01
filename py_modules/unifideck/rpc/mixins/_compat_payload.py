@@ -78,6 +78,28 @@ def raw_category(entry: dict[str, Any], track: str) -> int:
     return 0
 
 
+def raw_status(entry: dict[str, Any], track: str) -> str:
+    """Valve's own status word for ``track``, no bump applied."""
+    return str(entry.get(f"{track}_status", "") or "unknown").lower()
+
+
+#: Tracks our ProtonDB inference is allowed to speak for at all.
+#:
+#: Frame is excluded outright: a desktop-Linux ProtonDB report says
+#: nothing about an ARM64 VR headset, so there is no basis for an
+#: opinion. The other three are x86 desktop-class Proton, which is
+#: exactly what a ProtonDB report measures — including SteamOS, where
+#: the inference is arguably strongest.
+_INFERABLE_TRACKS = frozenset({"deck", "machine", "steamos"})
+
+
+def _bumped(entry: dict[str, Any], track: str) -> bool:
+    """Whether our ProtonDB inference applies to ``track`` for ``entry``."""
+    if track not in _INFERABLE_TRACKS:
+        return False
+    return str(entry.get("protondb_tier", "") or "").lower() in _OPTIMISTIC_TIERS
+
+
 def compat_category(entry: dict[str, Any], track: str) -> int:
     """Valve's rating for ``track``, with our ProtonDB-optimism bump.
 
@@ -86,39 +108,37 @@ def compat_category(entry: dict[str, Any], track: str) -> int:
     fallback: Valve rates each device independently, and a measured
     300-title sample diverges in both directions, so borrowing another
     device's verdict would invent an answer.
+
+    Feeds the compatibility tab's filter, not the badge. See
+    :func:`compat_block` for why the badge must not carry the bump.
     """
     category = raw_category(entry, track)
     if category > 0:
         return category
-    tier = str(entry.get("protondb_tier", "") or "").lower()
-    if tier in _OPTIMISTIC_TIERS:
-        return _PLAYABLE
-    return 0
+    return _PLAYABLE if _bumped(entry, track) else 0
 
 
 def compat_status(entry: dict[str, Any], track: str) -> str:
     """Our status word for ``track``, honouring the same bump."""
-    status = str(entry.get(f"{track}_status", "") or "unknown").lower()
+    status = raw_status(entry, track)
     if status != "unknown":
         return status
-    tier = str(entry.get("protondb_tier", "") or "").lower()
-    if tier in _OPTIMISTIC_TIERS:
+    if _bumped(entry, track):
         # The SteamOS track calls this rung "compatible"; the 4-value
         # tracks call it "playable". Name it the way the track does.
         return "compatible" if track == "steamos" else "playable"
     return "unknown"
 
 
-#: Tracks the ProtonDB bump may speak for. Both are x86 desktop-class
-#: Proton on Valve's 4-value ladder, which is exactly what a ProtonDB
-#: report measures.
+#: Tracks whose bits may carry our inference as well as Valve's verdict.
 #:
-#: SteamOS is excluded because its integers mean something else (a
-#: 3-value "does this run" enum), and **Frame** is excluded because a
-#: desktop-Linux ProtonDB report says nothing about an ARM64 VR headset.
-#: Bumping Frame would write a rating we invented into Steam's own Frame
-#: slot for a device this plugin does not support.
-_BUMPABLE_TRACKS = frozenset({"deck", "machine"})
+#: Narrower than :data:`_INFERABLE_TRACKS`, and for a different reason.
+#: These integers go into Steam's OWN field, where a 2 is read as
+#: "Valve rated this Playable". On the Deck and Machine ladders that is
+#: what our bump means, so writing it is honest. The SteamOS track's 2
+#: means something else entirely ("runs on SteamOS"), so putting our
+#: inference there would be a claim Steam's filter misreads.
+_BUMPABLE_BITS = frozenset({"deck", "machine"})
 
 
 def compat_categories(entry: dict[str, Any]) -> dict[str, int]:
@@ -128,12 +148,12 @@ def compat_categories(entry: dict[str, Any]) -> dict[str, int]:
     ``steam_hw_compat_category_packed`` slots, so anything here has to be
     a number Steam itself would have written. Valve's own value always
     is; our ProtonDB bump only is for the tracks in
-    :data:`_BUMPABLE_TRACKS`.
+    :data:`_BUMPABLE_BITS`.
     """
     return {
         name: (
             compat_category(entry, name)
-            if name in _BUMPABLE_TRACKS
+            if name in _BUMPABLE_BITS
             else raw_category(entry, name)
         )
         for name in TRACK_NAMES
@@ -179,17 +199,25 @@ def track_test_results(
 def compat_block(entry: dict[str, Any]) -> dict[str, Any]:
     """Every track, for the single-game metadata payload.
 
-    Categories come from :func:`compat_categories` rather than being
-    re-derived, so the number the panel could display and the number
-    written into Steam's bitfield can never disagree — and so a future
-    reader who surfaces the Frame track gets Valve's verdict or nothing,
-    not one we inferred.
+    **Valve's verdict only — the ProtonDB bump is deliberately not
+    applied here.** This feeds the info-panel badge and the Details
+    modal, which present a rating in Valve's own vocabulary
+    ("VERIFIED", "PLAYABLE") under a "<device> Compatibility" heading.
+    Showing our own inference there would put words in Valve's mouth,
+    and the modal would render a PLAYABLE pill above an empty
+    test-result list because there is no report behind it.
+
+    This also preserves the pre-multi-device Deck behaviour exactly: the
+    old display path (``deck_compat_enum``) read only ``deck_status``
+    and had no bump, while the *facet* path (``_deck_category``) did.
+    That asymmetry is intentional and load-bearing — the compatibility
+    tab may include a title on our inference, but the badge will not
+    claim Valve rated it.
     """
-    categories = compat_categories(entry)
     return {
         name: {
-            "category": categories[name],
-            "status": compat_status(entry, name),
+            "category": raw_category(entry, name),
+            "status": raw_status(entry, name),
             "test_results": track_test_results(entry, name),
         }
         for name in TRACK_NAMES

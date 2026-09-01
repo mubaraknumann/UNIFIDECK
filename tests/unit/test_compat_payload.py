@@ -114,10 +114,63 @@ def test_slim_entry_carries_only_what_the_frontend_reads() -> None:
     }
 
 
-def test_display_block_and_bitfield_cannot_disagree() -> None:
-    """The number shown and the number written must be the same number."""
-    entry = {"protondb_tier": "platinum", "machine_category": 3}
+def test_display_block_agrees_with_the_bitfield_on_valves_own_values() -> None:
+    """Where Valve rated it, every consumer must report the same number.
+
+    They diverge only where our inference applies, and that divergence
+    is the point: the filter may act on it, the badge may not.
+    """
+    entry = {"machine_category": 3, "deck_category": 2, "steamos_category": 2}
     block = compat_block(entry)
     cats = compat_categories(entry)
     for track in TRACK_NAMES:
         assert block[track]["category"] == cats[track], track
+
+
+# ── the display payload must carry Valve's verdict only ───────────────
+#
+# Regression guard for a real defect found in adversarial review: the
+# badge and Details modal were briefly fed the bumped category, so a
+# Deck showed a yellow PLAYABLE pill — in Valve's vocabulary, under a
+# "Steam Deck Compatibility" heading, above an empty test-result list —
+# for titles Valve had never rated.
+
+
+def test_display_block_never_shows_our_inference() -> None:
+    """The pre-change display path had no bump. It must stay that way."""
+    entry = {
+        "deck_status": "unknown", "deck_category": 0,
+        "protondb_tier": "platinum", "deck_test_results": [],
+    }
+    block = compat_block(entry)["deck"]
+    assert block["category"] == 0
+    assert block["status"] == "unknown"
+    # ...while the tab filter still includes it, exactly as before.
+    assert compat_category(entry, "deck") == 2
+
+
+def test_display_block_still_shows_valves_own_verdict() -> None:
+    entry = {"machine_status": "verified", "machine_category": 3}
+    assert compat_block(entry)["machine"]["category"] == 3
+    assert compat_block(entry)["machine"]["status"] == "verified"
+
+
+def test_inference_never_speaks_for_the_frame_in_any_field() -> None:
+    """Category AND status — the first fix closed only the category."""
+    entry = {"protondb_tier": "platinum"}
+    assert compat_category(entry, "frame") == 0
+    assert compat_status(entry, "frame") == "unknown"
+    assert compat_categories(entry)["frame"] == 0
+
+
+def test_steamos_inference_reaches_our_filter_but_not_steams_bits() -> None:
+    """Two different questions, two different answers, both deliberate.
+
+    Our own filter may act on a ProtonDB report for SteamOS — it is x86
+    desktop Linux, exactly what ProtonDB measures. Steam's bitfield may
+    not, because a 2 there is read as Valve's own "runs on SteamOS".
+    """
+    entry = {"protondb_tier": "native"}
+    assert compat_status(entry, "steamos") == "compatible"
+    assert compat_category(entry, "steamos") == 2
+    assert compat_categories(entry)["steamos"] == 0

@@ -8,8 +8,22 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 // React and the Decky runtime are peer-provided in the Steam webview
 // and absent under vitest — stub the two imports that pull them in.
+// `deviceHolder` stands in for the module-level device cache. The tab
+// title is derived from it at call time, exactly as production derives
+// the compat tab's title from `getDeviceType()` — so if the sync fails
+// to await the device type first, it names the collection from the
+// stale default and the test can see it.
+const deviceHolder = { current: "deck" };
 vi.mock("./tab-container", () => ({
-  getUnifideckTabs: () => [{ id: "unifideck-alpha", title: "Alpha", position: 0, filters: [] }],
+  getUnifideckTabs: () => [
+    { id: "unifideck-alpha", title: "Alpha", position: 0, filters: [] },
+    {
+      id: "unifideck-deck",
+      title: deviceHolder.current === "machine" ? "Great on Machine" : "Great on Deck",
+      position: 1,
+      filters: [],
+    },
+  ],
   isTabMasterInstalled: () => false,
 }));
 vi.mock("../library-filters", () => ({
@@ -23,6 +37,24 @@ vi.mock("@decky/api", () => ({
 }));
 // Collection names are translated strings, so the compat-tab keys have
 // to resolve to something before they can be compared.
+vi.mock("../device-type", () => ({
+  COMPAT_TAB_TITLE_KEYS: [
+    "deckTabs.greatOnDeck",
+    "deckTabs.greatOnMachine",
+    "deckTabs.steamOSCompatible",
+  ],
+  // Resolves late and to a NON-default device, so a sync that failed to
+  // await it would be caught naming things "Great on Deck".
+  // Resolves late and to a NON-default device, flipping the holder as it
+  // lands. A sync that skips this await sees "deck" and is caught.
+  awaitDeviceType: () =>
+    new Promise((r) =>
+      setTimeout(() => {
+        deviceHolder.current = "machine";
+        r("machine");
+      }, 5),
+    ),
+}));
 vi.mock("i18next", () => ({
   default: {
     t: (key: string) =>
@@ -179,5 +211,32 @@ describe("startCollectionManager", () => {
     expect(Array.from(map.values()).map((c) => c.displayName)).not.toContain("[Unifideck] Alpha");
 
     handle.remove();
+  });
+});
+
+describe("device-type race", () => {
+  /**
+   * Regression guard for a real defect found in adversarial review.
+   * `startCollectionManager()` runs at plugin init, before the
+   * device-type RPC answers. Collection names are device-specific AND
+   * account-global + cloud-synced, so naming one from the cached
+   * default would push a wrong-device collection to every device on the
+   * account — where the all-three-names whitelist then protects it from
+   * cleanup forever.
+   */
+  it("waits for the device type before naming a collection", async () => {
+    deviceHolder.current = "deck"; // the stale cached default
+    const { map } = makeStore([]);
+    window.localStorage.setItem(COLLECTIONS_ENABLED_KEY, "1");
+
+    await syncUnifideckCollections();
+
+    const names = Array.from(map.values()).map((c) => c.displayName);
+    // The device resolves to "machine", so that is the only compat
+    // collection that may exist. Seeing the Deck name means the sync
+    // named it from the default before the RPC answered — which would
+    // then cloud-sync to every device on the account.
+    expect(names).toContain("[Unifideck] Great on Machine");
+    expect(names).not.toContain("[Unifideck] Great on Deck");
   });
 });

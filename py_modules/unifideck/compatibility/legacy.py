@@ -65,6 +65,8 @@ async def fetch_deck_verified(
     """
     lib = CompatLibrary()
     tracks = await lib._fetch_compat(appid)
+    if tracks is None:          # request failed, not "nothing rated"
+        return "unknown"
     return tracks[TRACK_DECK].status
 
 

@@ -9,7 +9,9 @@ import { describe, it, expect } from "vitest";
 import {
   packCompat,
   overviewCompatCategory,
+  isTopRated,
   PACKED_SHIFTS,
+  TOP_CATEGORY,
   type CompatTrack,
 } from "./compat-packed";
 
@@ -83,5 +85,41 @@ describe("overviewCompatCategory", () => {
     expect(overviewCompatCategory(null, "deck")).toBe(0);
     expect(overviewCompatCategory(undefined, "machine")).toBe(0);
     expect(overviewCompatCategory({}, "machine")).toBe(0);
+  });
+});
+
+describe("isTopRated", () => {
+  /**
+   * Regression guard for a real defect found in adversarial review: the
+   * library filter's fast path compared every track against a hardcoded
+   * 3, but the SteamOS enum's best value is 2 and it never emits 3. The
+   * branch was therefore unreachable on non-Deck SteamOS hardware
+   * (Bazzite, CachyOS), silently dropping every Valve-rated native
+   * Steam game out of the compatibility tab.
+   */
+  it("uses 2 for the SteamOS track and 3 for the 4-value ladders", () => {
+    expect(TOP_CATEGORY.steamos).toBe(2);
+    expect(TOP_CATEGORY.deck).toBe(3);
+    expect(TOP_CATEGORY.machine).toBe(3);
+  });
+
+  it("accepts the SteamOS top rating, which is 2 not 3", () => {
+    expect(isTopRated(2, "steamos")).toBe(true);
+    expect(isTopRated(1, "steamos")).toBe(false);
+  });
+
+  it("still requires Verified on the Deck and Machine tracks", () => {
+    for (const track of ["deck", "machine"] as CompatTrack[]) {
+      expect(isTopRated(3, track)).toBe(true);
+      expect(isTopRated(2, track)).toBe(false);
+    }
+  });
+
+  it("is reachable for every track", () => {
+    // If any track's top value were unattainable, its branch would be
+    // dead code — which is exactly the bug this guards.
+    for (const track of TRACKS) {
+      expect(isTopRated(TOP_CATEGORY[track], track)).toBe(true);
+    }
   });
 });

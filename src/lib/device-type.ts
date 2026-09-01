@@ -9,12 +9,24 @@
  * Cached module-level after the single startup fetch. The value cannot
  * change without a reboot, so re-asking would only add a round trip.
  *
- * The default is `"other"`: a backend that never answers degrades to
- * the neutral SteamOS wording rather than to a confident claim about
- * hardware nobody verified. Defaulting to `"deck"` would mean a Steam
- * Machine whose RPC failed tells its owner their games are "Great on
- * Deck" — a wrong device name, which is the exact failure this module
- * exists to prevent.
+ * The default is `"deck"`, and that is a deliberate reversal of an
+ * earlier attempt at `"other"`.
+ *
+ * `"other"` looks safer — it never claims to be hardware nobody
+ * verified — but it makes the OVERWHELMINGLY common device the losing
+ * case. `applyLibraryPatch()` and `startCollectionManager()` both run
+ * synchronously at plugin init, while `loadDeviceType()` needs an RPC
+ * round trip behind `uploadActiveSteamUser()`. So with an `"other"`
+ * default, every Deck boot renders its compat tab titled "SteamOS
+ * Compatible", filtered on the SteamOS track (whose enum never reaches
+ * the top rating), before self-correcting. `"deck"` makes that window
+ * a no-op for almost every user.
+ *
+ * A Steam Machine still passes briefly through the Deck label. That is
+ * acceptable for transient UI, which `applyDeviceType()` corrects. It
+ * is NOT acceptable for anything persistent, so
+ * `awaitDeviceType()` exists for those callers — see the collection
+ * manager, whose names are account-global and cloud-synced.
  */
 import { call } from "@decky/api";
 import { rpcRoutes } from "../api/rpc-routes";
@@ -30,7 +42,7 @@ interface DeviceTypePayload {
 
 const VALID: readonly DeviceType[] = ["deck", "machine", "other"];
 
-let deviceType: DeviceType = "other";
+let deviceType: DeviceType = "deck";
 
 export function getDeviceType(): DeviceType {
   return deviceType;
@@ -94,6 +106,27 @@ export const COMPAT_TAB_TITLE_KEYS: readonly string[] = [
 /** Test seam — reset the cache between cases. */
 export function __setDeviceTypeForTests(value: DeviceType): void {
   deviceType = value;
+  loading = null;
+}
+
+/**
+ * Resolve the device type, awaiting the in-flight fetch if there is one.
+ *
+ * For callers that write something PERSISTENT keyed on the device — a
+ * Steam collection name, say, which is account-global and cloud-synced.
+ * A transient wrong label self-corrects; a wrong collection created on
+ * a guess propagates to every device on the account and is then
+ * indistinguishable from a real one belonging to a sibling device.
+ */
+export async function awaitDeviceType(): Promise<DeviceType> {
+  if (loading) {
+    try {
+      await loading;
+    } catch {
+      // Fall through to whatever is cached.
+    }
+  }
+  return deviceType;
 }
 
 /**
@@ -103,7 +136,14 @@ export function __setDeviceTypeForTests(value: DeviceType): void {
  *   can decide whether a re-render is warranted rather than firing one
  *   unconditionally on every boot.
  */
-export async function loadDeviceType(): Promise<boolean> {
+let loading: Promise<boolean> | null = null;
+
+export function loadDeviceType(): Promise<boolean> {
+  loading ??= fetchDeviceType();
+  return loading;
+}
+
+async function fetchDeviceType(): Promise<boolean> {
   try {
     const raw = await call<[], unknown>(rpcRoutes.getDeviceType);
     const r = unwrapRpcEnvelope<DeviceTypePayload>(raw, {
@@ -119,7 +159,7 @@ export async function loadDeviceType(): Promise<boolean> {
     deviceType = next;
     return true;
   } catch {
-    // Backend not ready — the neutral "other" default stays.
+    // Backend not ready — the "deck" default stays.
     return false;
   }
 }
