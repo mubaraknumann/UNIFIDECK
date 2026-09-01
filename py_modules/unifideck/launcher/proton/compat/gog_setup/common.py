@@ -136,6 +136,13 @@ async def run_wine(
     "already installed", so callers treat failures as non-fatal.
     """
     env = dict(plan.env)
+    # ``PROTON_REMOTE_DEBUG_CMD`` is a game-side sidecar (for example a
+    # CheatDeck trainer), not part of the GOG setup helper. If it reaches
+    # ``scriptinterpreter.exe``, Proton starts the sidecar before the helper
+    # and the helper can wait on that unrelated Wine process indefinitely.
+    # Keep the rest of the launch environment, including
+    # ``PRESSURE_VESSEL_FILESYSTEMS_RW`` for filesystem access.
+    env.pop("PROTON_REMOTE_DEBUG_CMD", None)
     env["GAMEID"] = "umu-0"
     env["STORE"] = "gog"
     env["PROTON_VERB"] = "run"
