@@ -14,13 +14,19 @@
  * sorting and folder creation. `openFilePicker` from `@decky/api` has none
  * of that, and a vault on an SD card is the common case on a Deck.
  *
+ * The path is shown, not typed. There used to be a `TextField` beside the
+ * Browse button answering the same question twice; since the picker can
+ * reach any mount point and create folders, the field only added a way to
+ * type a path that does not exist. Browsing swaps the whole modal body for
+ * the picker, the way `CloudSaveModal` does, rather than expanding inline.
+ *
  * The vault folder is created on connect, with a README and a marker file.
  * The marker is what lets a later sync tell "the vault is empty" from "the
  * drive did not mount", so an SD card that is slow to appear never looks
  * like a library the user deleted.
  */
 import { FC, useState } from "react";
-import { ConfirmModal, DialogButton, Field, TextField } from "@decky/ui";
+import { ConfirmModal, DialogButton, Field } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 
 import { StoragePathPicker } from "./StoragePathPicker";
@@ -62,6 +68,28 @@ export const GameVaultLocalVaultModal: FC<Props> = ({
     }
   };
 
+  // Folder-picker mode — replaces the form body, so the picker gets the
+  // whole dialog instead of a scrolling box inside it.
+  if (browsing) {
+    return (
+      <ConfirmModal
+        strTitle={t("gamevault.vaultDir")}
+        bAlertDialog
+        strOKButtonText={t("common.cancel")}
+        onOK={() => setBrowsing(false)}
+        onCancel={() => setBrowsing(false)}
+      >
+        <StoragePathPicker
+          startPath={vaultDir || "/home/deck"}
+          onConfirm={(path) => {
+            setVaultDir(path);
+            setBrowsing(false);
+          }}
+        />
+      </ConfirmModal>
+    );
+  }
+
   return (
     <ConfirmModal
       strTitle={t("gamevault.localTitle")}
@@ -78,40 +106,21 @@ export const GameVaultLocalVaultModal: FC<Props> = ({
           {t("gamevault.localIntro")}
         </div>
 
-        <TextField
+        <Field
           label={t("gamevault.vaultDir")}
           description={t("gamevault.vaultDirDescription")}
-          value={vaultDir}
-          onChange={(e) => setVaultDir(e.target.value)}
-        />
-
-        <Field bottomSeparator="none">
-          <DialogButton onClick={() => setBrowsing((open) => !open)}>
-            {browsing ? t("gamevault.browseClose") : t("gamevault.browse")}
+          bottomSeparator="none"
+        >
+          <DialogButton onClick={() => setBrowsing(true)}>
+            {t("gamevault.browse")}
           </DialogButton>
         </Field>
 
-        {browsing && (
-          <div
-            style={{
-              padding: "8px",
-              background: "rgba(0,0,0,0.15)",
-              borderRadius: 6,
-            }}
-          >
-            <StoragePathPicker
-              startPath={vaultDir || "/home/deck"}
-              onConfirm={(path) => {
-                setVaultDir(path);
-                setBrowsing(false);
-              }}
-            />
+        {vaultDir && (
+          <div style={{ fontSize: "12px", wordBreak: "break-all" }}>
+            {vaultDir}
           </div>
         )}
-
-        <div style={{ fontSize: "11px", opacity: 0.65, whiteSpace: "normal" }}>
-          {t("gamevault.namingHint")}
-        </div>
 
         {error && (
           <div style={{ color: "#ef4444", fontSize: "12px", padding: "4px 0" }}>

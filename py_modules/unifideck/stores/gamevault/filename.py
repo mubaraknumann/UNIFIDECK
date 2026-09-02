@@ -62,10 +62,12 @@ _STRIPPABLE_EXTENSIONS = (
 )
 
 # What local mode will actually index. A deliberate subset of the formats
-# GameVault's server accepts: every one of these is readable by the
-# extraction ladder in ``archive.py``, so a file that appears in the library
-# can always be installed. Bare executables are excluded — the vault holds
-# archives.
+# GameVault's server accepts. Every entry must be recognised by
+# ``archive.detect_format``, which is the gate that decides whether an
+# archive can be unpacked — an extension listed here but unknown to that
+# function produces a library entry that fails at install, which is exactly
+# what ``.tar*``/``.iso``/``.wim``/``.cab`` used to do. Bare executables are
+# excluded: the vault holds archives.
 ARCHIVE_EXTENSIONS = (
     ".zip", ".7z", ".rar",
     ".tar", ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst",

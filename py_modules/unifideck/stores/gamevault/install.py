@@ -128,6 +128,7 @@ class GameVaultInstaller:
         """Install *game_id* from whatever this installer's source supplies."""
         target_dir = await self._prepare_target(install_path)
         acquired = None
+        created_dir: Path | None = None
         try:
             acquired = await self._source.acquire(
                 game_id, progress_callback=progress_callback,
@@ -138,6 +139,12 @@ class GameVaultInstaller:
             game_dir = await asyncio.to_thread(
                 _free_game_dir, target_dir, acquired.dir_name, game_id,
             )
+            # Remember whether this run is the one that brings the directory
+            # into existence. Only then may a cancellation delete it: an
+            # extraction into a directory that was already there would take
+            # whatever else was in it.
+            if not await asyncio.to_thread(game_dir.exists):
+                created_dir = game_dir
             await extract_archive(acquired.path, game_dir)
 
             exe_path = await asyncio.to_thread(
@@ -164,6 +171,14 @@ class GameVaultInstaller:
                     "is_installer": acquired.is_installer,
                 },
             )
+        except asyncio.CancelledError:
+            # The user pressed Cancel. Nothing recorded this install yet —
+            # the marker is only written on success — so without this the
+            # half-extracted directory would be invisible to
+            # ``uninstall_game`` ("Game not installed") and unreclaimable
+            # from the UI, holding however many GB had landed.
+            await self._discard_partial_extract(created_dir, game_id)
+            raise
         except Exception as exc:
             logger.exception("[GameVaultInstaller] install_game failed")
             return InstallResult(
@@ -174,6 +189,39 @@ class GameVaultInstaller:
             )
         finally:
             self._source.release(acquired)
+
+    @staticmethod
+    async def _discard_partial_extract(
+        game_dir: Path | None, game_id: str,
+    ) -> None:
+        """Remove a directory this run created and did not finish filling.
+
+        Re-checks ownership immediately before deleting rather than trusting
+        the check ``_free_game_dir`` made: an extract can run for a long
+        time, and another store may have claimed the folder in between.
+        """
+        if game_dir is None:
+            return
+        foreign = await asyncio.to_thread(
+            foreign_installs_under, game_dir,
+            owner_key=f"{STORE_NAME}:{game_id}",
+        )
+        if foreign:
+            logger.warning(
+                "[GameVaultInstaller] leaving cancelled extract at %s: now "
+                "holds install(s) for %s", game_dir, ", ".join(sorted(foreign)),
+            )
+            return
+        if await asyncio.to_thread(safe_rmtree, game_dir):
+            logger.info(
+                "[GameVaultInstaller] removed cancelled extract at %s",
+                game_dir,
+            )
+        else:
+            logger.warning(
+                "[GameVaultInstaller] could not remove cancelled extract "
+                "at %s", game_dir,
+            )
 
     async def uninstall_game(self, game_id: str) -> Result:
         """Remove the extracted game and its marker.

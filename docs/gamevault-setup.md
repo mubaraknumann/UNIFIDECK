@@ -161,6 +161,10 @@ From here it is the same whichever option you chose.
 4. Press **Play**. Windows games go through Proton automatically, and Linux games
    run directly. There is nothing to set up either way.
 
+> **Note:** if a game does not start, or an installer opens instead of the game,
+> open its page in Steam, press the gear icon and choose **Change executable…** to
+> pick the right file.
+
 A few things that are nice to know:
 
 - With a remote server, the downloaded file is cleaned up once the game is unpacked.

@@ -25,6 +25,7 @@ Two seams, deliberately narrow:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 import time
@@ -310,20 +311,40 @@ async def _stream_to_file(
     total: int,
     progress_callback: ProgressCallback | None,
 ) -> int:
-    """Write *content* to *archive_path*, reporting at most once a second."""
+    """Write *content* to *archive_path*, reporting at most once a second.
+
+    A download that does not finish takes its partial file with it. Nothing
+    else can: on cancel or error the installer's ``finally`` calls
+    ``release(None)``, because it never received an ``AcquiredArchive`` to
+    release — so an abandoned multi-gigabyte body would sit in staging with
+    no record that it exists. ``BaseException`` on purpose: cancellation is
+    the common case here, and it is not an ``Exception``.
+    """
     downloaded = 0
     last_report = 0.0
     start = time.monotonic()
-    with archive_path.open("wb") as fh:
-        async for chunk in content.iter_chunked(_CHUNK_BYTES):
-            fh.write(chunk)
-            downloaded += len(chunk)
-            now = time.monotonic()
-            if progress_callback and now - last_report >= _REPORT_INTERVAL_S:
-                await progress_callback(
-                    _progress_payload(downloaded, total, now - start),
-                )
-                last_report = now
+    try:
+        with archive_path.open("wb") as fh:
+            async for chunk in content.iter_chunked(_CHUNK_BYTES):
+                fh.write(chunk)
+                downloaded += len(chunk)
+                now = time.monotonic()
+                if progress_callback and now - last_report >= _REPORT_INTERVAL_S:
+                    await progress_callback(
+                        _progress_payload(downloaded, total, now - start),
+                    )
+                    last_report = now
+    except BaseException:
+        # Deliberately blocking: this runs while the task is being cancelled,
+        # where any ``await`` re-raises immediately and would skip the
+        # cleanup entirely. One unlink does not wait on I/O completion.
+        with contextlib.suppress(OSError):
+            archive_path.unlink(missing_ok=True)  # noqa: ASYNC240
+        logger.info(
+            "[GameVault/remote] discarded partial download %s",
+            archive_path.name,
+        )
+        raise
     return downloaded
 
 

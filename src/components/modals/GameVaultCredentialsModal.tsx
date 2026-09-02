@@ -95,6 +95,28 @@ export const GameVaultCredentialsModal: FC<Props> = ({
     }
   };
 
+  // Folder-picker mode — replaces the form body, so the picker gets the
+  // whole dialog instead of a scrolling box below the credentials.
+  if (browsing) {
+    return (
+      <ConfirmModal
+        strTitle={t("gamevault.downloadDir")}
+        bAlertDialog
+        strOKButtonText={t("common.cancel")}
+        onOK={() => setBrowsing(false)}
+        onCancel={() => setBrowsing(false)}
+      >
+        <StoragePathPicker
+          startPath={downloadDir || "/home/deck"}
+          onConfirm={(path) => {
+            setDownloadDir(path);
+            setBrowsing(false);
+          }}
+        />
+      </ConfirmModal>
+    );
+  }
+
   return (
     <ConfirmModal
       strTitle={t("gamevault.connectTitle")}
@@ -141,36 +163,21 @@ export const GameVaultCredentialsModal: FC<Props> = ({
             ``openFilePicker``: this directory is most useful when it is on a
             different drive from the install target, which means the device
             list from ``get_browseable_devices`` is the whole point. */}
-        <TextField
+        <Field
           label={t("gamevault.downloadDir")}
           description={`${t("gamevault.downloadDirDescription")} (${t(
             "gamevault.downloadDirPlaceholder",
           )})`}
-          value={downloadDir}
-          onChange={(e) => setDownloadDir(e.target.value)}
-        />
-
-        <Field bottomSeparator="none">
-          <DialogButton onClick={() => setBrowsing((open) => !open)}>
-            {browsing ? t("gamevault.browseClose") : t("gamevault.browse")}
+          bottomSeparator="none"
+        >
+          <DialogButton onClick={() => setBrowsing(true)}>
+            {t("gamevault.browse")}
           </DialogButton>
         </Field>
 
-        {browsing && (
-          <div
-            style={{
-              padding: "8px",
-              background: "rgba(0,0,0,0.15)",
-              borderRadius: 6,
-            }}
-          >
-            <StoragePathPicker
-              startPath={downloadDir || "/home/deck"}
-              onConfirm={(path) => {
-                setDownloadDir(path);
-                setBrowsing(false);
-              }}
-            />
+        {downloadDir && (
+          <div style={{ fontSize: "12px", wordBreak: "break-all" }}>
+            {downloadDir}
           </div>
         )}
 

@@ -57,7 +57,8 @@ the next library sync (Unifideck -> Sync Library).
 
 Supported archives
 ------------------
-  .zip  .7z  .rar  .tar  .tar.gz  .tar.bz2  .tar.xz  .iso  .wim  .cab
+  .zip  .7z  .rar  .tar  .tar.gz  .tar.bz2  .tar.xz  .tar.zst  .iso  .wim
+  .cab
 
 Naming
 ------

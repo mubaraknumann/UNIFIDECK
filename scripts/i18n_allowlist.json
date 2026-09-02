@@ -4,6 +4,10 @@
     "shape": "\"<flat.key>\": { \"locales\": [\"de-DE\", \"fr-FR\"] | \"*\", \"reason\": \"why identical is correct\" }",
     "rule": "Prefer translating over allowlisting. Use \"*\" only when the value is identical in every supported language; otherwise list the specific tags, because a key translated in 12 locales proves the other 3 are real misses."
   },
+  "gamevault.downloadDirPlaceholder": {
+    "locales": "*",
+    "reason": "A filesystem path and nothing else. The label that used to precede it (\"Default: \") was removed at the user's request, leaving no words to translate."
+  },
 
   "deckTabs.microsoft": {
     "locales": "*",

@@ -13,6 +13,7 @@ be re-testing the transport instead of the pipeline.
 """
 from __future__ import annotations
 
+import asyncio
 import zipfile
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from unifideck.stores.gamevault.archive import (
     detect_format,
     extract_archive,
 )
+from unifideck.stores.gamevault.filename import ARCHIVE_EXTENSIONS
 from unifideck.stores.gamevault.install import GameVaultInstaller
 from unifideck.stores.gamevault.markers import (
     load_install_info,
@@ -110,9 +112,66 @@ def test_detect_format_7z_inside_sfx(tmp_path):
     assert detect_format(p) == "7z"
 
 
+@pytest.mark.parametrize(
+    ("label", "blob"),
+    [
+        ("gzip", b"\x1f\x8b\x08" + b"\x00" * 32),
+        ("bzip2", b"BZh9" + b"\x00" * 32),
+        ("xz", b"\xfd7zXZ\x00\x00" + b"\x00" * 32),
+        ("zstd", b"\x28\xb5\x2f\xfd" + b"\x00" * 32),
+        ("cab", b"MSCF" + b"\x00" * 32),
+        ("wim", b"MSWIM\x00\x00\x00" + b"\x00" * 32),
+        ("tar", b"\x00" * 257 + b"ustar\x0000" + b"\x00" * 32),
+        ("iso", b"\x00" * 0x8001 + b"CD001" + b"\x00" * 32),
+    ],
+)
+def test_detect_format_recognises_every_libarchive_format(tmp_path, label, blob):
+    """The indexer offers these, so detection has to answer for them.
+
+    ``ARCHIVE_EXTENSIONS`` has always listed tar, gzip, iso, wim and cab,
+    which meant a shortcut in the user's library. ``detect_format`` knew only
+    zip/rar/7z, so every one of those installs ended at "Unknown archive
+    format" — a promise the library made and the installer could not keep.
+    """
+    p = tmp_path / f"archive_{label}.bin"
+    p.write_bytes(blob)
+    assert detect_format(p) == "libarchive"
+
+
+def test_every_indexed_extension_is_a_format_the_installer_knows():
+    """No entry in ``ARCHIVE_EXTENSIONS`` may be unknown to ``detect_format``.
+
+    The two lists drifted apart once already. This is the assertion that ties
+    them together: a new extension added to the indexer without a matching
+    magic-byte branch fails here rather than on a user's device after a
+    multi-gigabyte download.
+    """
+    samples = {
+        ".zip": b"PK\x03\x04",
+        ".7z": b"7z\xbc\xaf'\x1c",
+        ".rar": b"Rar!\x1a\x07\x00",
+        ".tar": b"\x00" * 257 + b"ustar\x0000",
+        ".tar.gz": b"\x1f\x8b\x08",
+        ".tar.bz2": b"BZh9",
+        ".tar.xz": b"\xfd7zXZ\x00\x00",
+        ".tar.zst": b"\x28\xb5\x2f\xfd",
+        ".iso": b"\x00" * 0x8001 + b"CD001",
+        ".wim": b"MSWIM\x00\x00\x00",
+        ".cab": b"MSCF",
+    }
+    assert set(samples) == set(ARCHIVE_EXTENSIONS)
+
+
 def test_detect_format_unknown(tmp_path):
     p = tmp_path / "archive.bin"
     p.write_bytes(b"NOPE" + b"\x00" * 20)
+    assert detect_format(p) is None
+
+
+def test_detect_format_short_file_is_not_mistaken_for_tar(tmp_path):
+    """A file too small to hold the offset magic must not read past its end."""
+    p = tmp_path / "tiny.bin"
+    p.write_bytes(b"AB")
     assert detect_format(p) is None
 
 
@@ -522,3 +581,187 @@ async def test_install_ignores_an_unrelated_row_elsewhere(
     result = await installer.install_game("g1")
 
     assert result.install_path == str(root / "My Game")
+
+
+# ── cancellation ─────────────────────────────────────────────────────
+# The store had no cancel handling at all: the frontend's Cancel button is
+# not store-gated, so it reached ``DownloadService.cancel`` → ``task.cancel``
+# and reported success while the download, the extractor process and the
+# half-written install directory all carried on or were left behind.
+class _SlowSource(_FakeSource):
+    """A source whose ``acquire`` never finishes on its own."""
+
+    def __init__(self, path: Path, started: asyncio.Event) -> None:
+        super().__init__(path)
+        self._started = started
+
+    async def acquire(self, game_id, *, progress_callback):
+        self._started.set()
+        await asyncio.sleep(3600)
+        raise AssertionError("unreachable")
+
+
+async def test_cancel_during_acquire_propagates_and_releases(
+    tmp_path, markers_in,
+):
+    """Cancellation must not be swallowed by the pipeline's ``except``.
+
+    ``CancelledError`` is a ``BaseException``, so the broad ``except
+    Exception`` correctly lets it past — if that ever changed, the worker
+    would record a failed install instead of a cancelled one.
+    """
+    started = asyncio.Event()
+    archive = _zip_with(tmp_path, "g.zip", {"Game.exe": b"x" * 10})
+    source = _SlowSource(archive, started)
+    installer = GameVaultInstaller(
+        source=source, default_install_root=str(tmp_path / "installs"),
+    )
+
+    task = asyncio.ensure_future(installer.install_game("g1"))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert source.released == [None]
+    assert load_install_info("g1") is None
+
+
+async def test_cancel_removes_the_half_extracted_directory(
+    tmp_path, markers_in, games_map_at, monkeypatch,
+):
+    """No marker is written until success, so nothing else could reclaim it.
+
+    ``uninstall_game`` answers "Game not installed" for a directory with no
+    marker, which left however many GB had landed with no route out of the
+    UI.
+    """
+    root = tmp_path / "installs"
+    archive = _zip_with(tmp_path, "g.zip", {"Game.exe": b"x" * 10})
+    reached = asyncio.Event()
+
+    async def _hang(_archive, dest):
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "partial.bin").write_bytes(b"x" * 100)
+        reached.set()
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(
+        "unifideck.stores.gamevault.install.extract_archive", _hang,
+    )
+    installer = GameVaultInstaller(
+        source=_FakeSource(archive), default_install_root=str(root),
+    )
+
+    task = asyncio.ensure_future(installer.install_game("g1"))
+    await reached.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert not (root / "My Game").exists()
+
+
+async def test_cancel_keeps_a_directory_that_already_existed(
+    tmp_path, markers_in, games_map_at, monkeypatch,
+):
+    """Only a directory this run created may be deleted.
+
+    Extracting into a folder that was already there and then removing it on
+    cancel would take whatever else the user kept in it.
+    """
+    root = tmp_path / "installs"
+    existing = root / "My Game"
+    existing.mkdir(parents=True)
+    (existing / "keep me.txt").write_text("mine")
+    reached = asyncio.Event()
+
+    async def _hang(_archive, dest):
+        reached.set()
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(
+        "unifideck.stores.gamevault.install.extract_archive", _hang,
+    )
+    archive = _zip_with(tmp_path, "g.zip", {"Game.exe": b"x" * 10})
+    installer = GameVaultInstaller(
+        source=_FakeSource(archive), default_install_root=str(root),
+    )
+
+    task = asyncio.ensure_future(installer.install_game("g1"))
+    await reached.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert (existing / "keep me.txt").read_text() == "mine"
+
+
+async def test_cancel_leaves_a_directory_another_store_has_claimed(
+    tmp_path, markers_in, games_map_at, monkeypatch,
+):
+    """Ownership is re-checked at delete time, not trusted from before.
+
+    An extract can run for a long time, and the folder may have been claimed
+    while it did.
+    """
+    root = tmp_path / "installs"
+    game_dir = root / "My Game"
+    reached = asyncio.Event()
+
+    async def _hang(_archive, dest):
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "partial.bin").write_bytes(b"x")
+        games_map_at.write_text(
+            f"gog:99={game_dir}/Game.exe\t{game_dir}\t-1\n",
+        )
+        reached.set()
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(
+        "unifideck.stores.gamevault.install.extract_archive", _hang,
+    )
+    archive = _zip_with(tmp_path, "g.zip", {"Game.exe": b"x" * 10})
+    installer = GameVaultInstaller(
+        source=_FakeSource(archive), default_install_root=str(root),
+    )
+
+    task = asyncio.ensure_future(installer.install_game("g1"))
+    await reached.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert (game_dir / "partial.bin").exists()
+
+
+async def test_zip_extraction_really_stops_when_cancelled(tmp_path):
+    """The extract thread must stop, not just stop being awaited.
+
+    Cancelling ``await asyncio.to_thread(extractall)`` looks instant — the
+    wrapped future cancels on the asyncio side straight away — while the
+    worker thread carries on writing the entire archive into a directory the
+    caller has already given up on. Measured on the pre-fix code: 1 file on
+    disk when cancel returned, all 200 two seconds later.
+
+    So the assertion has to be made *after* a pause. Counting at the moment
+    of cancellation passes either way and tests nothing.
+    """
+    members = {f"file_{i:03d}.bin": b"x" * 200_000 for i in range(200)}
+    archive = _zip_with(tmp_path, "big.zip", members)
+    dest = tmp_path / "out"
+
+    task = asyncio.ensure_future(extract_archive(archive, dest))
+    while not (dest.exists() and any(dest.iterdir())):
+        await asyncio.sleep(0.001)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    settled = len(list(dest.iterdir()))
+
+    await asyncio.sleep(2.0)
+
+    assert len(list(dest.iterdir())) == settled, (
+        "extraction kept running after cancellation"
+    )
+    assert settled < len(members)

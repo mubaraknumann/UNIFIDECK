@@ -15,9 +15,16 @@
  * overwrites that prop, so a component that routes its own logic through it
  * silently loses the callback. ``pickStorageForInstall`` established the
  * pattern — own props plus the caller's ``showModal`` handle.
+ *
+ * ``ModalRoot`` rather than ``ConfirmModal``: picking an option *is* the
+ * action, so there is nothing for an OK button to confirm. This used to be a
+ * ``ConfirmModal`` with ``bOKDisabled``, which rendered a permanently greyed
+ * "Confirm" next to a Cancel that duplicated the B button. ``ModalRoot``
+ * keeps the close icon and routes B / Esc / background-dismiss to
+ * ``onCancel``, so the flow still settles exactly once.
  */
 import { FC } from "react";
-import { ConfirmModal, DialogButton, Focusable } from "@decky/ui";
+import { DialogButton, Focusable, ModalRoot } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 
 export type GameVaultMode = "remote" | "local";
@@ -44,16 +51,19 @@ const hintStyle: React.CSSProperties = {
   whiteSpace: "normal",
 };
 
+const titleStyle: React.CSSProperties = {
+  fontSize: "22px",
+  fontWeight: 500,
+  marginBottom: "14px",
+};
+
 export const GameVaultConnectModal: FC<Props> = ({ onPick, onCancel }) => {
   const { t } = useTranslation();
 
   return (
-    <ConfirmModal
-      strTitle={t("gamevault.connectTitle")}
-      strCancelButtonText={t("gamevault.cancel")}
-      bOKDisabled
-      onCancel={onCancel}
-    >
+    <ModalRoot onCancel={onCancel}>
+      <div style={titleStyle}>{t("gamevault.connectTitle")}</div>
+
       <Focusable
         style={{ display: "flex", flexDirection: "column", gap: "10px" }}
       >
@@ -67,7 +77,7 @@ export const GameVaultConnectModal: FC<Props> = ({ onPick, onCancel }) => {
           <div style={hintStyle}>{t("gamevault.modeLocalDescription")}</div>
         </DialogButton>
       </Focusable>
-    </ConfirmModal>
+    </ModalRoot>
   );
 };
 
