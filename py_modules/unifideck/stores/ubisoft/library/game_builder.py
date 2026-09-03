@@ -149,12 +149,18 @@ class _GameBuilder:
                 groups[key], connect_ids,
             )
             game = self._build_one_game(
-                cfg, title, installed, id_map_updates, connect_ids,
+                cfg, title, installed, id_map_updates,
             )
             if game is not None:
                 games.append(game)
         if id_map_updates:
             self._id_map.update_bulk(id_map_updates)
+            # Deeplink ids are reconciled after the bulk merge, not inside
+            # it: the merge can only add keys, and a wrong id the cache no
+            # longer supports has to be actively removed (#436).
+            self._id_map.reconcile_connect_ids(
+                connect_ids, list(id_map_updates),
+            )
         games.sort(key=lambda g: g.title.lower())
         return games
 
@@ -206,7 +212,6 @@ class _GameBuilder:
         title: str,
         installed: dict[str, Any],
         id_map_updates: dict[str, dict[str, Any]],
-        connect_ids: dict[str, str],
     ) -> Game | None:
         """Build one game from its canonical-group winner ``cfg``.
 
@@ -229,11 +234,10 @@ class _GameBuilder:
             ),
             "source": "local_binary",
         }
-        # Prefer the leveldb-sourced connect id (the value
-        # ``uplay://launch/{id}/0`` expects) when UPC has cached it.
-        connect_id = connect_ids.get(cfg.space_id) if cfg.space_id else None
-        if connect_id:
-            id_map_entry["ubisoftconnect_game_id"] = connect_id
+        # The leveldb-sourced connect id (the value ``uplay://launch/{id}/0``
+        # expects) is applied by ``reconcile_connect_ids`` once the whole
+        # batch has been merged, so precedence and stale-id removal are
+        # decided in one place.
         id_map_updates[game_id] = id_map_entry
         return Game(
             app_id=0,

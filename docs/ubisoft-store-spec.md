@@ -41,7 +41,8 @@ All paths under `py_modules/unifideck/stores/ubisoft/`.
 | `paths.py` | Per-game prefix resolution, UPC/Connect exe discovery, prefix layout probing |
 | `binaries.py` | umu/Proton/Python discovery, launch-environment construction |
 | `id_map.py` | `ubisoft_id_map.json` read/write: `space_id` ↔ install/launch/connect IDs ↔ recorded prefix path |
-| `id_map_sources.py` | Extract IDs from UPC's localStorage leveldb + Wine `system.reg`; community game-ID DB fetch/parse |
+| `id_map_sources.py` | Extract IDs from the Wine `system.reg`; community game-ID DB fetch/parse |
+| `leveldb_ids.py` | Object-scoped `spaceId` ↔ `ubisoftConnectGameId` scan of UPC's localStorage leveldb, plus the duplicate-ID guard |
 | `parser.py` | Parse UPC's binary `configuration/configurations` and `ownership/{userId}` |
 | `parser_binary.py` | Low-level varint/record primitives for the binary formats |
 | `auth/` | `UbisoftAuth` facade + auth-shortcut context, session monitor, shortcut registry ops |
@@ -124,7 +125,10 @@ deliberate anti-phantom-shortcut safeguard) and builds the library from local da
      `space_id`, `name`, `executable`, …) via `parser.parse_configurations`.
    - `ownership/{userId}` → the set of owned `install_id`s via `parser.parse_ownership`.
 3. **Resolve Connect IDs** — read `space_id → ubisoftConnectGameId` pairs from UPC's
-   localStorage leveldb (`id_map_sources`); these are the most reliable `uplay://` IDs.
+   localStorage leveldb (`leveldb_ids`); these are the most reliable `uplay://` IDs.
+   The scan is object-scoped: only values inside the same JSON record pair, and an ID
+   claimed by two games is discarded (issue #436). A conflict sweep over the persisted
+   map runs first, repairing entries written before that fix.
 4. **Build games** — cross-reference configs × ownership × installed state, dedup DLC
    against parents using the cached community game-ID database.
 5. **Filter / supplement** — optional Steam-linked dedup (`filter_steam_linked`), manifest
@@ -198,7 +202,8 @@ Location: `~/.local/share/unifideck/ubisoft_id_map.json`. Per-`space_id` entry:
   "<space_id-guid>": {
     "install_id": "12345",
     "launch_id": "12345",
-    "ubisoftconnect_game_id": "12345",   // leveldb-sourced; preferred for uplay://
+    "ubisoftconnect_game_id": "12345",   // preferred for uplay://
+    "ubisoftconnect_game_id_source": "leveldb", // who wrote it; gates overwrites
     "prefix_path": "/abs/path/to/prefix" // set when installed to SD/custom storage
   }
 }
@@ -207,6 +212,13 @@ Location: `~/.local/share/unifideck/ubisoft_id_map.json`. Per-`space_id` entry:
 The map is the bridge between the frontend's `space_id`, UPC's numeric IDs, and the
 launcher (which reads it directly). `resolve_install_id` / `resolve_launch_id` prefer
 `ubisoftconnect_game_id` when present.
+
+Every write of that ID goes through `UbisoftIdMap.set_connect_id`, which admits it only
+from an equal-or-higher-confidence source than the one already recorded. The ladder,
+weakest first: `name_db` < `configurations` < `manifest` < `leveldb` < `registry` <
+`manual`. An entry with no source key predates the #436 fix and is treated as untrusted.
+So a force sync cannot overwrite the registry ID of an installed game, and a hand-edited
+`ubisoft_id_map.json` survives every sync.
 
 ---
 
@@ -269,8 +281,10 @@ Defined in `config.py` (`UbisoftConfig`). Notable keys and defaults:
 - **MachineGuid identity** — credentials only decrypt in prefixes cloned from the same
   template; the session layer enforces this before copying.
 - **Connect-ID preference** — `uplay://launch` wants the `ubisoftConnectGameId`; the
-  leveldb extraction in `id_map_sources` is the authoritative source, with `launch_id` /
-  `install_id` as fallbacks.
+  leveldb extraction in `leveldb_ids` is the authoritative source for a not-installed
+  game, with `launch_id` / `install_id` as fallbacks. For an installed game the prefix's
+  own `Launcher\Installs\<id>` registry key outranks it: the leveldb cache is shared
+  across every game, and #436 showed it can hand one game its neighbour's ID.
 - **No fake progress** — UPC drives the real download; the manual phase is honestly
   indeterminate, and Cancel maps to a SIGTERM of UPC.
 - **Recorded prefix path** — installs to SD/custom storage record an absolute

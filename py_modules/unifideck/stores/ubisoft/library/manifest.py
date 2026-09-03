@@ -150,15 +150,16 @@ class _VisibleManifestProcessor:
             "name": entry.get("title") or "",
             "source": "visible_manifest",
         }
-        for field_name in (
-            "install_id",
-            "launch_id",
-            "ubisoftconnect_game_id",
-        ):
+        for field_name in ("install_id", "launch_id"):
             value = str(entry.get(field_name) or "").strip()
             if value:
                 fields[field_name] = value
-        return self._id_map.merge_entry(cache_key, fields)
+        # The deeplink id goes through the precedence gate so a manifest
+        # product_id can't displace a registry-confirmed id (#436).
+        connect_id = str(entry.get("ubisoftconnect_game_id") or "").strip()
+        return self._id_map.set_connect_id(
+            cache_key, connect_id, "manifest", fields,
+        )
 
     def _build_index(
         self,

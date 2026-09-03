@@ -37,6 +37,19 @@ class _IdMap:
         self.merged.setdefault(space_id, {}).update(fields)
         return True
 
+    def set_connect_id(
+        self,
+        space_id: str,
+        connect_id: str | None,
+        source: str,
+        extra: dict[str, Any] | None = None,
+    ) -> bool:
+        fields = dict(extra or {})
+        if connect_id:
+            fields["ubisoftconnect_game_id"] = str(connect_id)
+            fields["ubisoftconnect_game_id_source"] = source
+        return self.merge_entry(space_id, fields)
+
 def _ftp_entry(title: str, space_id: str, product_id: str = "999") -> dict[str, Any]:
     return {
         "title": title,
