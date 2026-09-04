@@ -181,6 +181,38 @@ def _resolve_uninstaller(install_dir: str) -> str | None:
     return None
 
 
+async def _run_fgmod_subprocess(
+    argv: list[str],
+    env: dict[str, str],
+    cwd: str | None,
+) -> tuple[int | None, str]:
+    """Run an fgmod (un)patch command; return ``(returncode, output)``.
+
+    Kills the process on timeout. Shared by
+    ``apply_optiscaler_patch``/``remove_optiscaler_patch`` so neither owns a
+    second copy of the create/wait/timeout dance. ``FileNotFoundError``
+    (missing script) propagates to the caller, which maps it to its own
+    ``fgmod_not_installed`` / ``not_patched`` RpcError.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        cwd=cwd,
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        stdout, _ = await asyncio.wait_for(
+            proc.communicate(), timeout=_PATCH_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise
+    output = (stdout or b"").decode(errors="replace").strip()
+    return proc.returncode, output
+
+
 class OptiScalerRPCMixin:
     """Frame Generation (OptiScaler) patch/unpatch RPC surface."""
 
@@ -301,30 +333,20 @@ class OptiScalerRPCMixin:
         env.update(general_env)
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                str(_FGMOD_SCRIPT), install_dir,
-                env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
+            returncode, output = await _run_fgmod_subprocess(
+                [str(_FGMOD_SCRIPT), install_dir], env, cwd=None,
             )
-            try:
-                stdout, _ = await asyncio.wait_for(
-                    proc.communicate(), timeout=_PATCH_TIMEOUT_SECONDS,
-                )
-            except TimeoutError:
-                proc.kill()
-                await proc.wait()
-                raise RpcError(
-                    "patch_timed_out", store=store, game_id=game_id,
-                ) from None
+        except TimeoutError:
+            raise RpcError(
+                "patch_timed_out", store=store, game_id=game_id,
+            ) from None
         except FileNotFoundError as e:
             raise RpcError("fgmod_not_installed", store=store, game_id=game_id) from e
 
-        output = (stdout or b"").decode(errors="replace").strip()
-        if proc.returncode != 0:
+        if returncode != 0:
             logger.warning(
                 "[OptiScaler] patch failed for %s:%s (rc=%s): %s",
-                store, game_id, proc.returncode, output,
+                store, game_id, returncode, output,
             )
             raise RpcError(
                 "patch_failed", store=store, game_id=game_id, output=output,
@@ -363,31 +385,20 @@ class OptiScalerRPCMixin:
             env["STEAM_COMPAT_INSTALL_PATH"] = install_dir
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *argv,
-                cwd=install_dir,
-                env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
+            returncode, output = await _run_fgmod_subprocess(
+                argv, env, cwd=install_dir,
             )
-            try:
-                stdout, _ = await asyncio.wait_for(
-                    proc.communicate(), timeout=_PATCH_TIMEOUT_SECONDS,
-                )
-            except TimeoutError:
-                proc.kill()
-                await proc.wait()
-                raise RpcError(
-                    "unpatch_timed_out", store=store, game_id=game_id,
-                ) from None
+        except TimeoutError:
+            raise RpcError(
+                "unpatch_timed_out", store=store, game_id=game_id,
+            ) from None
         except FileNotFoundError as e:
             raise RpcError("not_patched", store=store, game_id=game_id) from e
 
-        output = (stdout or b"").decode(errors="replace").strip()
-        if proc.returncode != 0:
+        if returncode != 0:
             logger.warning(
                 "[OptiScaler] unpatch failed for %s:%s (rc=%s): %s",
-                store, game_id, proc.returncode, output,
+                store, game_id, returncode, output,
             )
             raise RpcError(
                 "unpatch_failed", store=store, game_id=game_id, output=output,

@@ -334,52 +334,9 @@ def _game_context(
 
 
 def _resolve_game_env_overrides(store: str, game_id: str) -> dict[str, str]:
-    """Read this game's persisted per-game environment-variable overrides.
-
-    Stored by ``GameEnvRPCMixin`` under the config key
-    ``games.<store>:<game_id>.env_overrides`` as a flat JSON
-    ``{NAME: value}`` object — the general-purpose sibling of
-    ``optiscaler_env`` (OptiScaler-specific config vars applied only to the
-    fgmod patch subprocess). These apply to the GAME'S OWN launch, exactly
-    like Steam's ``VAR=value %command%`` convention (see
-    ``docs/launch-options.md``), but persist across a Force Sync (which
-    resets Launch Options back to plain ``store:game_id``) and don't require
-    editing Steam's launch-options field at all.
-
-    Merged into ``LaunchContext.env_overrides``, which
-    ``prepare_native_env``/``prepare_proton_env`` fold into the child
-    process's environment — the SAME field Steam's own
-    ``VAR=value %command%`` tokens populate via
-    ``types.options.parse_launch_options`` (not yet wired into the live
-    dispatch path — see that module's docstring), so once that parser is
-    reconnected these two sources merge naturally with launch-options taking
-    precedence (applied later in the pipeline).
-
-    Best-effort: any malformed entry is skipped rather than failing the
-    whole launch, and a missing/unreadable config yields an empty dict (no
-    overrides).
-    """
-    try:
-        from unifideck.config.config_manager import ConfigManager
-        from unifideck.launcher.bootstrap import _user_config_path
-        cfg = ConfigManager(
-            str(_resolve_plugin_dir() / "defaults" / "config.json"),
-            user_path=_user_config_path(),
-        )
-        raw = cfg.get(f"games.{store}:{game_id}.env_overrides", {})
-    except Exception:
-        logger.exception(
-            "[launcher.dispatcher] env_overrides read failed for %s:%s",
-            store, game_id,
-        )
-        return {}
-    if not isinstance(raw, dict):
-        return {}
-    return {
-        str(k): str(v)
-        for k, v in raw.items()
-        if isinstance(k, str) and k and isinstance(v, (str, int, float))
-    }
+    """Per-game persisted env overrides — see ``game_env_overrides``."""
+    from .game_env_overrides import resolve_game_env_overrides
+    return resolve_game_env_overrides(store, game_id, _resolve_plugin_dir())
 
 def _detect_special_action() -> tuple[str | None, str | None, bool]:
     """Detect a non-launch action from ``UNIFIDECK_<STORE>_ACTION``.
