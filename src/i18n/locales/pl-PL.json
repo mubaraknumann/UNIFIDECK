@@ -340,6 +340,8 @@
       "installingUbisoft": "Instalowanie przez Ubisoft Connect",
       "installingUbisoftMessage": "Otwieranie Ubisoft Connect. Rozpocznij instalację w oknie launchera.",
       "protonReadyBody": "{{version}} jest gotowy do użycia",
+      "externalProtonOutdatedTitle": "Dostępna aktualizacja GE-Proton",
+      "externalProtonOutdatedBody": "Dostępna jest najnowsza wersja {{version}}. Zaktualizuj ją za pomocą zewnętrznego menedżera.",
       "protonReadyTitle": "Proton gotowy",
       "protonSwitchedTo": "Teraz używasz {{version}}",
       "ubisoftPrefixNotReady": "Ubisoft Connect nie jest gotowy",

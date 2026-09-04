@@ -340,6 +340,8 @@
       "installingUbisoft": "Ubisoft Connect でインストール中",
       "installingUbisoftMessage": "Ubisoft Connect を開いています。ランチャーのウィンドウからインストールを開始してください。",
       "protonReadyBody": "{{version}} を使用できます",
+      "externalProtonOutdatedTitle": "GE-Proton のアップデートが利用可能",
+      "externalProtonOutdatedBody": "最新バージョン {{version}} が利用可能です。外部マネージャーからアップデートしてください。",
       "protonReadyTitle": "Proton の準備完了",
       "protonSwitchedTo": "現在 {{version}} を使用中",
       "ubisoftPrefixNotReady": "Ubisoft Connect の準備ができていません",
