@@ -198,7 +198,7 @@ class OptiScalerRPCMixin:
         from unifideck.services.cloud_save.save_location_resolver import (
             _install_path_from_games_map,
         )
-        return _install_path_from_games_map(store, game_id, self.config)
+        return str(_install_path_from_games_map(store, game_id, self.config))
 
     async def _patch_target_exe(self, store: str, game_id: str) -> str | None:
         """The resolved ``.exe`` absolute path, if games.map has one.
@@ -218,8 +218,8 @@ class OptiScalerRPCMixin:
             entry = await shortcut.get_entry_for_game_key(store, game_id)
         except Exception:  # pragma: no cover - best-effort
             return None
-        if entry and entry.exe and os.path.isfile(entry.exe):
-            return entry.exe
+        if entry and entry.exe and await asyncio.to_thread(os.path.isfile, entry.exe):
+            return str(entry.exe)
         return None
 
     async def _patch_target_dir(self, store: str, game_id: str) -> str:
@@ -248,8 +248,8 @@ class OptiScalerRPCMixin:
                 entry = await shortcut.get_entry_for_game_key(store, game_id)
             except Exception:  # pragma: no cover - best-effort
                 entry = None
-            if entry and entry.exe and os.path.isfile(entry.exe):
-                return os.path.dirname(entry.exe)
+            if entry and entry.exe and await asyncio.to_thread(os.path.isfile, entry.exe):
+                return os.path.dirname(str(entry.exe))
         return self._install_dir(store, game_id)
 
     async def get_optiscaler_status(self, store: str, game_id: str) -> Any:
@@ -292,7 +292,7 @@ class OptiScalerRPCMixin:
         if not _is_fgmod_installed():
             raise RpcError("fgmod_not_installed", store=store, game_id=game_id)
         install_dir = await self._patch_target_dir(store, game_id)
-        if not install_dir or not os.path.isdir(install_dir):
+        if not install_dir or not await asyncio.to_thread(os.path.isdir, install_dir):
             raise RpcError("install_dir_unresolved", store=store, game_id=game_id)
 
         general_env = _load_general_env_overrides(self.config, store, game_id)
@@ -311,7 +311,7 @@ class OptiScalerRPCMixin:
                 stdout, _ = await asyncio.wait_for(
                     proc.communicate(), timeout=_PATCH_TIMEOUT_SECONDS,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 proc.kill()
                 await proc.wait()
                 raise RpcError(
@@ -340,7 +340,7 @@ class OptiScalerRPCMixin:
         if not store or not game_id:
             raise RpcError("invalid_args", store=store, game_id=game_id)
         install_dir = await self._patch_target_dir(store, game_id)
-        if not install_dir or not os.path.isdir(install_dir):
+        if not install_dir or not await asyncio.to_thread(os.path.isdir, install_dir):
             raise RpcError("install_dir_unresolved", store=store, game_id=game_id)
         if not _is_patched(install_dir):
             raise RpcError("not_patched", store=store, game_id=game_id)
@@ -374,7 +374,7 @@ class OptiScalerRPCMixin:
                 stdout, _ = await asyncio.wait_for(
                     proc.communicate(), timeout=_PATCH_TIMEOUT_SECONDS,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 proc.kill()
                 await proc.wait()
                 raise RpcError(

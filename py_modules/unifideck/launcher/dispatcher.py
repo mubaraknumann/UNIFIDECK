@@ -301,19 +301,6 @@ def _xcloud_context(
     )
 
 
-def _user_config_path_for_dispatcher() -> str:
-    """Same resolution ``ConfigManager`` uses elsewhere in the launcher.
-
-    Mirrors ``launcher.bootstrap._user_config_path`` — kept local to avoid
-    importing the bootstrap module just for this one helper.
-    """
-    override = os.environ.get("UNIFIDECK_USER_CONFIG")
-    if override:
-        return override
-    xdg = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return str(Path(xdg) / "unifideck" / "config.json")
-
-
 def _game_context(
     store: str, game_id: str, exe: str, work_dir: str, raw_options: str,
     app_id: int = 0,
@@ -374,9 +361,10 @@ def _resolve_game_env_overrides(store: str, game_id: str) -> dict[str, str]:
     """
     try:
         from unifideck.config.config_manager import ConfigManager
+        from unifideck.launcher.bootstrap import _user_config_path
         cfg = ConfigManager(
             str(_resolve_plugin_dir() / "defaults" / "config.json"),
-            user_path=_user_config_path_for_dispatcher(),
+            user_path=_user_config_path(),
         )
         raw = cfg.get(f"games.{store}:{game_id}.env_overrides", {})
     except Exception:
