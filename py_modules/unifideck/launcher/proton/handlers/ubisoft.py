@@ -9,6 +9,11 @@ from pathlib import Path
 from unifideck.launcher.frontend_bridge import launcher_toast
 from unifideck.launcher.game_title import resolve_title
 from unifideck.launcher.proton.handlers import wrapper_clients
+from unifideck.launcher.proton.handlers.ubisoft_handoff import (
+    capture_after_exit,
+    seed_before_launch,
+    vault_fingerprint,
+)
 from unifideck.launcher.proton.handlers.ubisoft_recovery import (
     ID_MAP_FILE,
     clone_template_into,
@@ -100,6 +105,39 @@ def _find_upc_exe(plan: ProtonLaunchPlan) -> Path | None:
         if found is not None:
             return found
     return find_upc_in(plan.prefix_path)
+async def _run_upc_with_session_handoff(
+    plan: ProtonLaunchPlan,
+    argv: list[str],
+) -> int:
+    """Run UPC with the session baton passed in before and out after.
+
+    Ubisoft retires the previous refresh token whenever a UPC instance signs
+    in, so with a prefix per game only the prefix that ran last holds a live
+    token. Seeding first means the game runs on the live one instead of
+    whatever it kept from its own last run; capturing after means the *next*
+    game gets a live one. Without both, signing into one title signed the user
+    out of the others (GH #435).
+
+    The capture is in a ``finally`` because a crashed or non-zero run still
+    rotated the token — UPC signs in before the game starts — and leaving it
+    stranded in this prefix is the exact failure being prevented. It is gated
+    on the vault fingerprint taken here, *after* the seed and before UPC runs,
+    so a run that never wrote the vault captures nothing: without that gate a
+    failed launch fans the prefix's existing bytes out to every other prefix.
+
+    All three moves are best-effort and run off the event loop: they touch the
+    filesystem and wait for UPC to exit, and none may fail a launch.
+    """
+    await asyncio.to_thread(seed_before_launch, plan.prefix_path)
+    before = await asyncio.to_thread(vault_fingerprint, plan.prefix_path)
+    try:
+        return await run_umu_with_retry(
+            argv, env=plan.env, on_start=plan.on_process_start,
+        )
+    finally:
+        await asyncio.to_thread(capture_after_exit, plan.prefix_path, before)
+
+
 async def ubisoft_launch(plan: ProtonLaunchPlan) -> int:
     """Ubisoft launch."""
     logger.info(
@@ -163,10 +201,7 @@ async def ubisoft_launch(plan: ProtonLaunchPlan) -> int:
             game_title=resolve_title(plan.context.game_key),
             severity="warning",
         )
-    env = plan.env
-    rc = await run_umu_with_retry(
-        argv, env=env, on_start=plan.on_process_start,
-    )
+    rc = await _run_upc_with_session_handoff(plan, argv)
     plan.state.game_exit_code = rc
     if rc == 0:
         return 0

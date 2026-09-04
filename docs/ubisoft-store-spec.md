@@ -188,8 +188,25 @@ Connect" state (no fake %/speed) and a **Cancel** that SIGTERMs the UPC process
 3. **Apply language setup** — patch
    `[Software\WOW6432Node\Ubisoft\Launcher\Installs\{install_id}]` `"Language"` in
    `system.reg`.
-4. **Launch** — if `upc.exe` is found and a launch id resolved, run
+4. **Seed the session** — `ubisoft_handoff.seed_before_launch()` copies the newest known
+   auth state into this prefix before UPC reads it.
+5. **Launch** — if `upc.exe` is found and a launch id resolved, run
    `upc.exe uplay://launch/{launch_id}/0` under Proton/umu in the per-game prefix.
+6. **Capture the session back** — in a `finally`, `ubisoft_handoff.capture_after_exit()`
+   waits (bounded) for UPC to exit, captures the token it rotated, and fans it out to the
+   other prefixes.
+
+### Why the launch path moves credentials at all
+
+Ubisoft retires the previous refresh token whenever a UPC instance signs in, so with a
+prefix per game the session is a **baton, not a snapshot**: only the prefix that ran last
+holds a live token. Steps 4 and 6 are what pass it. Step 6 duplicates the backend's
+`GAME_STOPPED` subscriber (`stores/ubisoft/store.py`) on purpose — that event is bridged
+from the frontend, and when it does not arrive the token is stranded in the game prefix.
+Both are mtime-gated and idempotent, so whichever runs second is a no-op. All of it is
+best-effort: a launch never fails because a credential could not be moved.
+
+Freshness is decided by **mtime, never file size** — see §12.
 
 ---
 
@@ -278,8 +295,27 @@ Defined in `config.py` (`UbisoftConfig`). Notable keys and defaults:
 
 - **Auth gate on library** — no credentials ⇒ empty library, by design (prevents phantom
   shortcuts for a signed-out store; see the reconcile sweep in the sync pipeline).
-- **MachineGuid identity** — credentials only decrypt in prefixes cloned from the same
-  template; the session layer enforces this before copying.
+- **MachineGuid identity** — the session layer refuses to copy credentials between
+  prefixes whose `MachineGuid` differs. This is a conservative identity check, **not** a
+  decryption requirement, and the difference matters: Wine's `CryptProtectData`
+  (`dlls/crypt32/protectdata.c`) derives its key from the Windows user name, a hardcoded
+  constant and a salt stored inside the blob — no master keys on disk, and the machine
+  GUID is not an input. A vault decrypts fine in any prefix whose Windows user is the
+  same `steamuser`. Earlier revisions of this document claimed otherwise, and that claim
+  sent a bug reporter chasing GUIDs for a session problem that had nothing to do with
+  them (GH #435).
+- **Session freshness is mtime, never size** — Ubisoft rotates the refresh token on every
+  sign-in and a rotated `ConnectSecureStorage.dat` is routinely a few hundred bytes
+  *smaller* than the one before it. The capture and propagate guards used to read
+  "smaller" as "signed out", which made the largest vault ever written win permanently:
+  the auth prefix froze on a retired token, and signing into one game signed the user out
+  of the others (GH #435). Signed-in is now decided by shape — a vault with a `user.dat`
+  beside it — and ordering by mtime. The pristine `.template` has no `user.dat`, which is
+  what makes the test work.
+- **The handoff is serialised** — the backend fan-out and the launcher's seed/capture
+  both rewrite the same files from different processes. `session/lock.py` holds an
+  `fcntl.flock` over `<data_dir>/ubisoft-session.lock` around every write. Acquisition is
+  bounded and callers proceed unlocked on timeout; a launch must not stall on it.
 - **Connect-ID preference** — `uplay://launch` wants the `ubisoftConnectGameId`; the
   leveldb extraction in `leveldb_ids` is the authoritative source for a not-installed
   game, with `launch_id` / `install_id` as fallbacks. For an installed game the prefix's

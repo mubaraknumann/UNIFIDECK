@@ -1,16 +1,22 @@
 """
 Session reader — extract auth state from a Wine prefix.
 
-``_SessionReader`` reads UPC's authenticated state out of a Wine prefix:
+``_CredentialReader`` reads UPC's authenticated state out of a Wine prefix:
 
-* the credential vault files (DPAPI-encrypted);
-* the auth cache (cookies, tokens, machine GUID);
-* the validation timestamp;
-* the signed-in user's display name (parsed from ``ownership``).
+* whether the vault is present and plausible (:meth:`has_valid_credentials`);
+* whether it is actually SIGNED IN (:meth:`is_signed_in`);
+* how fresh it is (:meth:`get_credential_mtime`);
+* which prefix is the best source to copy from
+  (:meth:`find_best_credential_source`).
 
 The reader is read-only — propagation happens through ``payload.py``.
 The split between reader and payload exists so the same parsed session
 can be propagated to multiple target prefixes without re-reading.
+
+**Freshness is mtime, never size.** Ubisoft rotates the refresh token on
+every sign-in, and a rotated vault is routinely a few hundred bytes
+smaller than the one before it. Ranking by size froze the auth prefix on
+the first token it ever saw (GH #435).
 """
 
 from __future__ import annotations
@@ -51,6 +57,35 @@ class _CredentialReader:
                 return True
         return False
 
+    def is_signed_in(self, prefix_path: str) -> bool:
+        """True when this prefix holds a SIGNED-IN UPC session.
+
+        The discriminator is *shape*, not size. A prefix is signed in when it
+        has a plausible ``ConnectSecureStorage.dat`` **and** a ``user.dat``
+        beside it: UPC writes ``user.dat`` when an account is attached, the
+        pristine ``.template`` carries the never-logged-in vault and no
+        ``user.dat`` at all, and sign-out removes both (see
+        ``_PayloadSync.purge_credentials_from_prefix``).
+
+        This replaces the old "smaller vault than the auth prefix means logged
+        out" rule, which was a monotonic ratchet on file size: Ubisoft rotates
+        the refresh token on every sign-in, and the first rotation that
+        produced a slightly smaller vault froze the auth prefix on a
+        server-dead token forever — every other prefix then kept whichever
+        token it had minted itself, so signing into one game signed the user
+        out of the others (GH #435, reproduced).
+        """
+        for _root, user_home in self._paths.iter_user_homes(
+            prefix_path,
+            pfx_first=True,
+        ):
+            css = self._css_path(user_home)
+            if not self._is_valid_css(css, _CSS_MIN_VALID_SIZE):
+                continue
+            if self._account_file_path(user_home).is_file():
+                return True
+        return False
+
     def get_credential_mtime(self, prefix_path: str) -> float:
         """Get credential mtime."""
         best: float = 0.0
@@ -67,30 +102,6 @@ class _CredentialReader:
                 continue
             if mtime > best:
                 best = mtime
-        return best
-
-    def get_credential_size(self, prefix_path: str) -> int:
-        """Largest valid ``ConnectSecureStorage.dat`` size in the prefix, or 0.
-
-        UPC's credential file shrinks when a session logs out (the token is
-        stripped). Comparing a source prefix's size against the auth prefix's
-        lets the capture path recognise a logged-out / stale source and refuse
-        to propagate it — protecting both the auth prefix and the template.
-        """
-        best = 0
-        for _root, user_home in self._paths.iter_user_homes(
-            prefix_path,
-            pfx_first=True,
-        ):
-            css = self._css_path(user_home)
-            if not self._is_valid_css(css, _CSS_MIN_VALID_SIZE):
-                continue
-            try:
-                size = Path(css).stat().st_size
-            except OSError:
-                continue
-            if size > best:
-                best = size
         return best
 
     def find_best_credential_source(self) -> str | None:
@@ -131,6 +142,15 @@ class _CredentialReader:
         for entry in entries:
             if not entry.is_dir():
                 continue
+            # Dot-entries are infrastructure, not game prefixes: ``.template``
+            # is pristine by invariant, and ``logout()`` leaves the signed-out
+            # auth prefix behind as ``.upc-auth.trash-<ms>`` until its
+            # background rmtree lands. Picking either up as a fallback source
+            # re-seeds a session the user just discarded. ``config
+            # .iter_game_prefix_paths`` already applies this filter; this scan
+            # walks ``prefixes_dir`` directly and did not.
+            if entry.name.startswith("."):
+                continue
             prefix = str(entry)
             mtime = self._best_css_mtime_for_prefix(prefix)
             if mtime is not None and mtime > best_mtime:
@@ -161,6 +181,10 @@ class _CredentialReader:
         return str(
             Path(user_home) / self._config.upc_local_subdir / "ConnectSecureStorage.dat"
         )
+
+    def _account_file_path(self, user_home: str) -> Path:
+        """``user.dat`` beside the vault — present only when signed in."""
+        return Path(user_home) / self._config.upc_local_subdir / "user.dat"
 
     @staticmethod
     def _is_valid_css(css_path: str, min_size: int) -> bool:
