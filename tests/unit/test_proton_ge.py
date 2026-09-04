@@ -514,3 +514,313 @@ async def test_emit_stage_omits_unset_optionals():
     assert "i18n_title_key" not in kwargs
     assert "i18n_params" not in kwargs
     assert "severity" not in kwargs
+
+
+# ── Externally managed GE-Proton detection + notification ──────────
+
+def test_parse_ge_version():
+    from unifideck.launcher.proton.infrastructure import external_ge
+
+    assert external_ge.parse_ge_version("GE-Proton11-5") == (11, 5)
+    assert external_ge.parse_ge_version("GE-Proton10-34") == (10, 34)
+    assert external_ge.parse_ge_version("GE-Proton8_25") == (8, 25)
+    assert external_ge.parse_ge_version("Proton-10") is None
+    assert external_ge.parse_ge_version("") is None
+
+
+def test_is_ge_outdated():
+    from unifideck.launcher.proton.infrastructure import external_ge
+
+    assert external_ge.is_ge_outdated("GE-Proton10-34", "GE-Proton11-5") is True
+    assert external_ge.is_ge_outdated("GE-Proton11-4", "GE-Proton11-5") is True
+    assert external_ge.is_ge_outdated("GE-Proton11-5", "GE-Proton11-5") is False
+    assert external_ge.is_ge_outdated("GE-Proton11-6", "GE-Proton11-5") is False
+    assert external_ge.is_ge_outdated("unknown", "GE-Proton11-5") is False
+
+
+def test_is_ge_sufficiently_fresh():
+    from unifideck.launcher.proton.infrastructure import external_ge
+
+    assert external_ge.is_ge_sufficiently_fresh("GE-Proton11-5", "GE-Proton11-5") is True
+    assert external_ge.is_ge_sufficiently_fresh("GE-Proton11-1", "GE-Proton11-5") is True
+    assert external_ge.is_ge_sufficiently_fresh("GE-Proton11-0", "GE-Proton11-5") is True
+    assert external_ge.is_ge_sufficiently_fresh("GE-Proton11-1", "GE-Proton11-7") is False
+    assert external_ge.is_ge_sufficiently_fresh("GE-Proton10-34", "GE-Proton11-1") is False
+    assert external_ge.is_ge_sufficiently_fresh("GE-Proton11-6", "GE-Proton11-5") is True
+    assert external_ge.is_ge_sufficiently_fresh("unknown", "GE-Proton11-5") is False
+    assert external_ge.is_ge_sufficiently_fresh("GE-Proton11-5", "invalid") is False
+
+
+def test_find_external_ge_proton_detects_via_manifest_display_name(tmp_path):
+    """Manifest declares 'Proton-GE Latest' as display_name while dir is named differently."""
+    from unifideck.launcher.proton.infrastructure import external_ge
+
+    root = tmp_path / "compatibilitytools.d"
+    tool_dir = root / "GE-Proton-custom"
+    tool_dir.mkdir(parents=True)
+    _make_proton(tool_dir, executable=True)
+    (tool_dir / "files" / "bin").mkdir(parents=True)
+    (tool_dir / "files" / "bin" / "wine").write_text("")
+    (tool_dir / "version").write_text("1724000000 GE-Proton11-3\n")
+    (tool_dir / "toolmanifest.vdf").write_text('"manifest" { "commandline" "/proton" }')
+    (tool_dir / "compatibilitytool.vdf").write_text(
+        '"compatibilitytools" {\n'
+        '  "compat_tools" {\n'
+        '    "custom_ge" {\n'
+        '      "display_name" "Proton-GE Latest"\n'
+        '      "install_path" "."\n'
+        '    }\n'
+        '  }\n'
+        '}'
+    )
+
+    result = external_ge.find_external_ge_proton(roots=[root])
+    assert result is not None
+    proton_script, alias_name, real_ver = result
+    assert proton_script == tool_dir / "proton"
+    assert alias_name == "Proton-GE Latest"
+    assert real_ver == "GE-Proton11-3"
+
+
+def test_find_external_ge_proton_detects_alias_dir(tmp_path):
+    """Directory itself is named 'Proton-GE Latest'."""
+    from unifideck.launcher.proton.infrastructure import external_ge
+
+    root = tmp_path / "compatibilitytools.d"
+    alias_dir = root / "Proton-GE Latest"
+    alias_dir.mkdir(parents=True)
+    _make_proton(alias_dir, executable=True)
+    (alias_dir / "files" / "bin").mkdir(parents=True)
+    (alias_dir / "files" / "bin" / "wine").write_text("")
+    (alias_dir / "version").write_text("GE-Proton11-4\n")
+    (alias_dir / "toolmanifest.vdf").write_text('"manifest" { "commandline" "/proton" }')
+
+    result = external_ge.find_external_ge_proton(roots=[root])
+    assert result is not None
+    proton_script, alias_name, real_ver = result
+    assert proton_script == alias_dir / "proton"
+    assert alias_name == "Proton-GE Latest"
+    assert real_ver == "GE-Proton11-4"
+
+
+def test_selector_prefers_external_ge_when_up_to_date(tmp_path, monkeypatch):
+    from unifideck.launcher.proton.infrastructure import external_ge, selector
+
+    fake_ext_proton = tmp_path / "Proton-GE Latest" / "proton"
+    monkeypatch.setattr(
+        external_ge, "find_external_ge_proton",
+        lambda roots=None: (fake_ext_proton, "Proton-GE Latest", "GE-Proton11-5"),
+    )
+    monkeypatch.setattr(
+        ge_installer, "read_cached_latest_tag",
+        lambda: "GE-Proton11-3",
+    )
+    monkeypatch.setattr(
+        ge_installer, "installed_ge_proton_path",
+        lambda tag: tmp_path / "unifideck-ge" / "proton",
+    )
+
+    tried = []
+    path, tool = selector._default_latest_ge(tried)
+    assert path == fake_ext_proton
+    assert tool == "Proton-GE Latest"
+    assert "external-ge:Proton-GE Latest" in tried
+
+
+def test_selector_prefers_cached_unifideck_ge_when_external_is_older(tmp_path, monkeypatch):
+    from unifideck.launcher.proton.infrastructure import external_ge, selector
+
+    fake_ext_proton = tmp_path / "Proton-GE Latest" / "proton"
+    fake_cached_proton = tmp_path / "unifideck-ge" / "proton"
+    monkeypatch.setattr(
+        external_ge, "find_external_ge_proton",
+        lambda roots=None: (fake_ext_proton, "Proton-GE Latest", "GE-Proton10-34"),
+    )
+    monkeypatch.setattr(
+        ge_installer, "read_cached_latest_tag",
+        lambda: "GE-Proton11-5",
+    )
+    monkeypatch.setattr(
+        ge_installer, "installed_ge_proton_path",
+        lambda tag: fake_cached_proton,
+    )
+
+    tried = []
+    path, tool = selector._default_latest_ge(tried)
+    assert path == fake_cached_proton
+    assert tool == "GE-Proton11-5"
+    assert "latest-ge-cached:GE-Proton11-5" in tried
+
+
+async def test_ge_fallback_recovers_from_external_ge_failure(tmp_path, monkeypatch):
+    """External GE failure must still fall back to bundled GE-Proton (identity check)."""
+    import sys
+    sys.modules.setdefault("aiohttp", MagicMock())
+
+    from unifideck.launcher.proton.compat import ge_fallback
+
+    bundled_proton = tmp_path / "bundled-ge" / "proton"
+    monkeypatch.setattr(
+        ge_fallback, "_resolve_ge_proton",
+        lambda: (bundled_proton, "GE-Proton11-5"),
+    )
+    run_createprefix = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "unifideck.launcher.proton.compat.prefix_init._run_createprefix_with_retry",
+        run_createprefix,
+    )
+    monkeypatch.setattr(
+        "unifideck.launcher.proton.compat.save_migration.restore_or_migrate_saves",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "unifideck.compatibility.proton_helpers.save_proton_setting",
+        MagicMock(),
+    )
+    monkeypatch.setattr(
+        "unifideck.launcher.frontend_bridge.launcher_toast",
+        MagicMock(),
+    )
+
+    plan = MagicMock()
+    plan.state.proton_tool_id = "Proton-GE Latest"
+    plan.state.proton_path = tmp_path / "external-ge" / "proton"
+    plan.context.store = "epic"
+    plan.context.game_id = "1"
+    plan.context.game_key = "epic:1"
+    plan.python_bin = Path("/usr/bin/python3")
+    plan.on_process_start = None
+
+    prefix_root = tmp_path / "prefix"
+    prefix_root.mkdir(parents=True)
+
+    await ge_fallback.fallback_to_ge_proton(plan, prefix_root)
+    run_createprefix.assert_awaited_once()
+
+
+async def test_proton_service_external_ge_outdated_emits_toast(monkeypatch):
+    from unifideck.launcher.proton.infrastructure import external_ge
+    from unifideck.services.proton_service import ProtonService
+
+    fake_proton = Path("/fake/Proton-GE Latest/proton")
+    monkeypatch.setattr(
+        external_ge, "find_external_ge_proton",
+        lambda roots=None: (fake_proton, "Proton-GE Latest", "GE-Proton10-34"),
+    )
+    monkeypatch.setattr(
+        ge_installer, "get_latest_ge_tag",
+        lambda timeout=8.0: "GE-Proton11-5",
+    )
+    monkeypatch.setattr(
+        ge_installer, "is_valid_ge_install",
+        lambda tag: True,
+    )
+
+    svc = ProtonService(MagicMock())
+    svc._emit_proton_toast = AsyncMock()
+
+    await svc._ensure_latest_ge()
+
+    # Outdated toast must be emitted with the new version
+    svc._emit_proton_toast.assert_awaited_once_with(
+        "toasts.launcher.externalProtonOutdatedTitle",
+        "toasts.launcher.externalProtonOutdatedBody",
+        "GE-Proton11-5",
+    )
+
+
+async def test_proton_service_external_ge_up_to_date_silent(monkeypatch):
+    from unifideck.launcher.proton.infrastructure import external_ge
+    from unifideck.services.proton_service import ProtonService
+
+    fake_proton = Path("/fake/Proton-GE Latest/proton")
+    monkeypatch.setattr(
+        external_ge, "find_external_ge_proton",
+        lambda roots=None: (fake_proton, "Proton-GE Latest", "GE-Proton11-5"),
+    )
+    monkeypatch.setattr(
+        ge_installer, "get_latest_ge_tag",
+        lambda timeout=8.0: "GE-Proton11-5",
+    )
+    monkeypatch.setattr(
+        ge_installer, "is_valid_ge_install",
+        lambda tag: True,
+    )
+
+    svc = ProtonService(MagicMock())
+    svc._emit_proton_toast = AsyncMock()
+
+    await svc._ensure_latest_ge()
+
+    # Up to date: no toast emitted
+    svc._emit_proton_toast.assert_not_awaited()
+
+
+async def test_proton_service_external_ge_fresh_enough_skips_download(monkeypatch):
+    """When external GE has a small minor lag (<=5), toast is emitted but download is skipped."""
+    from unifideck.launcher.proton.infrastructure import external_ge
+    from unifideck.services.proton_service import ProtonService
+
+    fake_proton = Path("/fake/Proton-GE Latest/proton")
+    monkeypatch.setattr(
+        external_ge, "find_external_ge_proton",
+        lambda roots=None: (fake_proton, "Proton-GE Latest", "GE-Proton11-3"),
+    )
+    monkeypatch.setattr(
+        ge_installer, "get_latest_ge_tag",
+        lambda timeout=8.0: "GE-Proton11-5",
+    )
+    is_valid_mock = MagicMock()
+    monkeypatch.setattr(ge_installer, "is_valid_ge_install", is_valid_mock)
+    ensure_mock = MagicMock()
+    monkeypatch.setattr(ge_installer, "ensure_latest_ge", ensure_mock)
+
+    svc = ProtonService(MagicMock())
+    svc._emit_proton_toast = AsyncMock()
+
+    await svc._ensure_latest_ge()
+
+    # Outdated toast should still be emitted to notify user
+    svc._emit_proton_toast.assert_awaited_once_with(
+        "toasts.launcher.externalProtonOutdatedTitle",
+        "toasts.launcher.externalProtonOutdatedBody",
+        "GE-Proton11-5",
+    )
+    # But because it is sufficiently fresh (lag=2 <= 5), download check and execution are skipped
+    is_valid_mock.assert_not_called()
+    ensure_mock.assert_not_called()
+
+
+async def test_proton_service_external_ge_severely_outdated_triggers_download(monkeypatch):
+    """When external GE has a major lag, download proceeds to establish a modern recovery floor."""
+    from unifideck.launcher.proton.infrastructure import external_ge
+    from unifideck.services.proton_service import ProtonService
+
+    fake_proton = Path("/fake/Proton-GE Latest/proton")
+    fake_downloaded = Path("/fake/GE-Proton11-5/proton")
+    monkeypatch.setattr(
+        external_ge, "find_external_ge_proton",
+        lambda roots=None: (fake_proton, "Proton-GE Latest", "GE-Proton10-34"),
+    )
+    monkeypatch.setattr(
+        ge_installer, "get_latest_ge_tag",
+        lambda timeout=8.0: "GE-Proton11-5",
+    )
+    monkeypatch.setattr(
+        ge_installer, "is_valid_ge_install",
+        lambda tag: False,
+    )
+    ensure_mock = MagicMock(return_value=(fake_downloaded, "GE-Proton11-5"))
+    monkeypatch.setattr(ge_installer, "ensure_latest_ge", ensure_mock)
+
+    svc = ProtonService(MagicMock())
+    svc._emit_proton_toast = AsyncMock()
+
+    await svc._ensure_latest_ge()
+
+    # Must call ensure_latest_ge because major version differs (10 vs 11)
+    ensure_mock.assert_called_once()
+    toast_keys = [call.args[0] for call in svc._emit_proton_toast.await_args_list]
+    assert "toasts.launcher.externalProtonOutdatedTitle" in toast_keys
+    assert "toasts.launcher.installingProton" in toast_keys
+    assert "toasts.launcher.protonReadyTitle" in toast_keys

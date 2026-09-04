@@ -60,9 +60,45 @@ class ProtonService:
         actually happens, so a normal boot is quiet.
         """
         try:
-            from unifideck.launcher.proton.infrastructure import ge_installer
+            from unifideck.launcher.proton.infrastructure import (
+                external_ge,
+                ge_installer,
+            )
 
             tag = await asyncio.to_thread(ge_installer.get_latest_ge_tag)
+            external = await asyncio.to_thread(external_ge.find_external_ge_proton)
+            if external:
+                _path, tool_id, current_ver = external
+                logger.info(
+                    "[ProtonService] Externally managed GE-Proton detected (%s, ver: %s).",
+                    tool_id, current_ver or "unknown",
+                )
+                if (
+                    tag
+                    and current_ver
+                    and external_ge.is_ge_outdated(current_ver, tag)
+                ):
+                    logger.info(
+                        "[ProtonService] Externally managed GE-Proton is outdated (%s < %s). Notifying user.",
+                        current_ver, tag,
+                    )
+                    await self._emit_proton_toast(
+                        "toasts.launcher.externalProtonOutdatedTitle",
+                        "toasts.launcher.externalProtonOutdatedBody",
+                        tag,
+                    )
+                if (
+                    tag
+                    and current_ver
+                    and external_ge.is_ge_sufficiently_fresh(current_ver, tag)
+                ):
+                    logger.info(
+                        "[ProtonService] Externally managed GE-Proton is sufficiently fresh (%s, latest: %s). "
+                        "Skipping background download.",
+                        current_ver, tag,
+                    )
+                    return
+
             if not tag:
                 logger.info(
                     "[ProtonService] latest GE-Proton unavailable "
