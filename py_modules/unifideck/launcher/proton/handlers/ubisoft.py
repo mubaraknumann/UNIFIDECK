@@ -57,17 +57,18 @@ async def _apply_epic_wrapper_fix(plan: ProtonLaunchPlan) -> None:
     """Apply EPIC wrapper fix."""
     from unifideck.launcher.proton.fixes.epic_prefix_fix import apply_epic_launcher_fix
     bundled_wrapper = (
-    plan.context.plugin_dir / "bin" / "EpicGamesLauncher.exe"
-   )
+        plan.context.plugin_dir / "bin" / "EpicGamesLauncher.exe"
+    )
     if not bundled_wrapper.is_file():
         logger.warning(
-        "[launcher.proton.ubisoft] EpicGamesLauncher.exe "
-        "wrapper missing at %s",
-        bundled_wrapper,
-       )
+            "[launcher.proton.ubisoft] EpicGamesLauncher.exe "
+            "wrapper missing at %s",
+            bundled_wrapper,
+        )
         return
     try:
         await apply_epic_launcher_fix(
+            plan=plan,
             prefix_path=plan.prefix_path,
             bundled_wrapper=bundled_wrapper,
         )
@@ -84,8 +85,8 @@ async def _inject_registry_keys(plan: ProtonLaunchPlan) -> bool:
     legendary_config = await asyncio.to_thread(lambda: Path("~/.config/legendary").expanduser())
     try:
         result = await setup_registry(
+            plan=plan,
             game_id=plan.context.game_id,
-            prefix_path=plan.prefix_path,
             legendary_config=legendary_config,
         )
         return result.success

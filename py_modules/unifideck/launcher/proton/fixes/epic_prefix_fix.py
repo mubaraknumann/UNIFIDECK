@@ -121,7 +121,7 @@ async def apply_epic_launcher_fix(
         plan,
         "reg.exe",
         ["add", "HKEY_CLASSES_ROOT\\com.epicgames.launcher", "/f"],
-        timeout=30,
+        timeout_s=30,
         label="epic_prefix_fix",
     )
     if registry_ok:

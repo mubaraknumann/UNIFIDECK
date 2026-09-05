@@ -21,7 +21,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from unifideck.launcher.proton.infrastructure import ge_installer, selector
+from unifideck.launcher.proton.infrastructure import (
+    ge_install_lock,
+    ge_installer,
+    selector,
+)
 from unifideck.launcher.types.errors import ProtonUnavailableError
 
 
@@ -514,3 +518,141 @@ async def test_emit_stage_omits_unset_optionals():
     assert "i18n_title_key" not in kwargs
     assert "i18n_params" not in kwargs
     assert "severity" not in kwargs
+
+
+# ── ge_installer: install serialisation + atomic publish ──────────
+#
+# Regression guard for the shared-Proton corruption report (Legion Go S,
+# 0.7.4). The old publish did ``rmtree(dest)`` then ``move(...)`` with no
+# cross-process lock, and the gate deciding whether to reach it checked only
+# that ``<tag>/proton`` existed and was executable — a condition that is false
+# during the very window the delete creates.
+
+
+def _complete_tree(root: Path, tag: str) -> Path:
+    """A tag directory that passes ``is_proton_install_complete``."""
+    tool = root / tag
+    proton = _make_proton(tool, executable=True)
+    (tool / "files" / "bin").mkdir(parents=True, exist_ok=True)
+    (tool / "files" / "bin" / "wine").write_text("#!/bin/sh\n")
+    (tool / "version").write_text(f"{tag}\n")
+    (tool / "toolmanifest.vdf").write_text('"manifest" { "commandline" "" }\n')
+    return proton
+
+
+def test_install_lock_serialises_across_holders(tmp_path, monkeypatch):
+    """A second holder waits: the lock is exclusive, not advisory-per-process."""
+    monkeypatch.setattr(ge_install_lock, "INSTALL_LOCK", tmp_path / "ge.lock")
+    with ge_install_lock.install_lock() as held:
+        assert held is True
+        # flock is per-open-file-description, so a fresh fd genuinely blocks.
+        import fcntl
+        import os as _os
+        fd = _os.open(tmp_path / "ge.lock", _os.O_RDWR)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            _os.close(fd)
+
+
+def test_ensure_latest_ge_rechecks_under_lock_and_skips_download(
+    tmp_path, monkeypatch,
+):
+    """The loser of a race finds a COMPLETE install and does not republish."""
+    monkeypatch.setattr(ge_installer, "_MARKER", tmp_path / "latest.json")
+    monkeypatch.setattr(ge_install_lock, "INSTALL_LOCK", tmp_path / "ge.lock")
+    tag = "GE-Proton11-6"
+    settled = _complete_tree(tmp_path, tag)
+    monkeypatch.setattr(
+        ge_installer, "_fetch_latest_release", lambda timeout: {
+            "tag_name": tag,
+            "assets": [{"name": f"{tag}.tar.gz", "browser_download_url": "u"}],
+        },
+    )
+    # First (pre-lock) probe says "absent"; the probe under the lock finds the
+    # tree the winner just published.
+    calls = iter([None, settled, settled])
+    monkeypatch.setattr(
+        ge_installer, "installed_ge_proton_path", lambda tag: next(calls),
+    )
+    download = MagicMock()
+    monkeypatch.setattr(ge_installer, "_download_and_install", download)
+
+    assert ge_installer.ensure_latest_ge() == (settled, tag)
+    download.assert_not_called()
+
+
+def test_ensure_latest_ge_downloads_when_recheck_finds_incomplete(
+    tmp_path, monkeypatch,
+):
+    """A half-published tree does NOT satisfy the re-check."""
+    monkeypatch.setattr(ge_installer, "_MARKER", tmp_path / "latest.json")
+    monkeypatch.setattr(ge_install_lock, "INSTALL_LOCK", tmp_path / "ge.lock")
+    tag = "GE-Proton11-6"
+    # +x proton but no files/, version or toolmanifest — passes the weak check
+    # and fails the strong one.
+    half = _make_proton(tmp_path / tag, executable=True)
+    monkeypatch.setattr(
+        ge_installer, "_fetch_latest_release", lambda timeout: {
+            "tag_name": tag,
+            "assets": [{"name": f"{tag}.tar.gz", "browser_download_url": "u"}],
+        },
+    )
+    calls = iter([None, half])
+    monkeypatch.setattr(
+        ge_installer, "installed_ge_proton_path", lambda tag: next(calls),
+    )
+    installed = tmp_path / "fresh" / "proton"
+    monkeypatch.setattr(
+        ge_installer, "_download_and_install",
+        lambda tag, url, cb: installed,
+    )
+    assert ge_installer.ensure_latest_ge() == (installed, tag)
+
+
+def test_promote_never_leaves_the_tag_dir_missing(tmp_path, monkeypatch):
+    """Publishing renames aside instead of deleting the live tree."""
+    monkeypatch.setattr(ge_installer, "COMPAT_TOOLS_DIR", tmp_path)
+    tag = "GE-Proton11-6"
+    live = _complete_tree(tmp_path, tag).parent
+    # A file another process is executing out of, by inode.
+    in_use = live / "files" / "bin" / "wine"
+    held = in_use.open("rb")
+    staging = tmp_path / f".{tag}.dl-x"
+    _complete_tree(staging, tag)
+    (staging / tag / "version").write_text("new\n")
+
+    try:
+        final = ge_installer._promote_extracted(staging, tag)
+        assert final == tmp_path / tag / "proton"
+        assert (tmp_path / tag / "version").read_text() == "new\n"
+        # The old inode survived the swap — a live umu-run keeps reading it.
+        assert held.read() == b"#!/bin/sh\n"
+        # No aside copies left behind.
+        assert not list(tmp_path.glob(f".{tag}.old-*"))
+    finally:
+        held.close()
+
+
+def test_promote_rolls_back_when_the_swap_fails(tmp_path, monkeypatch):
+    """A failed publish restores the live tree rather than leaving nothing."""
+    monkeypatch.setattr(ge_installer, "COMPAT_TOOLS_DIR", tmp_path)
+    tag = "GE-Proton11-6"
+    _complete_tree(tmp_path, tag)
+    staging = tmp_path / f".{tag}.dl-x"
+    _complete_tree(staging, tag)
+
+    real_rename = Path.rename
+    state = {"n": 0}
+
+    def flaky(self, target):
+        state["n"] += 1
+        if state["n"] == 2:  # the staged -> dest half
+            raise OSError("EXDEV")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", flaky)
+    assert ge_installer._promote_extracted(staging, tag) is None
+    monkeypatch.undo()
+    assert (tmp_path / tag / "proton").is_file()

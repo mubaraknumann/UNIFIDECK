@@ -31,6 +31,22 @@ if TYPE_CHECKING:
     from unifideck.stores.ubisoft.config import UbisoftConfig
     from unifideck.stores.ubisoft.paths import UbisoftPrefixPaths
 _CSS_MIN_VALID_SIZE = 100
+
+#: The entry UPC writes into ``ConnectSecureStorage.dat`` when an account is
+#: attached, and strips on sign-out. Measured on-device 2026-09-05 by diffing
+#: a signed-in vault against the one UPC wrote after it signed itself out:
+#:
+#:     $ diff <(strings signed_out.dat) <(strings signed_in.dat)
+#:     > RememberMeTicket
+#:     > oJlG/GsqFhfOkeuJXF8MQWsGqOKrZZYU5GRadANQo+8FHE51OcDxq22GXtJhds7G…
+#:
+#: That key and its base64 blob are the ONLY difference; the signed-out vault
+#: has nothing unique of its own. Verified across all five vaults on that
+#: device (auth, template, two game prefixes, a backup): every signed-in vault
+#: carries it, neither signed-out vault does. Plain ASCII in the file, not
+#: UTF-16, so a byte scan is enough and no parser is needed.
+_SIGNED_IN_MARKER = b"RememberMeTicket"
+
 logger = logging.getLogger(__name__)
 
 class _CredentialReader:
@@ -60,20 +76,29 @@ class _CredentialReader:
     def is_signed_in(self, prefix_path: str) -> bool:
         """True when this prefix holds a SIGNED-IN UPC session.
 
-        The discriminator is *shape*, not size. A prefix is signed in when it
-        has a plausible ``ConnectSecureStorage.dat`` **and** a ``user.dat``
-        beside it: UPC writes ``user.dat`` when an account is attached, the
-        pristine ``.template`` carries the never-logged-in vault and no
-        ``user.dat`` at all, and sign-out removes both (see
-        ``_PayloadSync.purge_credentials_from_prefix``).
+        The discriminator is the vault's *contents*: a plausible
+        ``ConnectSecureStorage.dat`` that still carries
+        :data:`_SIGNED_IN_MARKER`.
 
-        This replaces the old "smaller vault than the auth prefix means logged
-        out" rule, which was a monotonic ratchet on file size: Ubisoft rotates
-        the refresh token on every sign-in, and the first rotation that
-        produced a slightly smaller vault froze the auth prefix on a
-        server-dead token forever — every other prefix then kept whichever
-        token it had minted itself, so signing into one game signed the user
-        out of the others (GH #435, reproduced).
+        It is deliberately neither of the two rules that came before:
+
+        *Not size.* "Smaller vault than the auth prefix means logged out" was
+        a monotonic ratchet — Ubisoft rotates the refresh token on every
+        sign-in and a rotated vault is routinely a few hundred bytes smaller,
+        so the first rotation froze the auth prefix on a server-dead token
+        (GH #435, reproduced).
+
+        *Not the presence of ``user.dat``.* That replaced the size rule and
+        was inert from the day it landed. It assumed the pristine
+        ``.template`` carries no ``user.dat`` and that sign-out removes it —
+        both false on a real device. Measured 2026-09-05: ``user.dat`` is
+        byte-identical (``900aac14…``, 516 bytes) in the template, the auth
+        prefix and every cloned game prefix, and UPC's own sign-out left it
+        untouched while rewriting the vault. So the check could never return
+        False for a cloned prefix, and the capture guard it backs never fired
+        once. Observed live: a game prefix that UPC had signed itself out of
+        was captured into ``.upc-auth`` and then fanned out over every other
+        prefix, destroying a good token that had not yet been captured back.
         """
         for _root, user_home in self._paths.iter_user_homes(
             prefix_path,
@@ -82,9 +107,25 @@ class _CredentialReader:
             css = self._css_path(user_home)
             if not self._is_valid_css(css, _CSS_MIN_VALID_SIZE):
                 continue
-            if self._account_file_path(user_home).is_file():
+            if self._vault_has_account(css):
                 return True
         return False
+
+    @staticmethod
+    def _vault_has_account(css: str) -> bool:
+        """Whether ``css`` still carries the signed-in marker.
+
+        Unreadable is treated as "no account": the guard this feeds protects
+        the auth prefix, and refusing to capture from a vault we cannot read
+        is the safe direction — the next play captures instead.
+        """
+        try:
+            return _SIGNED_IN_MARKER in Path(css).read_bytes()
+        except OSError as e:
+            logger.warning(
+                "[UbisoftSession] cannot read vault %s: %s", css, e,
+            )
+            return False
 
     def get_credential_mtime(self, prefix_path: str) -> float:
         """Get credential mtime."""
@@ -181,10 +222,6 @@ class _CredentialReader:
         return str(
             Path(user_home) / self._config.upc_local_subdir / "ConnectSecureStorage.dat"
         )
-
-    def _account_file_path(self, user_home: str) -> Path:
-        """``user.dat`` beside the vault — present only when signed in."""
-        return Path(user_home) / self._config.upc_local_subdir / "user.dat"
 
     @staticmethod
     def _is_valid_css(css_path: str, min_size: int) -> bool:

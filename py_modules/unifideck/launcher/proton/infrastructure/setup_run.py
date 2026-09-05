@@ -54,12 +54,12 @@ async def run_setup_exe(
     args: list[str],
     *,
     store: str | None = None,
-    timeout: float | None = None,
+    timeout_s: float | None = None,
     label: str = "setup_run",
 ) -> bool:
     """Run ``exe`` in the plan's prefix via umu. True on rc 0.
 
-    ``timeout`` bounds the wait and kills the child on expiry; pass it for
+    ``timeout_s`` bounds the wait and kills the child on expiry; pass it for
     anything on the launch hot path. Left ``None`` the wait is unbounded,
     which is what the GOG setup helpers want — an installer that needs four
     minutes should get them rather than be killed halfway through a prefix.
@@ -88,12 +88,12 @@ async def run_setup_exe(
         return False
     try:
         rc = (
-            await asyncio.wait_for(proc.wait(), timeout=timeout)
-            if timeout is not None
+            await asyncio.wait_for(proc.wait(), timeout=timeout_s)
+            if timeout_s is not None
             else await proc.wait()
         )
     except TimeoutError:
-        logger.warning("[%s] %s timed out after %ss", label, exe, timeout)
+        logger.warning("[%s] %s timed out after %ss", label, exe, timeout_s)
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
         return False

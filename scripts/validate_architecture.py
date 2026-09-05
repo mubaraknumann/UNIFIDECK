@@ -516,7 +516,13 @@ SHARED_HELPERS: dict[str, str] = {
     "normalize_prefix_root": "launcher/proton/infrastructure/prefix_layout.py",
     "resolve_drive_c": "launcher/proton/infrastructure/prefix_layout.py",
     "resolve_registry_prefix": "launcher/proton/infrastructure/prefix_layout.py",
-    "kill_wineserver": "launcher/proton/infrastructure/wineserver_reap.py",
+    # ``kill_wineserver`` was tracked here too, as the consolidation of two
+    # byte-identical copies in ``epic_prefix_fix`` and ``epic_registry``. Both
+    # callers are gone: they invoked a Proton's ``wine`` directly and then
+    # killed the wineserver out from under it, which is what corrupted the
+    # shared Proton install. They now write the registry through umu and reap
+    # nothing, so the helper had no callers left and was deleted rather than
+    # kept as a tempting one. See ``infrastructure/setup_run.py``.
     # GOG and Microsoft each defined the same three config coercions as
     # nested closures. Check 13 caught only ``_list``; ``_s`` and ``_i`` sat
     # under its body-size floor, which is the floor's honest cost.

@@ -19,6 +19,7 @@ import pytest
 
 from unifideck.launcher.proton.compat import prefix_init, vcruntime, winetricks
 from unifideck.launcher.proton.compat.gog_setup import common
+from unifideck.launcher.proton.infrastructure import setup_run
 from unifideck.launcher.proton.infrastructure.setup_env import build_setup_env
 
 _SIDECAR = "/home/deck/Games/Trainers/trainer.exe"
@@ -145,8 +146,8 @@ async def test_gog_setup_run_wine_drops_the_sidecar(tmp_path, monkeypatch):
 
         return Process()
 
-    monkeypatch.setattr(common.asyncio, "create_subprocess_exec", fake_exec)
-    monkeypatch.setattr(common, "escape_argv", lambda argv, env, cwd: argv)
+    monkeypatch.setattr(setup_run.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(setup_run, "escape_argv", lambda argv, env, cwd: argv)
 
     assert await common.run_wine(_plan(tmp_path), "scriptinterpreter.exe", [])
 

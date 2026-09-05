@@ -4,7 +4,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from unifideck.launcher.proton.compat.gog_setup import common
-from unifideck.launcher.proton.infrastructure import container_escape
+from unifideck.launcher.proton.infrastructure import container_escape, setup_run
 
 
 async def test_run_wine_does_not_start_sidecar_for_setup_helper(monkeypatch):
@@ -24,11 +24,11 @@ async def test_run_wine_does_not_start_sidecar_for_setup_helper(monkeypatch):
         return Process()
 
     monkeypatch.setattr(
-        common.asyncio,
+        setup_run.asyncio,
         "create_subprocess_exec",
         fake_create_subprocess_exec,
     )
-    monkeypatch.setattr(common, "escape_argv", lambda argv, env, cwd: argv)
+    monkeypatch.setattr(setup_run, "escape_argv", lambda argv, env, cwd: argv)
 
     plan = SimpleNamespace(
         env={
@@ -66,7 +66,7 @@ async def test_run_wine_does_not_forward_sidecar_through_pressure_vessel(monkeyp
 
         return Process()
 
-    monkeypatch.setattr(common.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(setup_run.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr(container_escape, "in_pressure_vessel", lambda: True)
     monkeypatch.setattr(
         container_escape.shutil,

@@ -118,10 +118,56 @@ class UbisoftSession:
         self,
         prefix_paths: list[str],
     ) -> int:
-        """Ensure auth state in prefixes."""
+        """Seed ``prefix_paths`` from the auth prefix, refreshing it first.
+
+        The refresh is the durability half of post-play capture. Capture runs
+        on ``GAME_STOPPED`` and can legitimately not run at all — the bus
+        watchdog cancels it, the backend restarts between the game exiting and
+        the handler finishing, the user force-quits. When it does not run, the
+        rotated refresh token stays in the game prefix and ``.upc-auth`` keeps
+        a token the server has already retired. Nothing notices until the next
+        fresh install seeds that dead token into a new prefix and UPC opens on
+        the login screen, which is a confusing distance from the cause.
+
+        So before seeding, promote the freshest signed-in vault on the device
+        into the auth prefix. Measured 2026-09-05: two consecutive captures
+        were cancelled at ~5s, the game prefix held a vault 2m26s newer than
+        the auth prefix, and the install nine minutes later signed the user
+        out. This closes that window whatever caused the capture to be missed.
+        """
+        with self._serialised():
+            self._refresh_auth_from_freshest_prefix()
         return self._propagator.ensure_auth_state_in_prefixes(
             prefix_paths,
         )
+
+    def _refresh_auth_from_freshest_prefix(self) -> None:
+        """Capture into auth from the newest signed-in game prefix, if any.
+
+        Only ever moves auth FORWARD: a candidate must be signed in and
+        strictly newer than what auth already holds. ``_capture_locked``
+        re-checks both, so this picks the candidate and lets the one guarded
+        path do the writing rather than opening a second one.
+        """
+        auth_dir = self._config.auth_prefix_dir_expanded
+        auth_mtime = self._reader.get_credential_mtime(auth_dir)
+        best: tuple[float, str] | None = None
+        for prefix_path in self._paths.iter_all_game_prefix_paths():
+            if not self._reader.is_signed_in(prefix_path):
+                continue
+            mtime = self._reader.get_credential_mtime(prefix_path)
+            if mtime <= auth_mtime:
+                continue
+            if best is None or mtime > best[0]:
+                best = (mtime, prefix_path)
+        if best is None:
+            return
+        logger.info(
+            "[UbisoftSession] %s holds a newer signed-in vault than the auth "
+            "prefix (%+.0fs) — capturing it before seeding",
+            Path(best[1]).name, best[0] - auth_mtime,
+        )
+        self._capture_locked(best[1])
 
     def retroactive_sync(self) -> dict[str, Any]:
         """Retroactive sync."""
@@ -141,16 +187,20 @@ class UbisoftSession:
         source_is_auth = (
             Path(prefix_path).resolve() == Path(auth_dir).resolve()
         )
-        # Never propagate a signed-OUT session. A prefix whose vault has no
-        # ``user.dat`` beside it holds no account, so capturing from it would
-        # carry the sign-out into the auth prefix and the template — and the
-        # auth-cache artifacts travel unguarded, so this has to skip the WHOLE
-        # capture, not just the credential copy. (The auth prefix itself is
-        # exempt: it is the source of truth and signs out legitimately.)
+        # Never propagate a signed-OUT session. A vault UPC has signed out of
+        # holds no account, so capturing from it would carry the sign-out into
+        # the auth prefix and the template — and the auth-cache artifacts
+        # travel unguarded, so this has to skip the WHOLE capture, not just
+        # the credential copy. (The auth prefix itself is exempt: it is the
+        # source of truth and signs out legitimately.)
         #
-        # This used to compare file sizes instead, which was the GH #435 bug:
-        # rotated vaults are often smaller, so the first rotation latched auth
-        # on a token the server had already retired.
+        # Two earlier spellings of this test were both wrong, which is why
+        # :meth:`_CredentialReader.is_signed_in` now decides it by reading the
+        # vault: file size was the GH #435 ratchet, and "has a ``user.dat``
+        # beside it" never fired at all because the template clone puts
+        # ``user.dat`` in every prefix. With the guard inert, one signed-out
+        # game prefix reached this point on 2026-09-05, was captured into
+        # ``.upc-auth``, and was then fanned out over every other prefix.
         if not source_is_auth and self._source_is_logged_out(
             prefix_path, auth_dir,
         ):

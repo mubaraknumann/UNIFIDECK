@@ -31,9 +31,8 @@ class RegistryInjectionResult:
     success: bool
     keys_written: int
     reason: str = ""
-    if (prefix_root / "system.reg").is_file():
-        return prefix_root
-    return pfx_path
+
+
 def _linux_to_wine_path(linux_path: str) -> str:
     """Linux to WINE path."""
     wine_path = "Z:" + linux_path.replace("/", "\\")
@@ -137,7 +136,7 @@ async def _run_reg_commands(
     ok_count = 0
     for cmd in commands:
         ok = await run_setup_exe(
-            plan, "reg.exe", cmd, timeout=30, label="epic_registry",
+            plan, "reg.exe", cmd, timeout_s=30, label="epic_registry",
         )
         if ok:
             ok_count += 1

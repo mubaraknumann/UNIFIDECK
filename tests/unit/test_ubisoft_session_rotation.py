@@ -74,16 +74,26 @@ def _account_file(prefix: Path) -> Path:
 
 
 def _write_vault(prefix: Path, token: str | None, size: int) -> None:
-    """What UPC leaves behind: a vault, plus ``user.dat`` iff signed in."""
+    """What UPC actually leaves behind, as measured on-device 2026-09-05.
+
+    Sign-out strips the ``RememberMeTicket`` entry from inside the vault and
+    rewrites it smaller. It does **not** remove ``user.dat`` — that file is
+    byte-identical in the template, the auth prefix and every cloned game
+    prefix, and survives a sign-out untouched.
+
+    This fake used to delete ``user.dat`` on sign-out, which is what let the
+    "signed in iff ``user.dat`` exists" guard pass its tests while being inert
+    on a real device: no cloned prefix ever lacks the file, so the guard never
+    fired and a signed-out prefix was captured over the auth prefix.
+    """
     vault = _vault(prefix)
     vault.parent.mkdir(parents=True, exist_ok=True)
     head = f"{token or 'SIGNED_OUT'}\n".encode()
-    vault.write_bytes(head + b"x" * max(0, size - len(head)))
-    account = _account_file(prefix)
-    if token:
-        account.write_bytes(b"account-blob" * 40)
-    elif account.exists():
-        account.unlink()
+    marker = b"RememberMeTicket\n" if token else b""
+    body = head + marker
+    vault.write_bytes(body + b"x" * max(0, size - len(body)))
+    # Always present, signed in or out — the template clone puts it there.
+    _account_file(prefix).write_bytes(b"account-blob" * 40)
     # mtime is the ordering the propagation guard now uses, and these writes
     # land inside the same filesystem timestamp tick otherwise.
     time.sleep(0.01)
