@@ -249,6 +249,8 @@
     "ubisoftLauncherAlreadyOpenMessage": "Ubisoft Connect bu kurulum için zaten açık.",
     "ubisoftLauncherOpenFailed": "Ubisoft Connect Açılamadı",
     "ubisoftLauncherOpenFailedMessage": "Kurulum için Ubisoft Connect açılamadı.",
+    "ubisoftSignInExpired": "Ubisoft oturumu sona erdi",
+    "ubisoftSignInExpiredMessage": "Kayıtlı Ubisoft oturumunuz artık kabul edilmiyor. Yeniden bağlanmak için Unifideck ayarlarından çıkış yapıp tekrar giriş yapın.",
     "multipartDetected": "Çok parçalı indirme algılandı",
     "multipartMessage": "Lütfen sabırlı olun ve tamamlanmasını bekleyin",
     "downloadFailed": "İndirme Başarısız",

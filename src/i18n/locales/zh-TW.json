@@ -258,6 +258,8 @@
     "ubisoftLauncherAlreadyOpenMessage": "已為這次安裝開啟 Ubisoft Connect。",
     "ubisoftLauncherOpenFailed": "無法開啟 Ubisoft Connect",
     "ubisoftLauncherOpenFailedMessage": "無法開啟 Ubisoft Connect 進行安裝。",
+    "ubisoftSignInExpired": "Ubisoft 登入已過期",
+    "ubisoftSignInExpiredMessage": "已儲存的 Ubisoft 登入資訊不再有效。請在 Unifideck 設定中登出並重新登入以恢復連線。",
     "multipartDetected": "已偵測到分段下載",
     "multipartMessage": "請耐心等待完成",
     "downloadFailed": "下載失敗",

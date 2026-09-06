@@ -174,12 +174,19 @@ class PostPlayCaptureMixin:
             "every install will keep asking for a sign-in.",
             game_id,
         )
+        # LAUNCHER_STAGE, not STORE_AUTH_FAILED. The rule is stated in
+        # ``stores/shared/wrapper_auth_monitor.py``: the frontend translates
+        # STORE_AUTH_FAILED into a store status of "error", and the Ubisoft
+        # row then renders with no auth button at all — this message names
+        # "sign out and back in" as the fix while removing the button that
+        # does it. LAUNCHER_STAGE is the plugin's only user-facing toast
+        # channel (see ``core/types/events.py``), and it changes no status.
         with contextlib.suppress(Exception):
             await self._bus.emit(
-                Events.STORE_AUTH_FAILED,
+                Events.LAUNCHER_STAGE,
+                severity="warning",
+                i18n_title_key="toasts.ubisoftSignInExpired",
+                i18n_key="toasts.ubisoftSignInExpiredMessage",
+                duration_ms=10000,
                 store="ubisoft",
-                error=(
-                    "Ubisoft sign-in expired — sign out and back in to "
-                    "reconnect your account"
-                ),
             )

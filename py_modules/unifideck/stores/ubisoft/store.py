@@ -179,8 +179,26 @@ class UbisoftStore(PostPlayCaptureMixin, StoreBase):
         launch. Returning early keeps those phantom entries out of the
         library; the install scan re-surfaces real games the moment the
         user signs in.
+
+        The two not-signed-in cases answer differently, because ``[]`` is
+        authoritative downstream and ``None`` is not: an empty library still
+        makes the store sweepable, and the post-sync reconcile then deletes
+        every Ubisoft shortcut the user has (``shortcut/events
+        ._sweepable_stores``). A purged auth prefix means the user signed out
+        and ``[]`` is the truth. A vault UPC signed itself out of means the
+        token died under us — we cannot enumerate the library, but the user
+        still owns those games, so say "unreadable" and keep their tiles.
+        ``_sync_one_store`` turns ``None`` into the ``library_unreadable``
+        error that excludes the store from the sweep.
         """
-        if not await self.is_available():
+        state = self._auth.credential_state()
+        if state == "signed_out":
+            logger.warning(
+                "[UbisoftStore] auth vault is signed out — library "
+                "unreadable; keeping existing shortcuts",
+            )
+            return None
+        if state != "signed_in":
             logger.info(
                 "[UbisoftStore] not authenticated — returning empty library",
             )

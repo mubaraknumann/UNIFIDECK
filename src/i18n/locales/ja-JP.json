@@ -249,6 +249,8 @@
     "ubisoftLauncherAlreadyOpenMessage": "このインストールに対して Ubisoft Connect はすでに開いています。",
     "ubisoftLauncherOpenFailed": "Ubisoft Connect を開けませんでした",
     "ubisoftLauncherOpenFailedMessage": "インストールのための Ubisoft Connect の起動に失敗しました。",
+    "ubisoftSignInExpired": "Ubisoft のサインインの有効期限が切れました",
+    "ubisoftSignInExpiredMessage": "保存された Ubisoft のサインイン情報は受け付けられなくなりました。Unifideck の設定からサインアウトして、もう一度サインインしてください。",
     "multipartDetected": "マルチパートダウンロードを検出しました",
     "multipartMessage": "完了するまでお待ちください",
     "downloadFailed": "ダウンロード失敗",

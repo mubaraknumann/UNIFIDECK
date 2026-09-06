@@ -249,6 +249,8 @@
     "ubisoftLauncherAlreadyOpenMessage": "Ubisoft Connect уже запущен для этой установки.",
     "ubisoftLauncherOpenFailed": "Не удалось запустить Ubisoft Connect",
     "ubisoftLauncherOpenFailedMessage": "Не удалось запустить Ubisoft Connect для установки.",
+    "ubisoftSignInExpired": "Срок входа в Ubisoft истёк",
+    "ubisoftSignInExpiredMessage": "Сохранённые данные входа в Ubisoft больше не принимаются. Выйдите и войдите снова в настройках Unifideck, чтобы восстановить подключение.",
     "multipartDetected": "Обнаружена многокомпонентная загрузка",
     "multipartMessage": "Пожалуйста, подождите завершения процесса",
     "downloadFailed": "Загрузка не удалась",

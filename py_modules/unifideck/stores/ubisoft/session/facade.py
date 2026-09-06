@@ -67,8 +67,17 @@ class UbisoftSession:
         )
 
     def has_valid_credentials(self, prefix_path: str) -> bool:
-        """Check whether valid credentials."""
+        """Whether a plausible vault EXISTS in this prefix.
+
+        Presence, not state: a signed-OUT vault satisfies this. Use it to
+        answer "is there something here to copy / inject", never "is the
+        user signed in" — :meth:`is_signed_in` answers that one.
+        """
         return self._reader.has_valid_credentials(prefix_path)
+
+    def is_signed_in(self, prefix_path: str) -> bool:
+        """Whether this prefix holds a vault with an account attached."""
+        return self._reader.is_signed_in(prefix_path)
 
     def get_credential_mtime(self, prefix_path: str) -> float:
         """Get credential mtime."""

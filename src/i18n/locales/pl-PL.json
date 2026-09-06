@@ -249,6 +249,8 @@
     "ubisoftLauncherAlreadyOpenMessage": "Ubisoft Connect jest już otwarty dla tej instalacji.",
     "ubisoftLauncherOpenFailed": "Nie można otworzyć Ubisoft Connect",
     "ubisoftLauncherOpenFailedMessage": "Nie udało się otworzyć Ubisoft Connect w celu instalacji.",
+    "ubisoftSignInExpired": "Logowanie do Ubisoft wygasło",
+    "ubisoftSignInExpiredMessage": "Zapisane logowanie do Ubisoft nie jest już akceptowane. Wyloguj się i zaloguj ponownie w ustawieniach Unifideck, aby przywrócić połączenie.",
     "multipartDetected": "Wykryto pobieranie wieloczęściowe",
     "multipartMessage": "Prosimy o cierpliwość i oczekiwanie na ukończenie",
     "downloadFailed": "Pobieranie nie powiodło się",

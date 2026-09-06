@@ -249,6 +249,8 @@
     "ubisoftLauncherAlreadyOpenMessage": "Ubisoft Connect ya está abierto para esta instalación.",
     "ubisoftLauncherOpenFailed": "No se pudo abrir Ubisoft Connect",
     "ubisoftLauncherOpenFailedMessage": "Error al abrir Ubisoft Connect para la instalación.",
+    "ubisoftSignInExpired": "Sesión de Ubisoft caducada",
+    "ubisoftSignInExpiredMessage": "Tu sesión guardada de Ubisoft ya no se acepta. Cierra sesión y vuelve a iniciarla desde los ajustes de Unifideck para reconectar.",
     "multipartDetected": "Descarga de varias partes detectada",
     "multipartMessage": "Por favor, ten paciencia y espera a que termine",
     "downloadFailed": "Error de descarga",
