@@ -109,6 +109,9 @@ class _LibraryFetcher:
         prepared = await self._prepare_library(
             configs, owned_set, owned_uuids, installed, force=force,
         )
+        # Repair a map poisoned before #436 was fixed (one deeplink id
+        # shared by two games) before the rebuild re-derives the ids.
+        await asyncio.to_thread(self._id_map.sweep_conflicting_connect_ids)
         connect_ids = await asyncio.to_thread(self._id_map.read_connect_ids)
         games = self._builder.build_games_from_configs(
             prepared.matched_configs,

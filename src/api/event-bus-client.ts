@@ -97,6 +97,12 @@ const IMPERATIVE_EVENTS = new Set<string>([
  *  first poll after load; events emitted live during the session still fire
  *  normally (their timestamps exceed the watermark). */
 const STALE_ON_RELOAD_EVENTS = new Set<string>([
+  // A failure from a PRIOR session, replayed from timestamp 0, re-applies a
+  // store status of "error" that the authoritative restore (`authStore.start()`
+  // → `check_store_status`) had just answered correctly. That status is sticky
+  // for the rest of the session, so a single old event kept a store row in a
+  // stale failed state across every reload. Live failures still fire.
+  "store_auth_failed",
   "sync_started",
   "sync_progress",
   "sync_complete",

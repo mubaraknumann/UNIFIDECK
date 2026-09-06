@@ -258,6 +258,8 @@
     "ubisoftLauncherAlreadyOpenMessage": "Ubisoft Connect is already open for this install.",
     "ubisoftLauncherOpenFailed": "Could Not Open Ubisoft Connect",
     "ubisoftLauncherOpenFailedMessage": "Failed to open Ubisoft Connect for installation.",
+    "ubisoftSignInExpired": "Ubisoft Sign-In Expired",
+    "ubisoftSignInExpiredMessage": "Your saved Ubisoft sign-in is no longer accepted. Sign out and back in from Unifideck settings to reconnect.",
     "multipartDetected": "Multi-Part Download Detected",
     "multipartMessage": "Please be patient and wait for completion",
     "downloadFailed": "Download Failed",

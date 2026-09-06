@@ -27,18 +27,16 @@ etc. — every method is delegated to the appropriate sub-component.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from unifideck.core.types import AuthResult, Events, Game, InstallResult, Result, StoreInfo
-from unifideck.event_bus.event_bus_devex import auto_wire, subscribe
+from unifideck.event_bus.event_bus_devex import auto_wire
 from unifideck.stores.shared.installed_path import install_path_from_record
 from unifideck.stores.shared.store_base import StoreBase
-from unifideck.stores.shared.wrapper_session_hooks import await_client_exit
 
+from .post_play_capture import PostPlayCaptureMixin
 from .specialists import build_ubisoft_specialists
 
 if TYPE_CHECKING:
@@ -53,8 +51,7 @@ if TYPE_CHECKING:
     from .installer import UbisoftInstaller
     from .library import UbisoftLibrary
 logger = logging.getLogger(__name__)
-
-class UbisoftStore(StoreBase):
+class UbisoftStore(PostPlayCaptureMixin, StoreBase):
     """Ubisoft store."""
 
     store_info = StoreInfo(
@@ -102,92 +99,6 @@ class UbisoftStore(StoreBase):
         # Subscribe to bus events (currently GAME_STOPPED, to capture the token
         # UPC rotated during a play session back to the auth prefix).
         auto_wire(self, bus)
-
-    @subscribe(Events.GAME_STOPPED)
-    async def _capture_upc_session_on_stop(self, **kwargs: Any) -> None:
-        """Capture the token UPC rotated during play back to the auth prefix.
-
-        The Play path runs in the launcher subprocess, which can't reach the
-        backend session facade — so a token UPC rotates while the game runs is
-        written only into the game prefix and never makes it back to
-        ``.upc-auth``. Left uncaptured, the auth prefix ends up on a
-        server-stale token and the next FRESH install (or a game installed to a
-        new prefix) opens signed-out. Capturing on game-stop keeps auth current
-        after every play. ``capture()`` is guarded (auth-only, skips a
-        logged-out / smaller source), so a normal exit that didn't rotate — or
-        an explicit logout — is a safe no-op.
-
-        UPC flushes its rotated credential as it shuts down, so the read waits
-        (bounded) for the client to actually be gone first. Reading too early
-        gets a torn vault, and ``propagate_all_to_all`` below would then push
-        it to every Ubisoft prefix.
-        """
-        if kwargs.get("store") != "ubisoft":
-            return
-        game_id = kwargs.get("game_id")
-        if not isinstance(game_id, str) or not game_id:
-            return
-        try:
-            prefix_path = self._paths.get_prefix_path(game_id)
-            await await_client_exit("ubisoft", Path(prefix_path))
-            captured = await asyncio.to_thread(
-                self._session.capture, prefix_path,
-            )
-            if captured:
-                await asyncio.to_thread(self._session.propagate_all_to_all)
-                logger.info(
-                    "[UbisoftStore] captured rotated UPC token after play "
-                    "for %s → auth refreshed",
-                    game_id,
-                )
-            else:
-                await self._warn_if_stored_credential_is_dead(
-                    game_id, prefix_path,
-                )
-        except Exception as e:
-            logger.warning(
-                "[UbisoftStore] post-play session capture failed: %s", e,
-            )
-
-    async def _warn_if_stored_credential_is_dead(
-        self, game_id: str, prefix_path: str,
-    ) -> None:
-        """Tell the user when re-signing-in is the only way out.
-
-        ``capture`` returning nothing is normally a healthy no-op. But when the
-        prefix we injected a signed-in credential into comes back signed OUT,
-        the stored token is dead server-side and every future install will
-        inject it again — a silent loop of sign-in prompts with no UI affordance
-        to break it. Say so, and name the one action that fixes it.
-
-        Report-only: the credential is never purged here. Sign-out is
-        destructive and stays the user's decision.
-        """
-        try:
-            dead = await asyncio.to_thread(
-                self._session.stored_credential_was_rejected, prefix_path,
-            )
-        except Exception:
-            logger.exception("[UbisoftStore] credential health check failed")
-            return
-        if not dead:
-            return
-        logger.warning(
-            "[UbisoftStore] UPC signed out of %s despite the injected "
-            "credential — the stored Ubisoft token is no longer accepted. "
-            "Sign out and back in (QAM → Ubisoft) to replace it; until then "
-            "every install will keep asking for a sign-in.",
-            game_id,
-        )
-        with contextlib.suppress(Exception):
-            await self._bus.emit(
-                Events.STORE_AUTH_FAILED,
-                store="ubisoft",
-                error=(
-                    "Ubisoft sign-in expired — sign out and back in to "
-                    "reconnect your account"
-                ),
-            )
 
     # intentional-divergence: same store_injector hook, no browser monitor —
     # this store signs in through the vendor client in its own prefix.
@@ -268,8 +179,26 @@ class UbisoftStore(StoreBase):
         launch. Returning early keeps those phantom entries out of the
         library; the install scan re-surfaces real games the moment the
         user signs in.
+
+        The two not-signed-in cases answer differently, because ``[]`` is
+        authoritative downstream and ``None`` is not: an empty library still
+        makes the store sweepable, and the post-sync reconcile then deletes
+        every Ubisoft shortcut the user has (``shortcut/events
+        ._sweepable_stores``). A purged auth prefix means the user signed out
+        and ``[]`` is the truth. A vault UPC signed itself out of means the
+        token died under us — we cannot enumerate the library, but the user
+        still owns those games, so say "unreadable" and keep their tiles.
+        ``_sync_one_store`` turns ``None`` into the ``library_unreadable``
+        error that excludes the store from the sweep.
         """
-        if not await self.is_available():
+        state = self._auth.credential_state()
+        if state == "signed_out":
+            logger.warning(
+                "[UbisoftStore] auth vault is signed out — library "
+                "unreadable; keeping existing shortcuts",
+            )
+            return None
+        if state != "signed_in":
             logger.info(
                 "[UbisoftStore] not authenticated — returning empty library",
             )

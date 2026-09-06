@@ -249,6 +249,8 @@
     "ubisoftLauncherAlreadyOpenMessage": "Ubisoft Connect is al geopend voor deze installatie.",
     "ubisoftLauncherOpenFailed": "Kan Ubisoft Connect niet openen",
     "ubisoftLauncherOpenFailedMessage": "Kan Ubisoft Connect niet openen voor installatie.",
+    "ubisoftSignInExpired": "Ubisoft-aanmelding verlopen",
+    "ubisoftSignInExpiredMessage": "Je opgeslagen Ubisoft-aanmelding wordt niet meer geaccepteerd. Meld je af en weer aan via de Unifideck-instellingen om opnieuw verbinding te maken.",
     "multipartDetected": "Meerdelige download gedetecteerd",
     "multipartMessage": "Wees geduldig en wacht tot de download is voltooid",
     "downloadFailed": "Download mislukt",

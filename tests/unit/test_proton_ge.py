@@ -21,7 +21,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from unifideck.launcher.proton.infrastructure import ge_installer, selector
+from unifideck.launcher.proton.infrastructure import (
+    ge_install_lock,
+    ge_installer,
+    selector,
+)
 from unifideck.launcher.types.errors import ProtonUnavailableError
 
 
@@ -516,311 +520,139 @@ async def test_emit_stage_omits_unset_optionals():
     assert "severity" not in kwargs
 
 
-# ── Externally managed GE-Proton detection + notification ──────────
-
-def test_parse_ge_version():
-    from unifideck.launcher.proton.infrastructure import external_ge
-
-    assert external_ge.parse_ge_version("GE-Proton11-5") == (11, 5)
-    assert external_ge.parse_ge_version("GE-Proton10-34") == (10, 34)
-    assert external_ge.parse_ge_version("GE-Proton8_25") == (8, 25)
-    assert external_ge.parse_ge_version("Proton-10") is None
-    assert external_ge.parse_ge_version("") is None
+# ── ge_installer: install serialisation + atomic publish ──────────
+#
+# Regression guard for the shared-Proton corruption report (Legion Go S,
+# 0.7.4). The old publish did ``rmtree(dest)`` then ``move(...)`` with no
+# cross-process lock, and the gate deciding whether to reach it checked only
+# that ``<tag>/proton`` existed and was executable — a condition that is false
+# during the very window the delete creates.
 
 
-def test_is_ge_outdated():
-    from unifideck.launcher.proton.infrastructure import external_ge
-
-    assert external_ge.is_ge_outdated("GE-Proton10-34", "GE-Proton11-5") is True
-    assert external_ge.is_ge_outdated("GE-Proton11-4", "GE-Proton11-5") is True
-    assert external_ge.is_ge_outdated("GE-Proton11-5", "GE-Proton11-5") is False
-    assert external_ge.is_ge_outdated("GE-Proton11-6", "GE-Proton11-5") is False
-    assert external_ge.is_ge_outdated("unknown", "GE-Proton11-5") is False
-
-
-def test_is_ge_sufficiently_fresh():
-    from unifideck.launcher.proton.infrastructure import external_ge
-
-    assert external_ge.is_ge_sufficiently_fresh("GE-Proton11-5", "GE-Proton11-5") is True
-    assert external_ge.is_ge_sufficiently_fresh("GE-Proton11-1", "GE-Proton11-5") is True
-    assert external_ge.is_ge_sufficiently_fresh("GE-Proton11-0", "GE-Proton11-5") is True
-    assert external_ge.is_ge_sufficiently_fresh("GE-Proton11-1", "GE-Proton11-7") is False
-    assert external_ge.is_ge_sufficiently_fresh("GE-Proton10-34", "GE-Proton11-1") is False
-    assert external_ge.is_ge_sufficiently_fresh("GE-Proton11-6", "GE-Proton11-5") is True
-    assert external_ge.is_ge_sufficiently_fresh("unknown", "GE-Proton11-5") is False
-    assert external_ge.is_ge_sufficiently_fresh("GE-Proton11-5", "invalid") is False
+def _complete_tree(root: Path, tag: str) -> Path:
+    """A tag directory that passes ``is_proton_install_complete``."""
+    tool = root / tag
+    proton = _make_proton(tool, executable=True)
+    (tool / "files" / "bin").mkdir(parents=True, exist_ok=True)
+    (tool / "files" / "bin" / "wine").write_text("#!/bin/sh\n")
+    (tool / "version").write_text(f"{tag}\n")
+    (tool / "toolmanifest.vdf").write_text('"manifest" { "commandline" "" }\n')
+    return proton
 
 
-def test_find_external_ge_proton_detects_via_manifest_display_name(tmp_path):
-    """Manifest declares 'Proton-GE Latest' as display_name while dir is named differently."""
-    from unifideck.launcher.proton.infrastructure import external_ge
-
-    root = tmp_path / "compatibilitytools.d"
-    tool_dir = root / "GE-Proton-custom"
-    tool_dir.mkdir(parents=True)
-    _make_proton(tool_dir, executable=True)
-    (tool_dir / "files" / "bin").mkdir(parents=True)
-    (tool_dir / "files" / "bin" / "wine").write_text("")
-    (tool_dir / "version").write_text("1724000000 GE-Proton11-3\n")
-    (tool_dir / "toolmanifest.vdf").write_text('"manifest" { "commandline" "/proton" }')
-    (tool_dir / "compatibilitytool.vdf").write_text(
-        '"compatibilitytools" {\n'
-        '  "compat_tools" {\n'
-        '    "custom_ge" {\n'
-        '      "display_name" "Proton-GE Latest"\n'
-        '      "install_path" "."\n'
-        '    }\n'
-        '  }\n'
-        '}'
-    )
-
-    result = external_ge.find_external_ge_proton(roots=[root])
-    assert result is not None
-    proton_script, alias_name, real_ver = result
-    assert proton_script == tool_dir / "proton"
-    assert alias_name == "Proton-GE Latest"
-    assert real_ver == "GE-Proton11-3"
+def test_install_lock_serialises_across_holders(tmp_path, monkeypatch):
+    """A second holder waits: the lock is exclusive, not advisory-per-process."""
+    monkeypatch.setattr(ge_install_lock, "INSTALL_LOCK", tmp_path / "ge.lock")
+    with ge_install_lock.install_lock() as held:
+        assert held is True
+        # flock is per-open-file-description, so a fresh fd genuinely blocks.
+        import fcntl
+        import os as _os
+        fd = _os.open(tmp_path / "ge.lock", _os.O_RDWR)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            _os.close(fd)
 
 
-def test_find_external_ge_proton_detects_alias_dir(tmp_path):
-    """Directory itself is named 'Proton-GE Latest'."""
-    from unifideck.launcher.proton.infrastructure import external_ge
-
-    root = tmp_path / "compatibilitytools.d"
-    alias_dir = root / "Proton-GE Latest"
-    alias_dir.mkdir(parents=True)
-    _make_proton(alias_dir, executable=True)
-    (alias_dir / "files" / "bin").mkdir(parents=True)
-    (alias_dir / "files" / "bin" / "wine").write_text("")
-    (alias_dir / "version").write_text("GE-Proton11-4\n")
-    (alias_dir / "toolmanifest.vdf").write_text('"manifest" { "commandline" "/proton" }')
-
-    result = external_ge.find_external_ge_proton(roots=[root])
-    assert result is not None
-    proton_script, alias_name, real_ver = result
-    assert proton_script == alias_dir / "proton"
-    assert alias_name == "Proton-GE Latest"
-    assert real_ver == "GE-Proton11-4"
-
-
-def test_selector_prefers_external_ge_when_up_to_date(tmp_path, monkeypatch):
-    from unifideck.launcher.proton.infrastructure import external_ge, selector
-
-    fake_ext_proton = tmp_path / "Proton-GE Latest" / "proton"
+def test_ensure_latest_ge_rechecks_under_lock_and_skips_download(
+    tmp_path, monkeypatch,
+):
+    """The loser of a race finds a COMPLETE install and does not republish."""
+    monkeypatch.setattr(ge_installer, "_MARKER", tmp_path / "latest.json")
+    monkeypatch.setattr(ge_install_lock, "INSTALL_LOCK", tmp_path / "ge.lock")
+    tag = "GE-Proton11-6"
+    settled = _complete_tree(tmp_path, tag)
     monkeypatch.setattr(
-        external_ge, "find_external_ge_proton",
-        lambda roots=None: (fake_ext_proton, "Proton-GE Latest", "GE-Proton11-5"),
+        ge_installer, "_fetch_latest_release", lambda timeout: {
+            "tag_name": tag,
+            "assets": [{"name": f"{tag}.tar.gz", "browser_download_url": "u"}],
+        },
     )
+    # First (pre-lock) probe says "absent"; the probe under the lock finds the
+    # tree the winner just published.
+    calls = iter([None, settled, settled])
     monkeypatch.setattr(
-        ge_installer, "read_cached_latest_tag",
-        lambda: "GE-Proton11-3",
+        ge_installer, "installed_ge_proton_path", lambda tag: next(calls),
     )
+    download = MagicMock()
+    monkeypatch.setattr(ge_installer, "_download_and_install", download)
+
+    assert ge_installer.ensure_latest_ge() == (settled, tag)
+    download.assert_not_called()
+
+
+def test_ensure_latest_ge_downloads_when_recheck_finds_incomplete(
+    tmp_path, monkeypatch,
+):
+    """A half-published tree does NOT satisfy the re-check."""
+    monkeypatch.setattr(ge_installer, "_MARKER", tmp_path / "latest.json")
+    monkeypatch.setattr(ge_install_lock, "INSTALL_LOCK", tmp_path / "ge.lock")
+    tag = "GE-Proton11-6"
+    # +x proton but no files/, version or toolmanifest — passes the weak check
+    # and fails the strong one.
+    half = _make_proton(tmp_path / tag, executable=True)
     monkeypatch.setattr(
-        ge_installer, "installed_ge_proton_path",
-        lambda tag: tmp_path / "unifideck-ge" / "proton",
+        ge_installer, "_fetch_latest_release", lambda timeout: {
+            "tag_name": tag,
+            "assets": [{"name": f"{tag}.tar.gz", "browser_download_url": "u"}],
+        },
     )
-
-    tried = []
-    path, tool = selector._default_latest_ge(tried)
-    assert path == fake_ext_proton
-    assert tool == "Proton-GE Latest"
-    assert "external-ge:Proton-GE Latest" in tried
-
-
-def test_selector_prefers_cached_unifideck_ge_when_external_is_older(tmp_path, monkeypatch):
-    from unifideck.launcher.proton.infrastructure import external_ge, selector
-
-    fake_ext_proton = tmp_path / "Proton-GE Latest" / "proton"
-    fake_cached_proton = tmp_path / "unifideck-ge" / "proton"
+    calls = iter([None, half])
     monkeypatch.setattr(
-        external_ge, "find_external_ge_proton",
-        lambda roots=None: (fake_ext_proton, "Proton-GE Latest", "GE-Proton10-34"),
+        ge_installer, "installed_ge_proton_path", lambda tag: next(calls),
     )
+    installed = tmp_path / "fresh" / "proton"
     monkeypatch.setattr(
-        ge_installer, "read_cached_latest_tag",
-        lambda: "GE-Proton11-5",
+        ge_installer, "_download_and_install",
+        lambda tag, url, cb: installed,
     )
-    monkeypatch.setattr(
-        ge_installer, "installed_ge_proton_path",
-        lambda tag: fake_cached_proton,
-    )
-
-    tried = []
-    path, tool = selector._default_latest_ge(tried)
-    assert path == fake_cached_proton
-    assert tool == "GE-Proton11-5"
-    assert "latest-ge-cached:GE-Proton11-5" in tried
+    assert ge_installer.ensure_latest_ge() == (installed, tag)
 
 
-async def test_ge_fallback_recovers_from_external_ge_failure(tmp_path, monkeypatch):
-    """External GE failure must still fall back to bundled GE-Proton (identity check)."""
-    import sys
-    sys.modules.setdefault("aiohttp", MagicMock())
+def test_promote_never_leaves_the_tag_dir_missing(tmp_path, monkeypatch):
+    """Publishing renames aside instead of deleting the live tree."""
+    monkeypatch.setattr(ge_installer, "COMPAT_TOOLS_DIR", tmp_path)
+    tag = "GE-Proton11-6"
+    live = _complete_tree(tmp_path, tag).parent
+    # A file another process is executing out of, by inode.
+    in_use = live / "files" / "bin" / "wine"
+    held = in_use.open("rb")
+    staging = tmp_path / f".{tag}.dl-x"
+    _complete_tree(staging, tag)
+    (staging / tag / "version").write_text("new\n")
 
-    from unifideck.launcher.proton.compat import ge_fallback
-
-    bundled_proton = tmp_path / "bundled-ge" / "proton"
-    monkeypatch.setattr(
-        ge_fallback, "_resolve_ge_proton",
-        lambda: (bundled_proton, "GE-Proton11-5"),
-    )
-    run_createprefix = AsyncMock(return_value=True)
-    monkeypatch.setattr(
-        "unifideck.launcher.proton.compat.prefix_init._run_createprefix_with_retry",
-        run_createprefix,
-    )
-    monkeypatch.setattr(
-        "unifideck.launcher.proton.compat.save_migration.restore_or_migrate_saves",
-        AsyncMock(),
-    )
-    monkeypatch.setattr(
-        "unifideck.compatibility.proton_helpers.save_proton_setting",
-        MagicMock(),
-    )
-    monkeypatch.setattr(
-        "unifideck.launcher.frontend_bridge.launcher_toast",
-        MagicMock(),
-    )
-
-    plan = MagicMock()
-    plan.state.proton_tool_id = "Proton-GE Latest"
-    plan.state.proton_path = tmp_path / "external-ge" / "proton"
-    plan.context.store = "epic"
-    plan.context.game_id = "1"
-    plan.context.game_key = "epic:1"
-    plan.python_bin = Path("/usr/bin/python3")
-    plan.on_process_start = None
-
-    prefix_root = tmp_path / "prefix"
-    prefix_root.mkdir(parents=True)
-
-    await ge_fallback.fallback_to_ge_proton(plan, prefix_root)
-    run_createprefix.assert_awaited_once()
+    try:
+        final = ge_installer._promote_extracted(staging, tag)
+        assert final == tmp_path / tag / "proton"
+        assert (tmp_path / tag / "version").read_text() == "new\n"
+        # The old inode survived the swap — a live umu-run keeps reading it.
+        assert held.read() == b"#!/bin/sh\n"
+        # No aside copies left behind.
+        assert not list(tmp_path.glob(f".{tag}.old-*"))
+    finally:
+        held.close()
 
 
-async def test_proton_service_external_ge_outdated_emits_toast(monkeypatch):
-    from unifideck.launcher.proton.infrastructure import external_ge
-    from unifideck.services.proton_service import ProtonService
+def test_promote_rolls_back_when_the_swap_fails(tmp_path, monkeypatch):
+    """A failed publish restores the live tree rather than leaving nothing."""
+    monkeypatch.setattr(ge_installer, "COMPAT_TOOLS_DIR", tmp_path)
+    tag = "GE-Proton11-6"
+    _complete_tree(tmp_path, tag)
+    staging = tmp_path / f".{tag}.dl-x"
+    _complete_tree(staging, tag)
 
-    fake_proton = Path("/fake/Proton-GE Latest/proton")
-    monkeypatch.setattr(
-        external_ge, "find_external_ge_proton",
-        lambda roots=None: (fake_proton, "Proton-GE Latest", "GE-Proton10-34"),
-    )
-    monkeypatch.setattr(
-        ge_installer, "get_latest_ge_tag",
-        lambda timeout=8.0: "GE-Proton11-5",
-    )
-    monkeypatch.setattr(
-        ge_installer, "is_valid_ge_install",
-        lambda tag: True,
-    )
+    real_rename = Path.rename
+    state = {"n": 0}
 
-    svc = ProtonService(MagicMock())
-    svc._emit_proton_toast = AsyncMock()
+    def flaky(self, target):
+        state["n"] += 1
+        if state["n"] == 2:  # the staged -> dest half
+            raise OSError("EXDEV")
+        return real_rename(self, target)
 
-    await svc._ensure_latest_ge()
-
-    # Outdated toast must be emitted with the new version
-    svc._emit_proton_toast.assert_awaited_once_with(
-        "toasts.launcher.externalProtonOutdatedTitle",
-        "toasts.launcher.externalProtonOutdatedBody",
-        "GE-Proton11-5",
-    )
-
-
-async def test_proton_service_external_ge_up_to_date_silent(monkeypatch):
-    from unifideck.launcher.proton.infrastructure import external_ge
-    from unifideck.services.proton_service import ProtonService
-
-    fake_proton = Path("/fake/Proton-GE Latest/proton")
-    monkeypatch.setattr(
-        external_ge, "find_external_ge_proton",
-        lambda roots=None: (fake_proton, "Proton-GE Latest", "GE-Proton11-5"),
-    )
-    monkeypatch.setattr(
-        ge_installer, "get_latest_ge_tag",
-        lambda timeout=8.0: "GE-Proton11-5",
-    )
-    monkeypatch.setattr(
-        ge_installer, "is_valid_ge_install",
-        lambda tag: True,
-    )
-
-    svc = ProtonService(MagicMock())
-    svc._emit_proton_toast = AsyncMock()
-
-    await svc._ensure_latest_ge()
-
-    # Up to date: no toast emitted
-    svc._emit_proton_toast.assert_not_awaited()
-
-
-async def test_proton_service_external_ge_fresh_enough_skips_download(monkeypatch):
-    """When external GE has a small minor lag (<=5), toast is emitted but download is skipped."""
-    from unifideck.launcher.proton.infrastructure import external_ge
-    from unifideck.services.proton_service import ProtonService
-
-    fake_proton = Path("/fake/Proton-GE Latest/proton")
-    monkeypatch.setattr(
-        external_ge, "find_external_ge_proton",
-        lambda roots=None: (fake_proton, "Proton-GE Latest", "GE-Proton11-3"),
-    )
-    monkeypatch.setattr(
-        ge_installer, "get_latest_ge_tag",
-        lambda timeout=8.0: "GE-Proton11-5",
-    )
-    is_valid_mock = MagicMock()
-    monkeypatch.setattr(ge_installer, "is_valid_ge_install", is_valid_mock)
-    ensure_mock = MagicMock()
-    monkeypatch.setattr(ge_installer, "ensure_latest_ge", ensure_mock)
-
-    svc = ProtonService(MagicMock())
-    svc._emit_proton_toast = AsyncMock()
-
-    await svc._ensure_latest_ge()
-
-    # Outdated toast should still be emitted to notify user
-    svc._emit_proton_toast.assert_awaited_once_with(
-        "toasts.launcher.externalProtonOutdatedTitle",
-        "toasts.launcher.externalProtonOutdatedBody",
-        "GE-Proton11-5",
-    )
-    # But because it is sufficiently fresh (lag=2 <= 5), download check and execution are skipped
-    is_valid_mock.assert_not_called()
-    ensure_mock.assert_not_called()
-
-
-async def test_proton_service_external_ge_severely_outdated_triggers_download(monkeypatch):
-    """When external GE has a major lag, download proceeds to establish a modern recovery floor."""
-    from unifideck.launcher.proton.infrastructure import external_ge
-    from unifideck.services.proton_service import ProtonService
-
-    fake_proton = Path("/fake/Proton-GE Latest/proton")
-    fake_downloaded = Path("/fake/GE-Proton11-5/proton")
-    monkeypatch.setattr(
-        external_ge, "find_external_ge_proton",
-        lambda roots=None: (fake_proton, "Proton-GE Latest", "GE-Proton10-34"),
-    )
-    monkeypatch.setattr(
-        ge_installer, "get_latest_ge_tag",
-        lambda timeout=8.0: "GE-Proton11-5",
-    )
-    monkeypatch.setattr(
-        ge_installer, "is_valid_ge_install",
-        lambda tag: False,
-    )
-    ensure_mock = MagicMock(return_value=(fake_downloaded, "GE-Proton11-5"))
-    monkeypatch.setattr(ge_installer, "ensure_latest_ge", ensure_mock)
-
-    svc = ProtonService(MagicMock())
-    svc._emit_proton_toast = AsyncMock()
-
-    await svc._ensure_latest_ge()
-
-    # Must call ensure_latest_ge because major version differs (10 vs 11)
-    ensure_mock.assert_called_once()
-    toast_keys = [call.args[0] for call in svc._emit_proton_toast.await_args_list]
-    assert "toasts.launcher.externalProtonOutdatedTitle" in toast_keys
-    assert "toasts.launcher.installingProton" in toast_keys
-    assert "toasts.launcher.protonReadyTitle" in toast_keys
+    monkeypatch.setattr(Path, "rename", flaky)
+    assert ge_installer._promote_extracted(staging, tag) is None
+    monkeypatch.undo()
+    assert (tmp_path / tag / "proton").is_file()

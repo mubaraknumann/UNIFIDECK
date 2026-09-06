@@ -249,6 +249,8 @@
     "ubisoftLauncherAlreadyOpenMessage": "Ubisoft Connect مفتوح بالفعل لهذا التثبيت.",
     "ubisoftLauncherOpenFailed": "فشل فتح Ubisoft Connect",
     "ubisoftLauncherOpenFailedMessage": "فشل تشغيل Ubisoft Connect للتثبيت.",
+    "ubisoftSignInExpired": "انتهت صلاحية تسجيل الدخول إلى Ubisoft",
+    "ubisoftSignInExpiredMessage": "لم يعد تسجيل الدخول المحفوظ إلى Ubisoft مقبولاً. سجّل الخروج ثم الدخول مرة أخرى من إعدادات Unifideck لإعادة الاتصال.",
     "multipartDetected": "تم اكتشاف تنزيل متعدد الأجزاء",
     "multipartMessage": "يرجى الانتظار لحين اكتمال العملية",
     "downloadFailed": "فشل التنزيل",

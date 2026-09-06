@@ -249,6 +249,8 @@
     "ubisoftLauncherAlreadyOpenMessage": "이 설치 대상에 대해 이미 Ubisoft Connect가 열려 있습니다.",
     "ubisoftLauncherOpenFailed": "Ubisoft Connect를 열지 못했습니다",
     "ubisoftLauncherOpenFailedMessage": "설치를 위한 Ubisoft Connect 실행에 실패했습니다.",
+    "ubisoftSignInExpired": "Ubisoft 로그인이 만료되었습니다",
+    "ubisoftSignInExpiredMessage": "저장된 Ubisoft 로그인 정보가 더 이상 사용되지 않습니다. Unifideck 설정에서 로그아웃한 뒤 다시 로그인하여 연결하세요.",
     "multipartDetected": "분할 다운로드 감지됨",
     "multipartMessage": "완료될 때까지 잠시 기다려 주세요",
     "downloadFailed": "다운로드 실패",

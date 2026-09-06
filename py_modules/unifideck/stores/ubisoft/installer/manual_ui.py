@@ -206,17 +206,20 @@ class _ManualUiInstaller:
             )
         if self._launch_id_ok(game_id):
             return
+        source = "registry"
         reg_id = self._id_map.extract_game_id_from_registry(prefix_path)
         if not reg_id and game_name:
+            source = "name_db"
             with contextlib.suppress(Exception):
                 reg_id = await self._id_map.lookup_game_id_by_name(game_name)
         if reg_id:
-            self._id_map.merge_entry(
+            self._id_map.set_connect_id(
                 game_id,
+                reg_id,
+                source,
                 {
                     "install_id": reg_id,
                     "launch_id": reg_id,
-                    "ubisoftconnect_game_id": reg_id,
                     "name": game_name or "",
                 },
             )

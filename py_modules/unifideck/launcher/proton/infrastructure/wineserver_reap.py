@@ -38,12 +38,10 @@ install stalled inside a minute. See ``handlers/battlenet.py`` and
 """
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 import os
 import signal
-import subprocess
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -209,37 +207,3 @@ def reap_prefix_wineserver_by_name(server_name: str) -> int:
             killed, server_name,
         )
     return killed
-
-
-async def kill_wineserver(
-    wine_bin: Path, wineprefix: Path, *, context: str,
-) -> None:
-    """Ask a prefix's wineserver to shut down, politely and best-effort.
-
-    ``wineserver --kill`` against ``WINEPREFIX``, bounded at 10s. Every
-    failure mode is suppressed: this runs to *clean up* before another
-    operation, so it must never be the reason that operation fails.
-
-    Distinct from :func:`reap_prefix_wineserver`, which is the forceful path
-    — it signals by PID when the server has already detached and no wine
-    binary is at hand. This one has a wine binary and asks nicely first.
-
-    *context* only labels the log line. It is the sole thing that differed
-    between the two byte-identical copies of this function that lived in
-    ``proton/fixes/epic_prefix_fix.py`` and ``proton/fixes/epic_registry.py``
-    (audit register item 47).
-    """
-    wineserver = wine_bin.parent / "wineserver"
-    if not wineserver.is_file():
-        return
-    env = dict(os.environ)
-    env["WINEPREFIX"] = str(wineprefix)
-    with contextlib.suppress(TimeoutError, OSError, subprocess.SubprocessError):
-        proc = await asyncio.create_subprocess_exec(
-            str(wineserver), "--kill",
-            env=env,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await asyncio.wait_for(proc.wait(), timeout=10)
-        logger.info("[%s] killed stale wineserver", context)
