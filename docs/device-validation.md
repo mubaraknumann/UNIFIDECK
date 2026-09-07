@@ -569,3 +569,149 @@ sudo systemctl unset-environment UNIFIDECK_DEVICE_TYPE && sudo systemctl restart
 | 8. **DV-SM8** | Set `=other`, restart | Tab reads "SteamOS Compatible"; badges use the SteamOS wording (`COMPATIBLE`, not `PLAYABLE`) |
 | 9. **DV-SM9** | Sync once on a warm cache and watch the log | The schema-2 self-heal re-fetches each cached title **once**; a second sync re-fetches nothing |
 | 10. **DV-SM10** | Launch an xCloud title on an external display | The kiosk fills the display instead of a 1024x720 letterbox at 1.25 scale |
+
+## DV-PX — externally managed GE-Proton (PR #448, register 53-60)
+
+PR #448 changed tier-5 Proton selection, the GE download policy and the
+`ge_fallback` recovery guard: launch-path behaviour for every non-Steam game.
+**This Deck has no external Proton manager installed**, so the new path is
+dormant here and cannot be reached by running the plugin. Every step below
+synthesizes one.
+
+**The trick that makes Tier 2 safe:** the synthetic external tool is a
+*symlink to `GE-Proton11-6`*, the build already in use. Adopting it changes
+only the `tool_id` the launcher reports, never the Proton binary behind it,
+which isolates the identity plumbing from any risk of running a broken Proton.
+The "older external" case symlinks `GE-Proton11-3` and must be *rejected*, so
+the effective default stays `11-6` either way.
+
+Baseline captured 2026-09-07 before any change: marker
+`{"tag": "GE-Proton11-6"}`; GE builds on disk `11-1`, `11-3`, `11-5`, `11-6`,
+`UMU-Proton-9.0-4e`; no alias directory and no alias `display_name` anywhere.
+Restoring that is the exit criterion.
+
+### Tier 1 — synthetic roots, nothing in `~/.steam` touched
+
+Run in-process against fixture roots, stubbing only the cached-GE readers.
+No launches, no restarts, no writes outside the scratchpad. **Run 2026-09-07
+against `7a66940` + the register-53 ruff fix.**
+
+| ID | Step | Expected | Status | Evidence |
+|---|---|---|---|---|
+| DV-PX1 | No external tool present | `find_external_ge_proton()` is `None`; selector returns cached | (x) | Fixture run: `found=None tool=GE-Proton11-6`. **Re-confirmed on the deployed build against the real compat dirs**, before and after the Tier 2 symlink: `find_external_ge_proton -> None`, `tried=['latest-ge-cached:GE-Proton11-6']`, and the live log shows `[ProtonService] latest GE-Proton already installed: GE-Proton11-6` with zero external-GE lines. The case that covers every user without an external manager. |
+| DV-PX2 | Directory literally named `Proton-GE Latest`, ver `11-6` | Detected and adopted | (x) | `found=yes ver=GE-Proton11-6 tool=Proton-GE Latest` |
+| DV-PX3 | Dir `GE-Proton-custom`, manifest `display_name "Proton-GE Latest"` | Detected via display name | (x) | `id=Proton-GE Latest tool=Proton-GE Latest`. The `iter_compat_tools` rewrite works; still no evidence this is ProtonPlus's real shape. |
+| DV-PX4 | External `11-3`, cached `11-6` | Cached wins | (x) | `tool=GE-Proton11-6` — no silent downgrade |
+| DV-PX5 | External `11-6`, cached `11-3` | External wins | (x) | `tool=Proton-GE Latest` |
+| DV-PX6 | External `version` unparseable, cached newer | Cached should win | (x) | Was FAIL. **Fixed and re-run 2026-09-07** against all five version shapes: unparseable (`CachyOS-11.0-100`), timestamp-only (`1724000000`), older, equal and newer GE — verdicts `GE-Proton11-6`, `GE-Proton11-6`, `GE-Proton11-6`, `Proton-GE Latest`, `Proton-GE Latest`. A *blank* version is not a trigger (`is_proton_install_complete` rejects it first). Register 54. |
+| DV-PX7 | External incomplete (`proton` not executable) | Not detected; cached returned | (x) | `found=no tool=GE-Proton11-6` |
+| DV-PX8 | Three roots symlinked to one directory | Enumerated once | (x) | Was FAIL (`roots_returned=3 unique_realpaths=1`). **Fixed 2026-09-07**: `vdf_compat.compat_tool_roots()` dedupes by real path — live roots now 3 instead of 5, `iter_compat_tools` **1.10 ms/call** against 3.0 ms. Register 57. |
+| DV-PX9 | Cost of the new per-launch enumeration | Record ms | (x) | `iter_compat_tools` over the live 5 roots: **3.0 ms/call**, 7 names, stable over 3 trials. After realpath dedup (3 roots): **0.98 ms/call**. On the deployed build with a real external tool present, `_default_latest_ge` measured **4.31 ms/call**, against 0.06 ms for the pre-feature cached fast path. |
+
+### Tier 2 — real adoption and launch (**ask before running**)
+
+Adds one symlink to `~/.steam/root/compatibilitytools.d/`, so Steam lists a new
+compat tool and Unifideck adopts it as the default for non-Steam games.
+Additive and reversible; nothing existing is modified or deleted.
+
+```bash
+ln -s ~/.steam/root/compatibilitytools.d/GE-Proton11-6 \
+      "$HOME/.steam/root/compatibilitytools.d/Proton-GE Latest"
+```
+
+| ID | Step | Expected | Status | Evidence |
+|---|---|---|---|---|
+| DV-PX10 | Launch a game with an existing prefix | Log: `selected externally managed GE-Proton: Proton-GE Latest` | (partial) | **Selection half PASS** 2026-09-07 on the deployed build with a real `Proton-GE Latest` symlink: `find_external_ge_proton` returned `('.../Proton-GE Latest/proton', 'Proton-GE Latest', 'GE-Proton11-6')`, `tried=['external-ge:Proton-GE Latest']`, path resolving to the real `GE-Proton11-6/proton`. The launch half still needs a real game. |
+| DV-PX11 | Prefix marker after DV-PX10 | `.unifideck_proton_version` flips to `Proton-GE Latest`; **no wipe**, one `protonSwitchedTo` | (x) | **No-wipe PASS, proven without launching.** `_proton_family` maps both `GE-Proton11-6` and `Proton-GE Latest` to `ge-proton` in **both** directions, so `_should_reset_for_proton` sees no family change. This was the release-blocking risk; it is cleared. |
+| DV-PX12 | Relaunch the same game | No further toast, no reset | ( ) | |
+| DV-PX13 | Launch a game with **no** prefix | `createprefix` succeeds under the external tool | ( ) | |
+| DV-PX14 | `chmod -x` the real `11-6/proton`, launch a prefix-less game | Log reaches `falling back to bundled GE-Proton`, **not** `already on fallback` | (x) unit / ( ) device | **Fixed 2026-09-07** via `ge_fallback._same_proton`, which compares `Path.resolve()`; covered by `test_fallback_skipped_when_alias_resolves_to_the_bundled_ge` and `test_same_proton_resolves_alias_symlinks`. A real prefix-less launch still needs running. Originally: the guard compared **unresolved** paths. With the alias symlinked to `GE-Proton11-6`: `'Proton-GE Latest' != 'GE-Proton11-6'` and `ext/proton != ge/proton` as `Path`s, though `.resolve()` proves they are the same file. So the guard does not fire and the fallback retries the identical physical Proton that just failed. Register 61. |
+| DV-PX15 | Repoint the symlink at `11-3`, restart | Reverts to cached `11-6` | (x) | **PASS** on real roots: external detected as `GE-Proton11-3`, selector returned `GE-Proton11-6` via `tried=['latest-ge-cached:GE-Proton11-6']`. No downgrade. No restart was needed — the launcher is out-of-process and re-resolves per launch. |
+| DV-PX16 | Restart `plugin_loader` ×3 while outdated | One toast, not three | ( ) | **Fixed in-tree 2026-09-07**: warn-once marker (`external_warned_tag`/`external_warned_from`), and the toast now fires only when `choose_ge` says the external tool is the one we launch with. Unit-covered by three tests; still needs the three real restarts. Register 55. |
+| DV-PX17 | Force-Compat a Proton on one game in Steam | Tier 1 still beats the external default | ( ) | |
+
+Teardown, then re-run DV-PX1 and confirm the baseline:
+```bash
+chmod +x ~/.steam/root/compatibilitytools.d/GE-Proton11-6/proton   # if DV-PX14 ran
+rm "$HOME/.steam/root/compatibilitytools.d/Proton-GE Latest"        # symlink only
+```
+
+**Not doing without a separate decision:** installing ProtonPlus for real. It
+would settle DV-PX3's premise definitively, but it is a third-party Flatpak
+that would manage Proton on this machine and clean removal is not guaranteed.
+That belongs on a throwaway install.
+
+### Tier 2 status after the 2026-09-07 run
+
+Run on the deployed `0.7.5.g730a06c` build with a real `Proton-GE Latest`
+symlink in `~/.steam/root/compatibilitytools.d`, pointing first at
+`GE-Proton11-6` then at `GE-Proton11-3`. **Teardown verified**: symlink
+removed, `compatibilitytools.d` back to its five original entries, marker
+still `{"tag": "GE-Proton11-6"}`, and no prefix was written because no game
+was launched.
+
+Everything reachable without launching a game or restarting `plugin_loader`
+has been run: DV-PX10 (selection half), DV-PX11, DV-PX14, DV-PX15. Still
+outstanding and needing a human at the device:
+
+- **DV-PX12, DV-PX13, DV-PX17** and the launch half of **DV-PX10** — need real
+  game launches through Steam.
+- **DV-PX16** — needs three `plugin_loader` restarts; this Deck has no
+  passwordless sudo.
+
+
+### Status after the 2026-09-07 fix pass
+
+Register 54-61 fixed in-tree. Tier 1 re-run: **DV-PX6 and DV-PX8 now pass**, the
+other seven still pass, full suite 3651 passed / 0 failed / 0 skipped, and every
+gate is green (ruff, mypy 593 files, all 12 architecture checks, config keys,
+event schemas, i18n both directions, all five volumetry gates).
+
+Two fixes are unit-covered but not yet device-proven, and one is new work that
+has never run on hardware:
+
+- **DV-PX14** — the resolve-symlinks fallback guard.
+- **DV-PX16** — the warn-once toast marker (needs three `plugin_loader`
+  restarts; no passwordless sudo here).
+- **DV-PX10, 12, 13, 17** — real game launches through Steam.
+- The spawn-time Proton revalidation (register 60) has no DV-PX row because it
+  cannot be triggered without a launch; add one when Tier 2 is run.
+
+
+### End-to-end launches through the Steam UI — 2026-09-07
+
+Run against the deployed build with `steam-debug`, driving Steam's own
+`SteamClient.Apps.RunGame`. Game: **Ashworld** (GOG, `gog:1485834662`,
+shortcut appid `2785030007`, gameid `11961612798477205504`).
+
+**Two things had to be discovered before any of this worked, and both are worth
+knowing:**
+
+1. `RunGame` takes the shortcut's **gameid** (`11961612798477205504`), not the
+   appid. Passing the appid returns cleanly and launches nothing.
+2. **Tier 4 masks tier 5 on this device.** Steam's global default
+   (`CompatToolMapping["0"]`) is `proton_experimental`, so
+   `select_proton_version` never reaches `_default_latest_ge` for a game
+   launch. The external-GE tier is reached only through
+   `select_managed_ge_proton()`, which `prefix_setup` calls because an
+   official Valve Proton cannot run umu's winetricks verb. Any user with a
+   global default set is in the same position.
+
+| ID | Step | Result | Evidence |
+|---|---|---|---|
+| DV-PX13 | Fresh prefix, real launch | (x) | Prefix built at `prefixes/1485834662`, winetricks ran, umu spawned `ashworld.exe` under `Proton - Experimental` / `steamrt4`, `ntsync: up and running`. Steam reported `display_status: 4`. User confirmed the game ran. |
+| DV-PX10 | External GE adopted at launch | (x) | `[launcher.proton] selected externally managed GE-Proton: Proton-GE Latest (GE-Proton11-6)`, then `[prefix_setup] ... using managed GE-Proton Proton-GE Latest for gog:1485834662's redistributables`. |
+| DV-PX11 | No prefix wipe on adoption | (x) | Marker moved `GE-Proton11-6` → `Proton-GE Latest` with **zero** `Resetting Proton` lines. |
+| DV-PX15 | Reverts when the external tool goes | (x) | With the symlink removed: `selected cached latest GE-Proton: GE-Proton11-6`, and `[prefix_init] minor Proton change Proton-GE Latest -> GE-Proton11-6; keeping prefix` — the no-wipe guarantee proven in **both** directions. |
+| register 60 | Spawn-time Proton revalidation | (x) | Zero `incomplete or corrupt` / `ProtonUnavailable` across four real launches covering Proton Experimental, GE-Proton11-6 and the `Proton-GE Latest` alias. No false positives on the hot path. |
+| — | Container escape still intact | (x) | `umu-launcher version 1.4.4 (3.13.5 (main, Jun 21 2025, 09:35:00) [GCC 15.1.1 ...])` — the **host** Python build string, not steamrt's. |
+
+Across all four launches: no `Traceback`, no `already on fallback`, no
+`Resetting Proton`, no health-check rejection. Device restored — symlink
+removed, `compatibilitytools.d` back to its five entries, GE marker unchanged
+at `GE-Proton11-6`, prefix marker re-stamped to `GE-Proton11-6`, winetricks
+marker regenerated by the plugin itself, and no stray `proton_settings.json`
+pin.
+
+**Still not covered end to end:** DV-PX16 (three `plugin_loader` restarts; no
+passwordless sudo) and DV-PX12/DV-PX17.

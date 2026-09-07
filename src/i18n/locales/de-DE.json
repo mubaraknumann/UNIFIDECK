@@ -343,7 +343,7 @@
       "installingUbisoftMessage": "Ubisoft Connect wird geöffnet – starte die Installation im Launcher-Fenster.",
       "protonReadyBody": "{{version}} ist einsatzbereit",
       "externalProtonOutdatedTitle": "GE-Proton-Update verfügbar",
-      "externalProtonOutdatedBody": "Die neueste Version {{version}} ist verfügbar. Bitte aktualisieren Sie über Ihren externen Manager.",
+      "externalProtonOutdatedBody": "Die neueste Version {{version}} ist verfügbar. Aktualisiere sie über deinen externen Manager.",
       "protonReadyTitle": "Proton bereit",
       "protonSwitchedTo": "{{version}} wird jetzt verwendet",
       "ubisoftPrefixNotReady": "Ubisoft Connect ist nicht bereit",

@@ -11,7 +11,7 @@ from unifideck.launcher.types.errors import (
 )
 from unifideck.utils import vdf_compat
 
-from . import external_ge, ge_installer
+from . import external_ge, ge_installer, ge_marker
 
 logger = logging.getLogger(__name__)
 # Interpreters tried (in order) to run the umu zipapp. umu needs Python
@@ -57,35 +57,24 @@ def find_python_3_10_plus() -> Path:
         context={"tried": PYTHON_CANDIDATES},
     )
 
-# ``~/.steam/root`` is a symlink Steam creates to the active install; on most
-# distros it points at ``~/.local/share/Steam``. We also list ``~/.steam/steam``
-# explicitly so Proton still resolves if that symlink is absent (fresh install,
-# unusual setup) — it costs nothing when the dirs don't exist.
-STEAM_COMPAT_ROOTS: list[str] = [
-    "~/.steam/root/compatibilitytools.d",
-    "~/.steam/steam/compatibilitytools.d",
-    "~/.local/share/Steam/compatibilitytools.d",
-]
+# Compat-tool roots live in ``vdf_compat`` — see ``compat_tool_roots()``.
+# Deliberately not re-exported here: a module attribute that mirrors the
+# real one reads as patchable but no longer feeds anything, which is a
+# worse trap than not having it.
 STEAM_LIBRARY_ROOTS: list[str] = [
     "~/.steam/root/steamapps/common",
     "~/.steam/steam/steamapps/common",
     "~/.local/share/Steam/steamapps/common",
 ]
-UNIFIDECK_COMPAT_DIR = "~/.local/share/unifideck/compat-tools"
 def _compat_tool_roots() -> list[Path]:
     """Every ``compatibilitytools.d`` root to search, in priority order.
 
-    unifideck-managed dir first, then the user Steam compat dirs, then the
-    system-wide dirs distro packages install into but Steam never lists
-    (CachyOS ``proton-cachyos`` → ``/usr/share/steam/compatibilitytools.d``,
-    Arch ``proton-ge-custom``). The pre-0.7.1 resolver scanned only the
-    three user dirs, so a system-wide / manifest-registered tool the user
-    force-selected was unresolvable and silently fell back to GE-latest.
+    Thin alias for ``vdf_compat.compat_tool_roots()``, which owns the list
+    and deduplicates it by real path. Resolution by *name* searches
+    everything, including Unifideck's own compat dir; external *discovery*
+    excludes that dir (see ``external_ge.get_external_compat_roots``).
     """
-    roots = [Path(UNIFIDECK_COMPAT_DIR).expanduser()]
-    roots += [Path(r).expanduser() for r in STEAM_COMPAT_ROOTS]
-    roots += [Path(r) for r in vdf_compat.SYSTEM_COMPAT_DIRS]
-    return roots
+    return vdf_compat.compat_tool_roots()
 
 
 def _discovered_library_commons() -> list[Path]:
@@ -432,32 +421,23 @@ def _default_latest_ge(tried: list[str]) -> tuple[Path, str]:
        older local GE versions stay user-selectable via Force Compat).
     """
     external = external_ge.find_external_ge_proton()
-    cached = ge_installer.read_cached_latest_tag()
+    cached = ge_marker.read_cached_latest_tag()
     cached_path = ge_installer.installed_ge_proton_path(cached) if cached else None
 
-    if external:
-        ext_path, ext_id, ext_ver = external
-        if cached and cached_path and ext_ver and external_ge.is_ge_outdated(ext_ver, cached):
+    choice = external_ge.choose_ge(external, cached, cached_path)
+    if choice is not None:
+        if choice.is_external:
+            tried.append(f"external-ge:{choice.tool_id}")
             logger.info(
-                "[launcher.proton] external GE (%s) is older than cached Unifideck GE (%s); "
-                "preferring Unifideck GE",
-                ext_ver, cached,
+                "[launcher.proton] selected externally managed GE-Proton: %s (%s)",
+                choice.tool_id, choice.version or "unknown",
             )
-            tried.append(f"latest-ge-cached:{cached}")
-            return cached_path, cached
-        tried.append(f"external-ge:{ext_id}")
-        logger.info(
-            "[launcher.proton] selected externally managed GE-Proton: %s (%s)",
-            ext_id, ext_ver or "unknown",
-        )
-        return ext_path, ext_id
-
-    if cached and cached_path:
-        tried.append(f"latest-ge-cached:{cached}")
-        logger.info(
-            "[launcher.proton] selected cached latest GE-Proton: %s", cached,
-        )
-        return cached_path, cached
+        else:
+            tried.append(f"latest-ge-cached:{choice.tool_id}")
+            logger.info(
+                "[launcher.proton] selected cached latest GE-Proton: %s", choice.tool_id,
+            )
+        return choice.path, choice.tool_id
 
     # On-demand download at launch time — the background installer
     # hasn't finished (or never ran). This is otherwise silent, leaving

@@ -38,6 +38,10 @@ from typing import Any
 from unifideck.launcher.proton.infrastructure.ge_install_lock import (
     install_lock,
 )
+from unifideck.launcher.proton.infrastructure.ge_marker import (
+    write_latest_tag as _write_marker,
+)
+from unifideck.utils import vdf_compat
 
 logger = logging.getLogger(__name__)
 
@@ -65,17 +69,13 @@ def _ssl_ctx() -> ssl.SSLContext:
 
 # Install target — the primary root the selector scans first.
 COMPAT_TOOLS_DIR = Path("~/.steam/root/compatibilitytools.d").expanduser()
-# Roots scanned to decide whether a tag is already installed. Mirrors
-# ``selector.STEAM_COMPAT_ROOTS`` (kept local to avoid a circular
-# import — selector imports this module, not the other way round).
-_SCAN_ROOTS: tuple[str, ...] = (
-    "~/.steam/root/compatibilitytools.d",
-    "~/.steam/steam/compatibilitytools.d",
-    "~/.local/share/Steam/compatibilitytools.d",
-)
-# Records the tag the background installer last validated, so the
-# launcher can resolve the default without a network round-trip.
-_MARKER = Path("~/.local/share/unifideck/proton_ge_latest.json").expanduser()
+# Roots scanned to decide whether a tag is already installed. Sourced from
+# ``vdf_compat`` — the one definition of where compat tools live — rather
+# than a local copy; ``vdf_compat`` is stdlib-only and launcher-safe, so it
+# imports cleanly here and there is no cycle (selector imports this module,
+# not the other way round). Excludes the unifideck compat dir: this answers
+# "is this *GE tag* installed", and GE lands in ``COMPAT_TOOLS_DIR``.
+_SCAN_ROOTS: tuple[str, ...] = vdf_compat.STEAM_COMPAT_ROOTS
 
 ProgressCb = Callable[[int, int], None]
 
@@ -230,27 +230,6 @@ def is_proton_install_complete(proton_script: Path) -> bool:
         )
         return False
     return True
-
-
-def read_cached_latest_tag() -> str | None:
-    """Return the tag the background installer last validated, if any."""
-    if not _MARKER.is_file():
-        return None
-    try:
-        data = json.loads(_MARKER.read_text())
-    except (OSError, ValueError):
-        return None
-    tag = data.get("tag")
-    return tag or None
-
-
-def _write_marker(tag: str) -> None:
-    """Record ``tag`` as the validated latest GE-Proton (best effort)."""
-    try:
-        _MARKER.parent.mkdir(parents=True, exist_ok=True)
-        _MARKER.write_text(json.dumps({"tag": tag, "installed_at": time.time()}))
-    except OSError as e:
-        logger.warning("[ge_installer] could not write marker: %s", e)
 
 
 def _select_tarball(assets: list[dict[str, Any]], tag: str | None = None) -> str | None:

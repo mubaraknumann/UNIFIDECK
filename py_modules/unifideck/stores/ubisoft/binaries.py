@@ -150,9 +150,9 @@ class UbisoftBinaryResolver:
         directory. Getting that wrong hands umu a path it cannot use.
         """
         try:
-            from unifideck.launcher.proton.infrastructure import ge_installer
+            from unifideck.launcher.proton.infrastructure import ge_installer, ge_marker
 
-            tag = ge_installer.read_cached_latest_tag()
+            tag = ge_marker.read_cached_latest_tag()
             script = ge_installer.installed_ge_proton_path(tag) if tag else None
         except Exception:
             logger.debug(

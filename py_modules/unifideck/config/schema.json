@@ -5,7 +5,11 @@
   "description": "JSON Schema for defaults/config.json and user overrides. Strict mode (additionalProperties: false) everywhere to catch typos in key names. Covers all 27 top-level sections (paths, cache_ttl, sync, dedup, download, cli_timeouts, stores, metadata, artwork, cdp, accounts, cloud, steam, logs, circuit_breaker, disk_space, compat, auth, discovery, ui, probes, proton, binary_resolver, i18n, security \u2014 the 25 content sections plus _comment and _comments). To add a new config key, add it both to the backend code AND to this schema \u2014 the validator will reject unknown keys at boot.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["paths", "stores", "dedup"],
+  "required": [
+    "paths",
+    "stores",
+    "dedup"
+  ],
   "properties": {
     "_comment": {
       "type": "string",
@@ -18,7 +22,10 @@
     "paths": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["data_dir", "cache_dir"],
+      "required": [
+        "data_dir",
+        "cache_dir"
+      ],
       "properties": {
         "data_dir": {
           "$ref": "#/$defs/nonEmptyString"
@@ -70,7 +77,9 @@
     "dedup": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["tracked_stores"],
+      "required": [
+        "tracked_stores"
+      ],
       "description": "Cross-store + Steam-native deduplication settings.",
       "properties": {
         "_comment": {
@@ -130,7 +139,13 @@
     "stores": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["gog", "epic", "amazon", "ubisoft", "microsoft"],
+      "required": [
+        "gog",
+        "epic",
+        "amazon",
+        "ubisoft",
+        "microsoft"
+      ],
       "properties": {
         "gog": {
           "$ref": "#/$defs/gogStore"
@@ -394,6 +409,17 @@
         },
         "deck_verified_timeout_seconds": {
           "$ref": "#/$defs/positiveInt"
+        },
+        "external_ge": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "off"
+          ],
+          "default": "auto"
+        },
+        "proton_tool": {
+          "type": "string"
         }
       }
     },
@@ -542,7 +568,10 @@
     },
     "cloudFailureBehavior": {
       "type": "string",
-      "enum": ["silent", "toast"],
+      "enum": [
+        "silent",
+        "toast"
+      ],
       "description": "Cloud sync failure UI policy. 'silent' logs only, 'toast' shows a dismissable banner. A blocking 'prompt' mode was rejected \u2014 it would require IPC between the out-of-process launcher and the long-lived plugin."
     },
     "httpsUrl": {
@@ -556,7 +585,12 @@
     "gogStore": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["client_id", "auth_url", "token_url", "token_file"],
+      "required": [
+        "client_id",
+        "auth_url",
+        "token_url",
+        "token_file"
+      ],
       "properties": {
         "client_id": {
           "$ref": "#/$defs/nonEmptyString"
@@ -614,7 +648,10 @@
     "epicStore": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["cli_binary_search_paths", "user_file"],
+      "required": [
+        "cli_binary_search_paths",
+        "user_file"
+      ],
       "properties": {
         "_comment": {
           "type": "string"
@@ -665,7 +702,10 @@
     "amazonStore": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["cli_binary_search_paths", "user_file"],
+      "required": [
+        "cli_binary_search_paths",
+        "user_file"
+      ],
       "properties": {
         "_comment": {
           "type": "string"
@@ -716,7 +756,10 @@
     "ubisoftStore": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["data_dir", "prefixes_dir"],
+      "required": [
+        "data_dir",
+        "prefixes_dir"
+      ],
       "properties": {
         "data_dir": {
           "$ref": "#/$defs/nonEmptyString"
@@ -808,7 +851,12 @@
     "microsoftStore": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["client_id", "token_file", "auth_url", "token_url"],
+      "required": [
+        "client_id",
+        "token_file",
+        "auth_url",
+        "token_url"
+      ],
       "properties": {
         "client_id": {
           "$ref": "#/$defs/nonEmptyString"
@@ -861,7 +909,10 @@
     "battlenetStore": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["data_dir", "prefixes_dir"],
+      "required": [
+        "data_dir",
+        "prefixes_dir"
+      ],
       "properties": {
         "data_dir": {
           "$ref": "#/$defs/nonEmptyString"
