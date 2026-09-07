@@ -11,7 +11,7 @@ from unifideck.launcher.types.errors import (
 )
 from unifideck.utils import vdf_compat
 
-from . import external_ge, ge_installer, ge_marker
+from . import external_ge, ge_installer, ge_marker, proton_config
 
 logger = logging.getLogger(__name__)
 # Interpreters tried (in order) to run the umu zipapp. umu needs Python
@@ -162,18 +162,13 @@ def resolve_proton_path(tool_id: str) -> Path | None:
             return official
     return None
 def get_unifideck_proton_tool() -> str | None:
-    """Get unifideck PROTON tool."""
-    config_path = Path("~/.local/share/unifideck/config.json").expanduser()
-    if not config_path.is_file():
-        return None
-    try:
-        import json
-        with config_path.open() as f:
-            cfg = json.load(f)
-        tool = cfg.get("compat", {}).get("proton_tool", "")
-        return tool or None
-    except (OSError, ValueError):
-        return None
+    """Return ``config.json``'s ``compat.proton_tool``, or ``None``.
+
+    Reads through ``proton_config``, the one owner of that block — this
+    used to keep its own copy of the path and error handling alongside
+    ``external_ge``'s.
+    """
+    return proton_config.compat_setting("proton_tool") or None
 def get_saved_proton_tool(store_game_id: str) -> str | None:
     """Return the per-game Proton tool saved by the frontend.
 

@@ -192,22 +192,6 @@ class ProtonToolsManager:
     def clear_for_app(self, appid: int) -> CompatToolResult:
         """Clear for app."""
         return self.set_for_app(appid, "")
-    def list_known_tools(self) -> list[str]:
-        """List known tools."""
-        tools: list[str] = []
-        steam_root = self._config_vdf_path.parent.parent
-        for sub in ("compatibilitytools.d", "steamapps/common"):
-            d = steam_root / sub
-            if not d.is_dir():
-                continue
-            try:
-                for child in sorted(d.iterdir()):
-                    if child.is_dir():
-                        tools.append(child.name)
-            except OSError:
-                continue
-        return tools
-
     def _read_config_vdf(self) -> str:
 
         """Read config VDF."""

@@ -18,14 +18,12 @@ break directory naming conventions.
 """
 from __future__ import annotations
 
-import json
 import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-from unifideck.launcher.proton.infrastructure import ge_installer
+from unifideck.launcher.proton.infrastructure import ge_installer, proton_config
 from unifideck.utils import vdf_compat
 
 logger = logging.getLogger(__name__)
@@ -41,31 +39,13 @@ EXTERNAL_GE_ALIASES: tuple[str, ...] = (
 #: tools entirely and restores pre-0.7.5 behaviour. Read here rather than at
 #: the call sites so both the selector and ProtonService honour it through
 #: one change.
-_CONFIG_PATH = Path("~/.local/share/unifideck/config.json").expanduser()
 EXTERNAL_GE_AUTO = "auto"
 EXTERNAL_GE_OFF = "off"
 
 
-def _read_compat_section() -> dict[str, Any]:
-    """Return ``config.json``'s ``compat`` block, or ``{}``.
-
-    A guarded raw read, not the config service: this module is imported by
-    the out-of-process launcher running under the *system* interpreter, so
-    it must stay launcher-safe (stdlib only, no aiohttp). Mirrors what
-    ``selector.get_unifideck_proton_tool`` does for ``compat.proton_tool``.
-    """
-    try:
-        with _CONFIG_PATH.open(encoding="utf-8") as f:
-            cfg = json.load(f)
-    except (OSError, ValueError):
-        return {}
-    section = cfg.get("compat")
-    return section if isinstance(section, dict) else {}
-
-
 def external_ge_enabled() -> bool:
     """True unless the user set ``compat.external_ge`` to ``"off"``."""
-    return str(_read_compat_section().get("external_ge", EXTERNAL_GE_AUTO)).lower() != EXTERNAL_GE_OFF
+    return proton_config.compat_setting("external_ge", EXTERNAL_GE_AUTO).lower() != EXTERNAL_GE_OFF
 
 
 def get_external_compat_roots() -> list[Path]:

@@ -52,7 +52,6 @@ validate_i18n  # noqa: B018, F821
 # ── Reached over the RPC bridge, not from Python ─────────────────
 
 # compatibility/proton_helpers.py — called from the Proton picker's RPC mixin.
-list_known_tools  # noqa: B018, F821
 
 # actions/unifideck_uri.py. NOT a proven-live entry: it has no frontend
 # caller either. A deletion candidate, kept only so the report stays quiet

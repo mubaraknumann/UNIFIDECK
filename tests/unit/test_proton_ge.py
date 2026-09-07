@@ -756,8 +756,10 @@ def test_external_ge_opt_out(tmp_path, monkeypatch):
     (alias / "version").write_text("1724000000 GE-Proton11-6\n")
     (alias / "toolmanifest.vdf").write_text('"manifest" { "commandline" "/proton" }')
 
+    from unifideck.launcher.proton.infrastructure import proton_config
+
     cfg = tmp_path / "config.json"
-    monkeypatch.setattr(ext, "_CONFIG_PATH", cfg)
+    monkeypatch.setattr(proton_config, "CONFIG_PATH", cfg)
 
     cfg.write_text(json.dumps({"compat": {"external_ge": "auto"}}))
     assert ext.find_external_ge_proton(roots=[root]) is not None
@@ -1080,3 +1082,48 @@ def test_assert_proton_still_complete_ignores_non_proton_paths(tmp_path):
     # umu resolves some PROTONPATH values itself; no 'proton' script is not
     # our failure to report.
     umu_runtime.assert_proton_still_complete({"PROTONPATH": str(tmp_path)})
+
+
+# ── one owner for the compat config block (register 63) ──
+
+def test_compat_config_has_a_single_reader(tmp_path, monkeypatch):
+    """``proton_config`` is the only place that reads ``compat`` off disk.
+
+    ``selector.get_unifideck_proton_tool`` and ``external_ge`` each used to
+    keep their own hardcoded path and their own ``except (OSError,
+    ValueError)`` for the same block — two copies of one fact, which is how
+    the path in one drifts from the path in the other.
+    """
+    from unifideck.launcher.proton.infrastructure import external_ge as ext
+    from unifideck.launcher.proton.infrastructure import proton_config
+
+    cfg = tmp_path / "config.json"
+    monkeypatch.setattr(proton_config, "CONFIG_PATH", cfg)
+
+    # Patching the one owner must steer BOTH readers.
+    cfg.write_text(json.dumps({"compat": {
+        "proton_tool": "GE-Proton11-3", "external_ge": "off",
+    }}))
+    assert selector.get_unifideck_proton_tool() == "GE-Proton11-3"
+    assert ext.external_ge_enabled() is False
+
+    cfg.write_text(json.dumps({"compat": {"external_ge": "auto"}}))
+    assert selector.get_unifideck_proton_tool() is None
+    assert ext.external_ge_enabled() is True
+
+
+def test_compat_config_never_raises(tmp_path, monkeypatch):
+    """A missing/corrupt config leaves the launcher on defaults, not broken."""
+    from unifideck.launcher.proton.infrastructure import external_ge as ext
+    from unifideck.launcher.proton.infrastructure import proton_config
+
+    cfg = tmp_path / "config.json"
+    monkeypatch.setattr(proton_config, "CONFIG_PATH", cfg)
+    for content in (None, "{not json", '["a list"]', '{"compat": "not a dict"}'):
+        if content is None:
+            cfg.unlink(missing_ok=True)
+        else:
+            cfg.write_text(content)
+        assert proton_config.read_compat_section() == {}
+        assert selector.get_unifideck_proton_tool() is None
+        assert ext.external_ge_enabled() is True, f"must default to auto for {content!r}"
