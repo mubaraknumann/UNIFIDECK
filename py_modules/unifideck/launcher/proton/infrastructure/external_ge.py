@@ -143,6 +143,24 @@ def read_tool_internal_version(tool_dir: Path) -> str:
     return ""
 
 
+def _match_alias(tools: dict[str, Path], alias: str) -> tuple[Path, str] | None:
+    """Look ``alias`` up in ``tools``, exactly first then case-insensitively.
+
+    Returns ``(path, the name it matched under)`` or ``None``. The matched
+    name is not always the alias: a case-insensitive hit reports the key as
+    the manifest spells it, which is what callers pass back to Steam.
+    """
+    exact = tools.get(alias)
+    if exact is not None:
+        return exact, alias
+
+    lowered = alias.lower()
+    for name, path in tools.items():
+        if name.lower() == lowered:
+            return path, name
+    return None
+
+
 def find_external_ge_proton(
     roots: list[Path] | tuple[Path, ...] | None = None,
 ) -> tuple[Path, str, str] | None:
@@ -166,16 +184,11 @@ def find_external_ge_proton(
         return None
 
     for alias in EXTERNAL_GE_ALIASES:
-        proton = tools.get(alias)
-        matched_name = alias
-        if proton is None:
-            lowered = alias.lower()
-            for name, path in tools.items():
-                if name.lower() == lowered:
-                    proton = path
-                    matched_name = name
-                    break
-        if proton and ge_installer.is_proton_install_complete(proton):
+        matched = _match_alias(tools, alias)
+        if matched is None:
+            continue
+        proton, matched_name = matched
+        if ge_installer.is_proton_install_complete(proton):
             real_version = read_tool_internal_version(proton.parent)
             return proton, matched_name, real_version
     return None

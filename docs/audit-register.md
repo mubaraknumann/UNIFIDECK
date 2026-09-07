@@ -6,8 +6,10 @@
 >
 > Last updated: 2026-09-07 · Source review: 2026-08-24 against v0.7.5
 >
-> **Progress:** 22 CLOSED · 41 VALIDATING (fixed, awaiting the Deck) · 7 OPEN
-> · 1 DECLINED. Seven gate blind spots were the durable half; see the gate
+> **Progress:** 20 CLOSED · 37 VALIDATING (fixed, awaiting the Deck) · 11 OPEN
+> · 1 DECLINED, over 69 rows. Counted from the status column on 2026-09-07;
+> the previous line read 22/41/7 and no longer matched the table.
+> Seven gate blind spots were the durable half; see the gate
 > table. The check-13 convergence backlog is drained (16 groups → 1, a
 > deliberate keep).
 >
@@ -20,7 +22,7 @@
 > 55, 58 and 59 stay `VALIDATING`: DV-PX16 needs three `plugin_loader`
 > restarts and this Deck has no passwordless sudo.
 >
-> **The 38 `VALIDATING` rows are the real state of this programme.** Nothing
+> **The 37 `VALIDATING` rows are the real state of this programme.** Nothing
 > is closed until it runs on a Deck; every one of those rows names its step in
 > `device-validation.md`, and the rows that legitimately need no step say so
 > in that file's "Needs no device validation" table.
