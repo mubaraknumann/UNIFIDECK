@@ -45,24 +45,92 @@ _LEGACY_MIGRATED_MARKER = ".unifideck_legacy_migrated"
 _LEGACY_UMU_BASE = "~/Games/umu"
 _LEGACY_UMU_SHARED = ("umu-0", "umu-default")
 
+# A ``drive_c/users`` tree is a full Windows user profile, not a save folder.
+# Both of this module's sources (the legacy shared umu prefix and a reset's
+# ``.save_backup``) therefore carry a lot that is emphatically NOT save data,
+# and copying it forward bloated every prefix we created.
+#
+# Measured on the machine this was found on: a fresh prefix came out at 1.5 GB,
+# **939 MB of it a CD Projekt Red REDlauncher installation** dragged out of
+# ``~/Games/umu/umu-0`` — a vendor launcher for one game cloned into every
+# other game's prefix, on every install, forever. It logged as
+# "migrated 1159 save file(s)", which reads like a success.
+#
+# The rule is a DENY-list, not an allow-list, and deliberately so: a wrong
+# entry here costs disk, whereas a missing allow-list entry would silently
+# lose somebody's save. Games legitimately save under ``AppData/Local``
+# (as well as Roaming/LocalLow/Documents/Saved Games), so that root stays in
+# and only its known-non-save subtrees come out.
+_EXCLUDED_RELPATHS: tuple[tuple[str, ...], ...] = (
+    # User-scoped *program installations* — the 939 MB case.
+    ("appdata", "local", "programs"),
+    # Installer/runtime scratch: vcredist logs, extracted redistributables.
+    ("appdata", "local", "temp"),
+    ("appdata", "local", "crashdumps"),
+    # Windows/Wine scaffolding recreated by every prefix; never game saves.
+    ("appdata", "local", "microsoft"),
+    ("appdata", "local", "packages"),
+    ("appdata", "roaming", "microsoft"),
+)
+# A single save file larger than this is vanishingly rare; a program payload
+# that large is not. Belt-and-braces behind the deny-list above, so a vendor
+# tree we haven't seen yet can't quietly reintroduce the bloat.
+_MAX_SAVE_FILE_BYTES = 64 * 1024 * 1024
+
+
+def _is_migratable(rel: Path) -> bool:
+    """Whether a path relative to ``users/`` is plausibly save data.
+
+    ``rel`` is ``<username>/AppData/...`` (the source is a ``users`` tree, so
+    the first component is ``steamuser``/``Public``/…). The deny-list is
+    written from just below that, and is also matched against the un-stripped
+    path so a tree handed in already rooted at the user dir still filters.
+
+    See :data:`_EXCLUDED_RELPATHS` for why this is a deny-list.
+    """
+    parts = tuple(p.lower() for p in rel.parts)
+    for candidate in (parts[1:], parts):
+        if any(
+            candidate[:len(excluded)] == excluded
+            for excluded in _EXCLUDED_RELPATHS
+        ):
+            return False
+    return True
+
 
 def _merge_users(src_users: Path, dst_users: Path) -> int:
-    """Copy files from ``src_users`` into ``dst_users``, non-destructively.
+    """Copy save files from ``src_users`` into ``dst_users``, non-destructively.
 
-    A file is copied only when the destination is missing or older than
-    the source (mtime guard), so a save written after a reset is never
-    clobbered by a stale backup, and the merge is safe to re-run. Per-
-    file errors are logged and skipped — best-effort, like the rest of
-    this module. Returns the number of files actually copied.
+    A file is copied only when it looks like save data (:func:`_is_migratable`,
+    plus a size guard) AND the destination is missing or older than the source
+    (mtime guard) — so a save written after a reset is never clobbered by a
+    stale backup, and the merge is safe to re-run. Per-file errors are logged
+    and skipped — best-effort, like the rest of this module. Returns the number
+    of files actually copied.
     """
     if not src_users.is_dir():
         return 0
     copied = 0
+    skipped = 0
+    skipped_bytes = 0
     for src in src_users.rglob("*"):
         if not src.is_file():
             continue
         try:
             rel = src.relative_to(src_users)
+            if not _is_migratable(rel):
+                skipped += 1
+                skipped_bytes += src.stat().st_size
+                continue
+            size = src.stat().st_size
+            if size > _MAX_SAVE_FILE_BYTES:
+                logger.info(
+                    "[prefix_init] save merge skipped oversized %s (%d bytes)",
+                    rel, size,
+                )
+                skipped += 1
+                skipped_bytes += size
+                continue
             dst = dst_users / rel
             if dst.exists() and dst.stat().st_mtime >= src.stat().st_mtime:
                 continue
@@ -71,7 +139,30 @@ def _merge_users(src_users: Path, dst_users: Path) -> int:
             copied += 1
         except OSError as e:
             logger.warning("[prefix_init] save merge skipped %s: %s", src, e)
+    if skipped:
+        logger.info(
+            "[prefix_init] save merge skipped %d non-save file(s) (%.1f MiB) "
+            "under %s",
+            skipped, skipped_bytes / (1024 * 1024), src_users,
+        )
     return copied
+
+
+def snapshot_user_saves(src_users: Path, dst: Path) -> int:
+    """Copy the save files out of a ``users`` tree into *dst*.
+
+    Public because ``prefix_init._reset_prefix`` needs it: that is the OTHER
+    place a ``users`` tree gets copied (into ``.save_backup``, before a
+    Proton-family change wipes the prefix). It used to be a raw
+    ``shutil.copytree`` of the whole profile, which is the same bug this
+    module's merge had — and worse, ``.save_backup`` is in ``_PRESERVE``, so
+    the snapshot survives the wipe and keeps the bloat on disk.
+
+    Sharing this one function means the definition of "is this a save?"
+    (:func:`_is_migratable`) lives in exactly one place and can't drift
+    between the snapshot and the restore.
+    """
+    return _merge_users(src_users, dst)
 
 
 def _users_has_files(users_dir: Path) -> bool:

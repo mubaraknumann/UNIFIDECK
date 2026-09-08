@@ -42,6 +42,7 @@ from unifideck.launcher.frontend_bridge import launcher_toast
 from unifideck.launcher.proton.compat.ge_fallback import fallback_to_ge_proton
 from unifideck.launcher.proton.compat.save_migration import (
     restore_or_migrate_saves,
+    snapshot_user_saves,
 )
 from unifideck.launcher.proton.infrastructure.container_escape import (
     escape_argv,
@@ -248,7 +249,16 @@ def _reset_prefix(prefix_root: Path) -> None:
         if backup.exists():
             shutil.rmtree(backup, ignore_errors=True)
         if users.is_dir():
-            shutil.copytree(users, backup, dirs_exist_ok=True)
+            # NOT a raw copytree: a users/ tree is a full Windows profile, so
+            # that snapshotted whole program installations (a 939 MB vendor
+            # launcher, measured) into .save_backup — which _PRESERVE keeps
+            # across the wipe. Share the restore path's one definition of
+            # "is this a save?" so the two can never drift.
+            kept = snapshot_user_saves(users, backup)
+            logger.info(
+                "[prefix_init] backed up %d save file(s) before prefix reset",
+                kept,
+            )
     # Remove all Wine/Proton state + re-runnable setup markers, leaving
     # only the proton-version marker and the save backup behind.
     for entry in _safe_iterdir(prefix_root):
