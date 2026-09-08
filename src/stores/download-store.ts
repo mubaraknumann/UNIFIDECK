@@ -240,6 +240,32 @@ class DownloadStoreImpl {
       EventBusClient.subscribe("download_cancelled", onTerminal),
     );
 
+    // The authoritative install-state signal, and the reason `onTerminal`'s
+    // invalidation above is not sufficient on its own.
+    //
+    // DOWNLOAD_COMPLETE is emitted *before* the backend runs its post-install
+    // hook, and that hook is where the shortcut actually flips to installed.
+    // The two are far apart on the Epic path: measured 16:21:09.720 ->
+    // 16:21:15.645, **5.9 s**, installing Among Us. So the refetch that
+    // `onTerminal` triggers asks the backend before it has flipped anything
+    // and caches `is_installed: false`. `usePlaySection` then renders
+    // "Install" for a game that is fully installed, and nothing corrects it,
+    // because a terminal download event only ever arrives once — the page had
+    // to be closed and reopened to remount the hook and refetch.
+    //
+    // `mark_installed` emits this event once the flip has actually happened,
+    // so it is the point at which the cached answer is worth throwing away.
+    // Sizes are already invalidated for this event in `library-filters`; the
+    // per-game info cache and state version are what nothing else touches.
+    this._unsubs.push(
+      EventBusClient.subscribe("shortcut_install_state_changed", (payload) => {
+        const appId = (payload as { app_id?: unknown }).app_id;
+        if (typeof appId !== "number") return;
+        invalidateGameInfo(appId);
+        bumpGameStateVersion(appId);
+      }),
+    );
+
     // Wrapper-store installs — open the vendor client via Steam's RunGame.
     // The backend cannot spawn it: in Gaming Mode a bare subprocess has no
     // gamescope session and the window never appears.

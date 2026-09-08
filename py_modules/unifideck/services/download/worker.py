@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from unifideck.core import stale_installs
@@ -29,7 +28,11 @@ from unifideck.launcher.wrapper_stores import (
 
 from .installed_game import build_installed_game
 from .models import MAX_FINISHED_HISTORY, DownloadItem, classify_download_error
-from .worker_helpers import apply_dict_progress, track_task
+from .worker_helpers import (
+    apply_dict_progress,
+    prefix_warmup_supported,
+    track_task,
+)
 from .wrapper_signals import dispatch_wrapper_install
 
 if TYPE_CHECKING:
@@ -45,14 +48,11 @@ logger = logging.getLogger(__name__)
 # touching the loop logic itself.
 _POLL_INTERVAL_SEC: float = 1.0
 _ERROR_BACKOFF_SEC: float = 5.0
-# Upper bound on install-time prefix warmup (createprefix + winetricks +
-# cloud-save pull). Warmup is best-effort with launch-time setup as the
-# fallback, so a hang — e.g. ``umu-run`` unable to fetch its runtime on a
-# broken network — must NOT wedge the install in the "preparing" phase
-# forever (the install never reaches ``complete``, so no shortcut is
-# registered and the game stays on "Install"). On timeout we log and let the
-# install complete; the prefix is set up again at launch.
-_PREFIX_WARMUP_TIMEOUT_SEC: float = 600.0
+# Terminal phase, set alongside a terminal ``status``. The phase used to be
+# left at whatever it last was, so every finished row in
+# ``download_history.json`` still read ``"preparing"`` — which is what a stale
+# frontend snapshot then rendered as "SETTING UP GAME..." forever.
+_PHASE_DONE = "complete"
 
 
 class _WorkerMixin:
@@ -311,29 +311,64 @@ class _WorkerMixin:
         store: StoreBase,
         key: str,
     ) -> None:
-        """Mark complete, emit DOWNLOAD_COMPLETE, run the post-install hook."""
-        from unifideck.core.types.events import Events
+        """Finalise the install, then run the cancellable prefix warmup.
 
+        The order here is the fix for two bugs and matters more than it looks.
+
+        The warmup used to run FIRST, ahead of every line below. That made
+        cancelling it destructive: ``CancelledError`` is a ``BaseException``, so
+        it slipped past the warmup's ``except Exception`` into
+        ``_run_install``'s cancel handler and marked the item cancelled — no
+        ``DOWNLOAD_COMPLETE``, no shortcut flip, no ``games.map`` entry, for a
+        game already fully on disk. Finalising first makes the install durable
+        before anything cancellable starts, so an abandoned warmup now costs
+        only a slower first launch.
+
+        The row must still be visible (and cancellable) *during* the warmup,
+        which is why the item is only marked terminal after it: ``get_queue``
+        hides terminal rows. A stale frontend snapshot of a phase the backend
+        had already finished is exactly the "SETTING UP GAME... / Cancel
+        Failed: not_found" report this came from.
+        """
         item.progress = 100.0
         result_install_path = getattr(result, "install_path", None)
         if result_install_path:
             item.install_path = result_install_path
-        # Full first-run prefix setup (createprefix + compat + cloud pull) runs
-        # HERE — while the item is still in ``_running`` and rendered in a
-        # "preparing" state — so the install flow stays open until the prefix is
-        # ready. Best-effort; the launch path re-runs it idempotently as a
-        # fallback. Skipped for Ubisoft (UPC owns its prefix) / Microsoft.
-        await self._run_prefix_warmup(item)
-        item.status = "complete"
-        item.end_time = time.time()
+        if not self._warmup_applies(item):
+            self._mark_item_complete(item)
+            await self._finalise_install(item, result, store, key)
+            return
+        await self._finalise_install(item, result, store, key)
+        await self._run_prefix_warmup(item, key)
+        self._mark_item_complete(item)
+        # Nothing else fires after this point — ``_cleanup_running`` is silent —
+        # so the terminal state above needs an event of its own or the frontend
+        # renders the warmup row forever.
+        await self._emit_queue_refresh(item)
+
+    async def _finalise_install(
+        self,
+        item: DownloadItem,
+        result: InstallResult,
+        store: StoreBase,
+        key: str,
+    ) -> None:
+        """Publish the install: DOWNLOAD_COMPLETE plus the post-install hook.
+
+        Everything that makes an install durable lives here. The ``Game``
+        record is built so the ShortcutService listener flips the shortcut's
+        install tag; DOWNLOAD_COMPLETE is the only event this needs, since
+        ``mark_installed`` then emits SHORTCUT_INSTALL_STATE_CHANGED, which is
+        what every install-state reader subscribes to. No separate install
+        event — the shortcut and its cover art were created during the library
+        sync and ``mark_installed`` preserves the appid, so re-fetching artwork
+        here would only duplicate SteamGridDB lookups. The host's
+        ``on_complete`` callback then writes the ``.unifideck-id`` marker,
+        updates ``games.map``, and invalidates the caches.
+        """
+        from unifideck.core.types.events import Events
+
         logger.info("[DownloadWorker] completed install for %s", key)
-        # Build a Game record so the ShortcutService listener flips the
-        # shortcut's install tag. DOWNLOAD_COMPLETE is the only event this
-        # needs: ``mark_installed`` then emits SHORTCUT_INSTALL_STATE_CHANGED,
-        # which is what every install-state reader subscribes to. No separate
-        # install event — the shortcut and its cover art were created during
-        # the library sync and ``mark_installed`` preserves the appid, so
-        # re-fetching artwork here would only duplicate SteamGridDB lookups.
         game = await build_installed_game(
             item, result, store, getattr(self, "_launcher_path", ""),
         )
@@ -350,65 +385,61 @@ class _WorkerMixin:
             except Exception:
                 logger.exception("[DownloadWorker] on_complete callback failed")
 
-    async def _run_prefix_warmup(self, item: DownloadItem) -> None:
-        """Run install-time prefix setup, surfaced as a "preparing" phase.
+    def _mark_item_complete(self, item: DownloadItem) -> None:
+        """Put ``item`` into its terminal success state.
 
-        Only for the stores that own a per-game prefix — Ubisoft bootstraps its
-        own prefix via UPC, so it is skipped.
-        Also skipped for a GOG *Linux-native* depot (root-level ``start.sh`` —
-        the same signal ``GOGExeResolver``/the native-launch DOSBox dispatch
-        use): those games never touch Proton/Wine, so creating a prefix for
-        them is pure waste and, worse, can wedge the shared prefix-setup
-        machinery (wineserver locks, GE-Proton retry ladder) for a game that
-        will never use it. No-op when the hook isn't wired (e.g. launcher
-        subset bootstrap). Best-effort: a failure logs and the install still
-        completes (the launch-time path remains the fallback). Re-emitting
-        DOWNLOAD_STARTED forces the frontend to refetch the queue so the row
-        picks up the new ``download_phase`` (same mechanism Ubisoft's
-        "manual" phase uses).
+        Resetting the phase matters: it used to be left wherever the install
+        last set it, so every finished row in ``download_history.json`` still
+        read ``"preparing"``. Failure and cancel paths deliberately keep their
+        phase, where it says *which step* died and is worth having.
         """
-        # The cloud-only store used to be named here too. It no longer needs
-        # to be: this runs on the success path only, and that store now
-        # refuses every install outright, so the arm was unreachable.
-        if uses_manual_download_phase(item.store):
-            return
-        if item.store == "gog" and (Path(item.install_path) / "start.sh").is_file():
-            logger.info(
-                "[DownloadWorker] skipping prefix warmup for %s:%s — "
-                "Linux-native GOG depot (start.sh), no Proton prefix needed",
-                item.store,
-                item.game_id,
-            )
-            return
-        hook: Any = getattr(self, "_prefix_warmup", None)
-        if not callable(hook):
+        item.status = "complete"
+        item.download_phase = _PHASE_DONE
+        item.end_time = time.time()
+
+    async def _emit_queue_refresh(self, item: DownloadItem) -> None:
+        """Nudge the frontend into re-reading the queue.
+
+        The frontend refetches on DOWNLOAD_STARTED without inspecting the
+        payload, which makes it the cheap way to publish a row change that has
+        no event of its own. Pre-existing idiom, not a new one: the wrapper
+        stores' "manual" phase is surfaced the same way.
+        """
+        if not self._bus:
             return
         from unifideck.core.types.events import Events
 
+        await self._bus.emit(Events.DOWNLOAD_STARTED, item=item.to_dict())
+
+    def _warmup_applies(self, item: DownloadItem) -> bool:
+        """Whether this install gets an install-time prefix warmup.
+
+        Store and depot eligibility lives in ``worker_helpers``. The rest is
+        whether the host actually wired both hooks — the launcher-subset
+        bootstrap wires neither.
+        """
+        if not prefix_warmup_supported(item):
+            return False
+        has_hook = callable(getattr(self, "_prefix_warmup", None))
+        return has_hook and getattr(self, "_warmup_runner", None) is not None
+
+    async def _run_prefix_warmup(self, item: DownloadItem, key: str) -> None:
+        """Run install-time prefix setup, surfaced as a "preparing" phase.
+
+        Callers must have checked :meth:`_warmup_applies`. Cancellation
+        semantics belong to :class:`~.warmup_runner.PrefixWarmupRunner`: a
+        cancel aimed at the warmup is absorbed there so the install still
+        finalises, while an outer teardown propagates. Best-effort either way —
+        a timeout or a failure is logged and the install completes, with the
+        launch-time path as the fallback.
+        """
+        hook: Any = getattr(self, "_prefix_warmup", None)
+        runner: Any = getattr(self, "_warmup_runner", None)
         item.download_phase = "preparing"
-        if self._bus:
-            await self._bus.emit(Events.DOWNLOAD_STARTED, item=item.to_dict())
-        logger.info(
-            "[DownloadWorker] running prefix warmup for %s:%s",
-            item.store,
-            item.game_id,
-        )
-        try:
-            await asyncio.wait_for(hook(item), timeout=_PREFIX_WARMUP_TIMEOUT_SEC)
-        except TimeoutError:
-            logger.warning(
-                "[DownloadWorker] prefix warmup timed out for %s:%s after %ds — "
-                "completing install; the prefix is set up at launch instead",
-                item.store,
-                item.game_id,
-                int(_PREFIX_WARMUP_TIMEOUT_SEC),
-            )
-        except Exception:
-            logger.exception(
-                "[DownloadWorker] prefix warmup failed for %s:%s (continuing)",
-                item.store,
-                item.game_id,
-            )
+        await self._emit_queue_refresh(item)
+        logger.info("[DownloadWorker] running prefix warmup for %s", key)
+        outcome = await runner.run(key, lambda: hook(item))
+        logger.info("[DownloadWorker] prefix warmup %s for %s", outcome, key)
 
     async def _mark_cancelled(self, item: DownloadItem, key: str) -> None:
         """Mark the item cancelled and emit DOWNLOAD_CANCELLED."""

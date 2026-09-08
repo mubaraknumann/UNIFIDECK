@@ -114,3 +114,64 @@ describe("usePlaySection — the states it must keep resolving", () => {
     expect(state.kind).toBe("downloading");
   });
 });
+
+/**
+ * The stuck "SETTING UP GAME..." row, from the frontend side.
+ *
+ * The backend emits DOWNLOAD_COMPLETE before it drops the item from its
+ * running map, and the store refetches the queue the moment it sees that
+ * event — so it can cache a row the backend has already finished with. Since
+ * nothing polls and no further event follows, that snapshot was final: the
+ * `downloading` branch deliberately outranks `is_installed`, so a completed
+ * install kept rendering an indeterminate progress bar whose Cancel could
+ * only answer `not_found`.
+ *
+ * `get_queue` filters terminal rows now too. This is the second line of
+ * defence, and it is the cheaper one to keep honest.
+ */
+describe("usePlaySection — a finished download is not an active one", () => {
+  function row(over: Record<string, unknown> = {}) {
+    return {
+      id: "gog:2022341186",
+      game_id: "2022341186",
+      game_title: "BioShock™",
+      store: "gog",
+      status: "running",
+      progress_percent: 100,
+      // The phase the reported row was wedged on.
+      download_phase: "preparing",
+      ...over,
+    };
+  }
+
+  const installed = game({
+    id: "2022341186",
+    store: "gog",
+    store_tags: [],
+    is_installed: true,
+  });
+
+  it("still shows the setup phase while the row is live", () => {
+    const state = useResolved(installed, { current: row(), queued: [] });
+    expect(state.kind).toBe("downloading");
+  });
+
+  it.each(["complete", "failed", "cancelled"])(
+    "ignores a %s row and falls through to installed",
+    (status) => {
+      const state = useResolved(installed, {
+        current: row({ status }),
+        queued: [],
+      });
+      expect(state.kind).toBe("installed");
+    },
+  );
+
+  it("ignores a terminal row sitting in the pending queue", () => {
+    const state = useResolved(installed, {
+      current: null,
+      queued: [row({ status: "complete" })],
+    });
+    expect(state.kind).toBe("installed");
+  });
+});

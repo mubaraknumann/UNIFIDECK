@@ -38,8 +38,14 @@ vi.mock("../api/event-bus-client", () => ({
 vi.mock("i18next", () => ({
   default: { t: (key: string) => key },
 }));
-vi.mock("../hooks/useGameInfo", () => ({ invalidateGameInfo: vi.fn() }));
-vi.mock("../lib/game-state-version", () => ({ bumpGameStateVersion: vi.fn() }));
+const mockInvalidateGameInfo = vi.fn();
+const mockBumpGameStateVersion = vi.fn();
+vi.mock("../hooks/useGameInfo", () => ({
+  invalidateGameInfo: (id: number) => mockInvalidateGameInfo(id),
+}));
+vi.mock("../lib/game-state-version", () => ({
+  bumpGameStateVersion: (id: number) => mockBumpGameStateVersion(id),
+}));
 vi.mock("../lib/game-size-cache", () => ({ invalidateGameSize: vi.fn() }));
 vi.mock("../lib/download-errors", () => ({
   friendlyDownloadError: (raw: string) => `friendly:${raw}`,
@@ -162,5 +168,45 @@ describe("download_failed handling", () => {
     // The title the store-shaped duplicate could never produce.
     expect(toast.title).toContain("A Game");
     expect(toast.body).toBe("friendly:legendary_exit_1: no asset found");
+  });
+});
+
+/**
+ * The "Install" button on a game that just installed.
+ *
+ * Reported after cancelling Among Us's prefix warmup: the details page kept
+ * offering Install until it was closed and reopened. DOWNLOAD_COMPLETE fires
+ * before the backend's post-install hook flips the shortcut — 5.9 s before it,
+ * on that install — so the refetch it triggers caches `is_installed: false`,
+ * and no later download event exists to correct it.
+ */
+describe("install-state invalidation", () => {
+  beforeEach(() => {
+    mockCall.mockReset();
+    mockCall.mockResolvedValue({ success: true, error: null, data: {} });
+    mockInvalidateGameInfo.mockReset();
+    mockBumpGameStateVersion.mockReset();
+    downloadStore.start();
+  });
+
+  it("drops the cached game info when the shortcut actually flips", () => {
+    handlers.get("shortcut_install_state_changed")?.({
+      app_id: -910147527,
+      store: "epic",
+      store_game_id: "963137e4c29d4c79a81323b8fab03a40",
+      installed: true,
+      install_path: "/games/AmongUs",
+      exe_path: "/games/AmongUs/Among Us.exe",
+    });
+
+    expect(mockInvalidateGameInfo).toHaveBeenCalledWith(-910147527);
+    expect(mockBumpGameStateVersion).toHaveBeenCalledWith(-910147527);
+  });
+
+  it("ignores a payload with no usable app_id", () => {
+    handlers.get("shortcut_install_state_changed")?.({ store: "epic" });
+
+    expect(mockInvalidateGameInfo).not.toHaveBeenCalled();
+    expect(mockBumpGameStateVersion).not.toHaveBeenCalled();
   });
 });

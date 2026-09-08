@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -111,41 +112,66 @@ def _merge_users(src_users: Path, dst_users: Path) -> int:
     if not src_users.is_dir():
         return 0
     copied = 0
-    skipped = 0
-    skipped_bytes = 0
-    for src in src_users.rglob("*"):
-        if not src.is_file():
-            continue
-        try:
-            rel = src.relative_to(src_users)
-            if not _is_migratable(rel):
-                skipped += 1
-                skipped_bytes += src.stat().st_size
-                continue
-            size = src.stat().st_size
-            if size > _MAX_SAVE_FILE_BYTES:
-                logger.info(
-                    "[prefix_init] save merge skipped oversized %s (%d bytes)",
-                    rel, size,
-                )
-                skipped += 1
-                skipped_bytes += size
-                continue
-            dst = dst_users / rel
-            if dst.exists() and dst.stat().st_mtime >= src.stat().st_mtime:
-                continue
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-            copied += 1
-        except OSError as e:
-            logger.warning("[prefix_init] save merge skipped %s: %s", src, e)
-    if skipped:
+    pruned = 0
+    for parent, dirnames, filenames in os.walk(src_users):
+        parent_path = Path(parent)
+        rel_parent = parent_path.relative_to(src_users)
+        pruned += _prune_excluded(rel_parent, dirnames)
+        for name in filenames:
+            if _copy_one_save(parent_path / name, rel_parent / name, dst_users):
+                copied += 1
+    if pruned:
         logger.info(
-            "[prefix_init] save merge skipped %d non-save file(s) (%.1f MiB) "
-            "under %s",
-            skipped, skipped_bytes / (1024 * 1024), src_users,
+            "[prefix_init] save merge pruned %d non-save subtree(s) under %s",
+            pruned, src_users,
         )
     return copied
+
+
+def _prune_excluded(rel_parent: Path, dirnames: list[str]) -> int:
+    """Drop excluded directories from ``dirnames`` in place; return how many.
+
+    This is the whole point of walking rather than globbing. The previous
+    ``rglob("*")`` visited and ``stat()``ed every file in the tree before
+    ``_is_migratable`` rejected it, so each new prefix paid a full scan of a
+    profile whose bulk is exactly the part being thrown away: measured 6-14 s
+    per install to descend a 947 MiB / 1097-file ``appdata/local/programs``
+    tree and copy 62 files out of it. Mutating ``dirnames`` is how ``os.walk``
+    is told not to descend, so those subtrees are never opened at all.
+    """
+    kept = [name for name in dirnames if _is_migratable(rel_parent / name)]
+    dropped = len(dirnames) - len(kept)
+    if dropped:
+        dirnames[:] = kept
+    return dropped
+
+
+def _copy_one_save(src: Path, rel: Path, dst_users: Path) -> bool:
+    """Copy one file if it is save data and newer than the destination.
+
+    The ``_is_migratable`` check is kept here as well as in
+    :func:`_prune_excluded`: a deny-listed path can name a *file* rather than a
+    directory, and pruning only ever sees directories.
+    """
+    if not _is_migratable(rel):
+        return False
+    try:
+        size = src.stat().st_size
+        if size > _MAX_SAVE_FILE_BYTES:
+            logger.info(
+                "[prefix_init] save merge skipped oversized %s (%d bytes)",
+                rel, size,
+            )
+            return False
+        dst = dst_users / rel
+        if dst.exists() and dst.stat().st_mtime >= src.stat().st_mtime:
+            return False
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+    except OSError as e:
+        logger.warning("[prefix_init] save merge skipped %s: %s", src, e)
+        return False
+    return True
 
 
 def snapshot_user_saves(src_users: Path, dst: Path) -> int:
