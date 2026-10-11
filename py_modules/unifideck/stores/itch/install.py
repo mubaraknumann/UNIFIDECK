@@ -146,30 +146,40 @@ class ItchInstaller:
     ) -> InstallResult:
         """Install the best upload of *game_id* under *base_path*."""
         try:
-            profile = await self._library.profile_id()
-            if profile is None:
-                return _fail(game_id, "itch_not_signed_in: itch.io login required")
-            if await self.claim_needed(game_id, profile):
-                return _fail(game_id, CLAIM_REQUIRED)
-            game = await self._library.owned_game(game_id)
-            if game is None:
-                return _fail(game_id, "itch_game_not_found")
-            await self._drop_stale_cave(game_id)
-            uploads = await self._daemon.call(
-                "Fetch.GameUploads",
-                {"gameId": int(game_id), "compatible": False, "fresh": True},
-            )
-            upload = choose_upload(uploads.get("uploads") or [])
-            if upload is None:
-                return _fail(game_id, "itch_no_installable_upload: no Linux or "
-                                      "Windows build of this game can be installed")
-            root = await asyncio.to_thread(_prepare_root, base_path or self._default_root)
-            location = await self._ensure_location(root)
+            prepared = await self._prepare_install(game_id, base_path)
         except ButlerdError as e:
             return _fail(game_id, f"itch_install_failed: {e}")
+        if isinstance(prepared, InstallResult):
+            return prepared
+        game, upload, root, location, profile = prepared
         queue = {"game": game, "upload": upload, "installLocationId": location,
                  "profileId": profile, "reason": "install"}
         return await self._run(_Job(game_id, game, upload, queue, root), progress_cb)
+
+    async def _prepare_install(
+        self, game_id: str, base_path: str | None,
+    ) -> InstallResult | tuple[dict[str, Any], dict[str, Any], str, str, int]:
+        """Resolve everything ``install`` queues, or the failure to report."""
+        profile = await self._library.profile_id()
+        if profile is None:
+            return _fail(game_id, "itch_not_signed_in: itch.io login required")
+        if await self.claim_needed(game_id, profile):
+            return _fail(game_id, CLAIM_REQUIRED)
+        game = await self._library.owned_game(game_id)
+        if game is None:
+            return _fail(game_id, "itch_game_not_found")
+        await self._drop_stale_cave(game_id)
+        uploads = await self._daemon.call(
+            "Fetch.GameUploads",
+            {"gameId": int(game_id), "compatible": False, "fresh": True},
+        )
+        upload = choose_upload(uploads.get("uploads") or [])
+        if upload is None:
+            return _fail(game_id, "itch_no_installable_upload: no Linux or "
+                                  "Windows build of this game can be installed")
+        root = await asyncio.to_thread(_prepare_root, base_path or self._default_root)
+        location = await self._ensure_location(root)
+        return game, upload, root, location, profile
 
     async def update(
         self, game_id: str, progress_cb: ProgressCallback | None,
