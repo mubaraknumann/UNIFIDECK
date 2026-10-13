@@ -35,56 +35,31 @@ _DISPLAY = os.environ.get("UNIFIDECK_GAMESCOPE_DISPLAY", ":0")
 _POLL_INTERVAL = 0.3
 _MAX_RUNTIME = 300
 
-# How a COMPANION (trainer / cheat tool) window is tagged once identified.
-# The main game window is always tagged with its real appid regardless.
-#
-# All three values have now been measured on-device with a trainer running
-# alongside Ghost of Tsushima in Gaming Mode:
-#
-#   "fake"  — tag with the companion's own dedicated fake appid. gamescope
-#             does not composite the window AT ALL: the trainer is simply
-#             not on screen. An appid Steam does not know never enters the
-#             focusable-app list gamescope receives FROM Steam
-#             (``ctxFocusControlAppIDs`` in ``pick_primary_focus_and_override``),
-#             so no fake VALUE can ever work — the earlier suspicion that
-#             this was a signed-vs-unsigned range problem was wrong, a
-#             value safely inside the positive int32 range behaved
-#             identically.
-#   "game"  — tag with the main game's real appid. Both windows exist, but
-#             gamescope's focus picker paints only one window per appid, so
-#             the trainer covers the game (or vice versa) with no way to
-#             switch between them; closing the front one reveals the other.
-#   "skip"  — leave the companion window WITHOUT a STEAM_GAME property.
-#             This reproduces what the committed pre-companion tagger did
-#             implicitly: it only ever matched on WM_CLASS, so a companion
-#             window that did not carry the game's ``steam_app_<appid>``
-#             WM_CLASS was ignored entirely.
-#
-# CRUCIAL CONTEXT for the table above: all three of those results were
-# measured while the launcher had ESCAPED Steam's pressure-vessel container
-# (``bin/unifideck-launcher``'s ``_escape_pressure_vessel``, which fires
-# whenever Force-Compat is still set on the shortcut at launch time). The
-# escape re-parents the whole real process tree — launcher, umu, game and
-# companion — out from under Steam's ``reaper`` and onto
-# ``steam-runtime-launcher-service``. Steam then no longer recognises those
-# windows as belonging to the app it launched, and offers no way to switch
-# between them, which is what made this look like an appid problem for so
-# long.
-#
-# Launched WITHOUT the container (Force-Compat cleared, so Steam runs the
-# launcher natively — the path ``selector.py`` documents as the intended
-# one), Steam offers its OWN "switch window" control for the app and both
-# the game and an entirely UNTAGGED companion window are reachable through
-# it. That is why "skip" is the default: with a correct, non-escaped launch
-# no tagging of the companion is needed at all, and adding any makes things
-# worse rather than better.
-#
-# Note that "skip" is an EXPLICIT decision, not a fall-through: without an
-# explicit companion branch, a companion window drops to the WM_CLASS rule
-# and — since companions inherit the game's ``SteamAppId`` and therefore its
-# WM_CLASS — gets tagged "game" anyway. That silent fall-through is what
-# made every earlier fake-appid attempt a no-op, so the branch stays even
-# where its outcome would coincide.
+# How a COMPANION (trainer / cheat tool) window is tagged once identified
+# (the main game window is always tagged with its real appid). All three
+# modes were measured on-device with a trainer alongside Ghost of Tsushima:
+#   "fake" — companion's own dedicated fake appid: gamescope never composites
+#            it (invisible). An appid Steam doesn't know never enters the
+#            focusable-app list gamescope gets from Steam, so no fake VALUE
+#            works (not a signed/unsigned range issue — ruled out on-device).
+#   "game" — main game's real appid: both windows exist but gamescope's focus
+#            picker paints only one window per appid, so they cover each other
+#            with no way to switch; closing the front one reveals the other.
+#   "skip" — leave the companion UNTAGGED (what the pre-companion tagger did
+#            implicitly: it only matched WM_CLASS).
+# CRUCIAL: those results were all measured while the launcher had ESCAPED
+# Steam's pressure-vessel container (``_escape_pressure_vessel``, fires when
+# Force-Compat is still set). The escape reparents the whole process tree out
+# from under Steam's reaper, so Steam no longer recognises the windows and
+# gives no switcher — which is what made this look like an appid bug.
+# Launched WITHOUT the container (Force-Compat cleared, native — the intended
+# path), Steam offers its OWN window-switcher and both the game and an
+# UNTAGGED companion are reachable through it; so "skip" is the default
+# because a correct launch needs no companion tagging and any makes it worse.
+# "skip" is an EXPLICIT branch, not a fall-through: without it a companion
+# drops to the WM_CLASS rule and — since companions inherit the game's
+# ``SteamAppId``/WM_CLASS — gets tagged "game" anyway. That silent
+# fall-through is why earlier fake-appid attempts were no-ops.
 _COMPANION_TAG_MODE = "skip"
 
 
