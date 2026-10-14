@@ -260,6 +260,9 @@ class _FakeCDPClient:
     def get_browser_ws_url(self) -> str | None:
         return f"ws://127.0.0.1:{self.cdp_port}/devtools/browser/abc"
 
+    def probe_cdp(self) -> bool:
+        return True
+
 
 def _svc() -> Any:
     events: list[tuple[Any, ...]] = []

@@ -129,7 +129,10 @@ def wire(monkeypatch: pytest.MonkeyPatch) -> Any:
         knobs.waited = True
 
     monkeypatch.setattr(flow, "wait_for_browser_exit", _wait)
-    monkeypatch.setattr(flow, "EdgeCDPClient", lambda cdp_port: SimpleNamespace(cdp_port=cdp_port))
+    monkeypatch.setattr(
+        flow, "EdgeCDPClient",
+        lambda cdp_port: SimpleNamespace(cdp_port=cdp_port, probe_cdp=lambda: True),
+    )
     return knobs
 
 
@@ -227,3 +230,17 @@ async def test_keyboard_not_landing_is_non_fatal(wire: Any) -> None:
     wire.keyboard_returns = False
     result = await run_luna_browser_game(_svc(), _ctx())
     assert result.success is True and wire.waited is True
+
+
+async def test_await_cdp_ready_returns_true_when_endpoint_answers() -> None:
+    # probe_cdp answering immediately returns True without waiting out the timeout.
+    cdp = SimpleNamespace(probe_cdp=lambda: True)
+    ready = await flow._await_cdp_ready(cdp, timeout_s=0.05, interval_s=0.01)
+    assert ready is True
+
+
+async def test_await_cdp_ready_returns_false_after_timeout() -> None:
+    # probe_cdp never answering returns False once the (tiny) timeout elapses.
+    cdp = SimpleNamespace(probe_cdp=lambda: False)
+    ready = await flow._await_cdp_ready(cdp, timeout_s=0.05, interval_s=0.01)
+    assert ready is False

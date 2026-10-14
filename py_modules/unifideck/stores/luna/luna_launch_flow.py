@@ -72,6 +72,30 @@ logger = logging.getLogger(__name__)
 #: mirroring the shared browser-game ceiling.
 _MAX_SESSION_SECONDS = 14400
 
+#: How long to wait for the just-spawned kiosk Chrome to bring up its CDP
+#: /json/version endpoint before the spoofer attaches. The spawn and the
+#: spoofer attach race otherwise: Chrome's remote-debugging endpoint is not
+#: up the instant the process exists, so an immediate version read fails and
+#: the spoof never installs ('browser not fully supported').
+_CDP_READY_TIMEOUT_S = 10.0
+
+
+async def _await_cdp_ready(
+    cdp: EdgeCDPClient, *, timeout_s: float, interval_s: float = 0.25,
+) -> bool:
+    """Poll ``cdp.probe_cdp`` until the CDP endpoint answers or time runs out.
+
+    ``probe_cdp`` is a blocking HTTP GET, so it is dispatched via
+    :func:`asyncio.to_thread` to keep the event loop free. Returns ``True``
+    as soon as the browser answers, ``False`` if the timeout elapses first.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout_s
+    while asyncio.get_event_loop().time() < deadline:
+        if await asyncio.to_thread(cdp.probe_cdp):
+            return True
+        await asyncio.sleep(interval_s)
+    return False
+
 #: Store id and error strings, kept as constants so the launch flow and its
 #: tests agree on the exact ``Result.error`` values.
 LUNA_STORE = "luna"
@@ -176,6 +200,17 @@ async def _drive_luna_launch(
     svc._active_subprocess = svc._edge_browser.process
 
     cdp = EdgeCDPClient(cdp_port=svc._edge_browser.browser_game_cdp_port())
+
+    # ── Wait for the kiosk Chrome's CDP endpoint before spoofing ──
+    # Chrome's remote-debugging endpoint is not up the instant the process
+    # exists; attaching the spoofer immediately races the version read and
+    # the spoof never installs. Not fatal on timeout: still proceed into
+    # _attach_and_verify, which keeps the existing dead-endpoint handling.
+    if not await _await_cdp_ready(cdp, timeout_s=_CDP_READY_TIMEOUT_S):
+        logger.warning(
+            "[Luna] CDP endpoint not ready after %ss; spoofer attach may fail",
+            _CDP_READY_TIMEOUT_S,
+        )
 
     # ── Attach spoofer BEFORE navigation + verify platform ──
     spoof_result = await _attach_and_verify(ctx, config, cdp)
