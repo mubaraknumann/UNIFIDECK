@@ -119,7 +119,7 @@ def _xauthority_present(env: dict[str, str]) -> bool:
     fail to reach the X server, so the launch aborts before spawning.
     """
     xauth = env.get("XAUTHORITY")
-    return bool(xauth) and Path(xauth).is_file()
+    return bool(xauth) and Path(xauth or "").is_file()
 
 
 def _display_available(env: dict[str, str]) -> bool:

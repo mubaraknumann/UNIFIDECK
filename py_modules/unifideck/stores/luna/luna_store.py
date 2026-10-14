@@ -599,7 +599,10 @@ class LunaStore(StoreBase):
         probe = getattr(self._catalog_source, "region_unavailable", None)
         if probe is None:
             return False
-        return await probe(cdp, self._luna_config)
+        result = await probe(cdp, self._luna_config)
+        if result is None or isinstance(result, bool):
+            return result
+        return bool(result)
 
     # ── Steam Input layout request (Req 6.5, 6.6) ───────────────────────
 

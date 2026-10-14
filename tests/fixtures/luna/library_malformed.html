@@ -13,7 +13,9 @@
   Exactly ONE well-formed title (Celeste) survives.
 -->
 <html lang="de">
-  <head><title>Meine Spiele – Luna</title></head>
+  <head>
+    <title>Meine Spiele – Luna</title>
+  </head>
   <body>
     <div id="library-root">
       <!-- malformed: no id at all -->
@@ -31,11 +33,7 @@
       </div>
 
       <!-- malformed: empty product id after the prefix -->
-      <div
-        data-test-id="game_tile"
-        role="button"
-        id="game_tile_"
-      >
+      <div data-test-id="game_tile" role="button" id="game_tile_">
         <img alt="Empty Id" src="/art/empty.jpg" />
       </div>
 

@@ -50,8 +50,11 @@ from unifideck.launcher.browser_games import BROWSER_URL_KEY
 from unifideck.stores.luna.luna_cdp import attach_to_page_target
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from unifideck.auth.edge_browser.cdp_client import EdgeCDPClient
     from unifideck.stores.luna.luna_config import LunaConfig
+    from unifideck.stores.luna.luna_platform_spoofer import BrowserCdpSession
     from unifideck.stores.luna.luna_subscription import LunaSubscription
 
 #: The store tag every Luna library entry additionally carries (Req 4.5),
@@ -260,7 +263,7 @@ _SCROLL_TO_BOTTOM_EXPRESSION = r"""
 #: Count the rendered browse-view game tiles (same selector family as the
 #: scrape). ``> 0`` means the library has rendered and the scrape can run.
 _TILE_COUNT_EXPRESSION = (
-    'document.querySelectorAll('
+    "document.querySelectorAll("
     "'[data-test-id=\"game_tile\"][role=\"button\"]'"
     ").length"
 )
@@ -492,8 +495,12 @@ class DomScrapeCatalogSource:
       :class:`EntitlementSet` (Req 4.9), never a raise.
     """
 
+    _session_factory: Callable[[str], BrowserCdpSession]
+
     def __init__(
-        self, *, session_factory: object | None = None,
+        self,
+        *,
+        session_factory: Callable[[str], BrowserCdpSession] | None = None,
     ) -> None:
         """Build the scrape source.
 
@@ -566,7 +573,7 @@ class DomScrapeCatalogSource:
                 await close()
 
     async def run_scrape(
-        self, session: object, session_id: str,
+        self, session: BrowserCdpSession, session_id: str,
     ) -> tuple[list[LunaTitle], EntitlementSet]:
         """Scrape + parse over an arbitrary ``session`` (testable core).
 
@@ -600,7 +607,9 @@ class DomScrapeCatalogSource:
         )
         return titles, entitlements
 
-    async def _await_tiles(self, session: object, session_id: str) -> None:
+    async def _await_tiles(
+        self, session: BrowserCdpSession, session_id: str,
+    ) -> None:
         """Poll until browse-view game tiles have rendered (bounded).
 
         The Luna browse SPA populates its ``game_tile`` nodes a few seconds
@@ -652,7 +661,9 @@ class DomScrapeCatalogSource:
             last_count = max(last_count, count)
         logger.info("[Luna] browse scroll settled at ~%d tiles", last_count)
 
-    async def _tile_count(self, session: object, session_id: str) -> int:
+    async def _tile_count(
+        self, session: BrowserCdpSession, session_id: str,
+    ) -> int:
         """Current rendered browse-view game-tile count (0 on any failure)."""
         result = await session.send(
             "Runtime.evaluate",
@@ -662,7 +673,7 @@ class DomScrapeCatalogSource:
         count = (((result or {}).get("result") or {}).get("value")) or 0
         return count if isinstance(count, int) else 0
 
-    async def _attach_to_page_target(self, session: object) -> str:
+    async def _attach_to_page_target(self, session: BrowserCdpSession) -> str:
         """Return a CDP session id attached to the active Luna page target.
 
         Mirrors
@@ -991,28 +1002,41 @@ class LunaCatalog:
         """
         carried: list[Game] = []
         for entry in previous_entries:
-            if not isinstance(entry, dict):
-                continue
-            game_id = entry.get("store_game_id")
-            if not isinstance(game_id, str) or not game_id:
-                continue
-            if game_id in produced_ids:
-                continue
-            metadata = entry.get("metadata")
-            url = ""
-            if isinstance(metadata, dict):
-                raw = metadata.get(BROWSER_URL_KEY)
-                url = raw if isinstance(raw, str) else ""
-            if not url:
-                continue
-            title = entry.get("title")
-            carried.append(Game(
-                app_id=0,
-                store="luna",
-                store_game_id=game_id,
-                title=title if isinstance(title, str) and title else game_id,
-                installed=False,
-                tags=[GameTag.BROWSER, LUNA_STORE_TAG],
-                metadata={BROWSER_URL_KEY: url},
-            ))
+            game = LunaCatalog._reconstruct_carried_entry(entry, produced_ids)
+            if game is not None:
+                carried.append(game)
         return carried
+
+    @staticmethod
+    def _reconstruct_carried_entry(
+        entry: object, produced_ids: set[str],
+    ) -> Game | None:
+        """Rebuild a carried-forward :class:`Game` from a previous entry.
+
+        Returns ``None`` when the entry is malformed, already produced this
+        run, or missing the data needed to reconstruct it.
+        """
+        if not isinstance(entry, dict):
+            return None
+        game_id = entry.get("store_game_id")
+        if not isinstance(game_id, str) or not game_id:
+            return None
+        if game_id in produced_ids:
+            return None
+        metadata = entry.get("metadata")
+        url = ""
+        if isinstance(metadata, dict):
+            raw = metadata.get(BROWSER_URL_KEY)
+            url = raw if isinstance(raw, str) else ""
+        if not url:
+            return None
+        title = entry.get("title")
+        return Game(
+            app_id=0,
+            store="luna",
+            store_game_id=game_id,
+            title=title if isinstance(title, str) and title else game_id,
+            installed=False,
+            tags=[GameTag.BROWSER, LUNA_STORE_TAG],
+            metadata={BROWSER_URL_KEY: url},
+        )

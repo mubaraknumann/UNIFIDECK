@@ -99,11 +99,11 @@ class LunaConfig:
         fixed version lets Luna reject the client as outdated (Req 12.6).
         """
         invalid: list[str] = []
-        for name, val in self._required_text().items():
-            if not val:
+        for name, text_val in self._required_text().items():
+            if not text_val:
                 invalid.append(name)
-        for name, val in self._required_lists().items():
-            if not val:
+        for name, list_val in self._required_lists().items():
+            if not list_val:
                 invalid.append(name)
         if self.spoof_ua_template and _VERSION_PLACEHOLDER not in self.spoof_ua_template:
             invalid.append("spoof_ua_template")

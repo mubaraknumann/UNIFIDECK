@@ -11,7 +11,10 @@ node_modules
 .ruff_cache
 .pytest_cache
 .agent
+.agents
 .claude
+.kiro
+AGENTS.md
 CLAUDE.md
 .cache
 __pycache__

@@ -713,7 +713,6 @@ class _AiohttpBrowserCdpSession:
         Interleaved ``Target.attachedToTarget`` events are buffered so a
         concurrent :meth:`attached_targets` consumer does not lose them.
         """
-        import aiohttp
         ws = await self._ensure_ws()
         self._next_id += 1
         msg_id = self._next_id
@@ -725,17 +724,8 @@ class _AiohttpBrowserCdpSession:
         await ws.send_json(message)
         while True:
             raw = await ws.receive(timeout=15)
-            if raw.type != aiohttp.WSMsgType.TEXT:
-                if raw.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                    aiohttp.WSMsgType.ERROR,
-                ):
-                    raise RuntimeError("CDP browser websocket closed")
-                continue
-            payload = json.loads(raw.data)
-            if payload.get("method") == "Target.attachedToTarget":
-                self._buffer_event(payload)
+            payload = self._decode_response_frame(raw)
+            if payload is None:
                 continue
             if payload.get("id") != msg_id:
                 continue
@@ -743,6 +733,28 @@ class _AiohttpBrowserCdpSession:
                 raise RuntimeError(f"{method} failed: {payload['error']}")
             result = payload.get("result")
             return result if isinstance(result, dict) else {}
+
+    def _decode_response_frame(self, raw: Any) -> dict[str, Any] | None:
+        """Decode a CDP response frame for :meth:`send`.
+
+        Returns the parsed payload, or ``None`` when the frame should be
+        skipped (non-text keep-alive or a buffered attach event). Raises
+        when the websocket has closed.
+        """
+        import aiohttp
+        if raw.type != aiohttp.WSMsgType.TEXT:
+            if raw.type in (
+                aiohttp.WSMsgType.CLOSED,
+                aiohttp.WSMsgType.CLOSING,
+                aiohttp.WSMsgType.ERROR,
+            ):
+                raise RuntimeError("CDP browser websocket closed")
+            return None
+        payload = json.loads(raw.data)
+        if payload.get("method") == "Target.attachedToTarget":
+            self._buffer_event(payload)
+            return None
+        return payload if isinstance(payload, dict) else {}
 
     def _buffer_event(self, payload: dict[str, Any]) -> None:
         """Record a ``Target.attachedToTarget`` event for later consumption."""
@@ -769,7 +781,6 @@ class _AiohttpBrowserCdpSession:
         and the scrape proceed, while still covering every target the burst
         delivered.
         """
-        import asyncio
 
         import aiohttp
         while self._pending_events:
@@ -778,7 +789,7 @@ class _AiohttpBrowserCdpSession:
         while True:
             try:
                 raw = await ws.receive(timeout=_ATTACH_IDLE_TIMEOUT_S)
-            except (TimeoutError, asyncio.TimeoutError):
+            except TimeoutError:
                 # No further target attached within the idle window — the
                 # auto-attach burst is done. End setup rather than block.
                 return

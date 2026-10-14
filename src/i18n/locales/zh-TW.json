@@ -567,7 +567,8 @@
     "microsoft": "Microsoft",
     "battlenet": "Battle.net",
     "gamevault": "GameVault",
-    "itch": "itch.io"
+    "itch": "itch.io",
+    "luna": "Amazon Luna"
   },
   "unifiedLibrary": {
     "error": "Unifideck 錯誤",
@@ -850,6 +851,14 @@
       "addFailed": "無法新增配套程式",
       "removed": "已移除配套程式",
       "removeFailed": "無法移除配套程式"
+    },
+    "luna": {
+      "signIn": "Sign in to Luna",
+      "signInHint": "Connect your Amazon Luna account to stream this game.",
+      "reauthenticate": "Reconnect to Luna",
+      "sessionExpired": "Your Luna session expired. Reconnect to keep playing.",
+      "launchUnavailable": "Can't launch this Luna title",
+      "missingEntry": "This game is missing its launch entry. Sync your Luna library and try again."
     }
   },
   "playMeta": {
