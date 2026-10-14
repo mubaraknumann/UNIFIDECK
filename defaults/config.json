@@ -140,6 +140,33 @@
       "butler_db": "~/.local/share/unifideck/butler/butler.db",
       "default_install_root": "~/Games/itch",
       "stall_timeout_seconds": 900
+    },
+    "luna": {
+      "luna_host": "https://luna.amazon.de",
+      "allowed_stream_hosts": [
+        "luna.amazon.de",
+        "luna.amazon.com",
+        "luna.amazon.co.uk",
+        "luna.amazon.fr",
+        "luna.amazon.it",
+        "luna.amazon.es",
+        "luna.amazon.ca"
+      ],
+      "signin_path": "/signin",
+      "detail_url_pattern": "{luna_host}/game/{product_id}",
+      "player_path": "/player",
+      "catalog_endpoint": "",
+      "subscription_endpoint": "",
+      "profile_dir": "~/.local/share/unifideck/luna-profile",
+      "browser_game_cdp_flavour": "browser_game",
+      "browser_candidates": ["com.google.Chrome", "com.microsoft.Edge"],
+      "cloud_browser_flags": ["--autoplay-policy=no-user-gesture-required"],
+      "gamepad_flags": ["--enable-features=WebGamepadButtonAxisEvents"],
+      "flatpak_override_paths": ["/run/udev:ro"],
+      "spoof_ua_template": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version}.0.0.0 Safari/537.36",
+      "spoof_uach_platform": "Windows",
+      "spoof_navigator_platform": "Win32",
+      "spoof_webgl_renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)"
     }
   },
   "metadata": {
@@ -260,7 +287,7 @@
       {
         "tag": "fr-FR",
         "deepl_code": "FR",
-        "name": "Fran\u00e7ais",
+        "name": "Français",
         "rtl": false
       },
       {
@@ -272,7 +299,7 @@
       {
         "tag": "es-ES",
         "deepl_code": "ES",
-        "name": "Espa\u00f1ol",
+        "name": "Español",
         "rtl": false
       },
       {
@@ -284,7 +311,7 @@
       {
         "tag": "pt-BR",
         "deepl_code": "PT-BR",
-        "name": "Portugu\u00eas (Brasil)",
+        "name": "Português (Brasil)",
         "rtl": false
       },
       {
@@ -302,19 +329,19 @@
       {
         "tag": "ru-RU",
         "deepl_code": "RU",
-        "name": "\u0420\u0443\u0441\u0441\u043a\u0438\u0439",
+        "name": "Русский",
         "rtl": false
       },
       {
         "tag": "uk-UA",
         "deepl_code": "UK",
-        "name": "\u0423\u043a\u0440\u0430\u0457\u043d\u0441\u044c\u043a\u0430",
+        "name": "Українська",
         "rtl": false
       },
       {
         "tag": "tr-TR",
         "deepl_code": "TR",
-        "name": "T\u00fcrk\u00e7e",
+        "name": "Türkçe",
         "rtl": false
       },
       {

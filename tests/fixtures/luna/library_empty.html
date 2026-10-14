@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<!--
+  Empty Luna "My Games" browse view: the account has zero titles. The library
+  root renders with no game_tile elements (only an empty-state message). The
+  parser must yield zero titles and an empty entitlement set (Req 4.9), NOT an
+  error — "zero titles" and "scrape failed" are distinct outcomes.
+-->
+<html lang="de">
+  <head>
+    <title>Meine Spiele – Luna</title>
+  </head>
+  <body>
+    <div id="library-root">
+      <div class="empty-state">
+        <p>Du hast noch keine Spiele in deiner Bibliothek.</p>
+      </div>
+    </div>
+  </body>
+</html>

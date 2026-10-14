@@ -14,7 +14,7 @@ import {
   SiItchdotio,
   SiUbisoft,
 } from "react-icons/si";
-import { FaGamepad, FaSteam, FaXbox } from "react-icons/fa";
+import { FaCloud, FaGamepad, FaSteam, FaXbox } from "react-icons/fa";
 import { GameVaultIcon } from "./GameVaultIcon";
 import type { StoreId } from "../../types/api";
 
@@ -36,6 +36,10 @@ const STORE_ICONS: Record<StoreId, StoreGlyph> = {
   battlenet: SiBattledotnet,
   gamevault: GameVaultIcon,
   itch: SiItchdotio,
+  // react-icons/si has no Amazon Luna glyph; a cloud marks it as a cloud-
+  // streaming store, matching the "Play on Cloud" icon the stream Play
+  // control uses.
+  luna: FaCloud,
 };
 
 /**

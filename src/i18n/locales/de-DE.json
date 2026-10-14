@@ -404,7 +404,9 @@
       "battlenetClientInstallFailedMessage": "Das Installationsprogramm des Battle.net-Clients wurde nicht abgeschlossen. Versuchen Sie es erneut oder prüfen Sie im Startprotokoll, was gemeldet wurde.",
       "installingBattlenet": "Installation über Battle.net",
       "installingBattlenetMessage": "Battle.net wird geöffnet. Klicken Sie dort auf Installieren, um den Download von {{gameTitle}} zu starten.",
-      "wrapperOpening": "{{client}} wird geöffnet"
+      "wrapperOpening": "{{client}} wird geöffnet",
+      "launchWarning": "Startwarnung",
+      "companionStartFailed": "Ein Begleitprogramm für {{game_key}} konnte nicht gestartet werden. Das Spiel selbst wurde normal gestartet."
     },
     "updateComplete": "Update abgeschlossen!",
     "updateCompleteMessage": "{{title}} wurde aktualisiert.",
@@ -565,7 +567,8 @@
     "microsoft": "Microsoft",
     "battlenet": "Battle.net",
     "gamevault": "GameVault",
-    "itch": "itch.io"
+    "itch": "itch.io",
+    "luna": "Amazon Luna"
   },
   "unifiedLibrary": {
     "error": "Unifideck-Fehler",
@@ -794,6 +797,27 @@
       "subtitle": "Wählen Sie aus, welche Datei dieses Spiel startet (z. B. um einen Launcher zu überspringen und das Spiel direkt auszuführen). Das Arbeitsverzeichnis und Cloud-Spielstände sind nicht betroffen.",
       "title": "Ausführbare Datei ändern. {{game}}",
       "unavailable": "Der Ordner dieses Spiels konnte nicht gelesen werden."
+    },
+    "companions": {
+      "menuItem": "Begleitprogramme…",
+      "title": "Begleitprogramme — {{game}}",
+      "subtitle": "Zusatzprogramme (Trainer, Cheat-Tools, Dienstprogramme), die zusammen mit diesem Spiel im selben Proton-Prefix gestartet werden. Ein fehlgeschlagenes Begleitprogramm blockiert das Spiel nie.",
+      "add": "Hinzufügen…",
+      "delayHint": "Es wird immer eine Mindestverzögerung von 10s angewendet — ein Start direkt beim allerersten Spielstart kann diesen sonst fehlschlagen lassen.",
+      "empty": "Noch keine Begleitprogramme hinzugefügt.",
+      "delaySeconds": "Verzögerung: {{seconds}}s",
+      "added": "Begleitprogramm hinzugefügt",
+      "addFailed": "Begleitprogramm konnte nicht hinzugefügt werden",
+      "removed": "Begleitprogramm entfernt",
+      "removeFailed": "Begleitprogramm konnte nicht entfernt werden"
+    },
+    "luna": {
+      "signIn": "Sign in to Luna",
+      "signInHint": "Connect your Amazon Luna account to stream this game.",
+      "reauthenticate": "Reconnect to Luna",
+      "sessionExpired": "Your Luna session expired. Reconnect to keep playing.",
+      "launchUnavailable": "Can't launch this Luna title",
+      "missingEntry": "This game is missing its launch entry. Sync your Luna library and try again."
     }
   },
   "playMeta": {

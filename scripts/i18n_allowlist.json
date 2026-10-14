@@ -215,5 +215,34 @@
   "storeOwnership.messageXboxCloud": {
     "locales": "*",
     "reason": "Brand name (Xbox Cloud Gaming), unchanged on Microsoft's own localized pages."
+  },
+
+  "deckTabs.luna": {
+    "locales": "*",
+    "reason": "Product name of Amazon's cloud-gaming service (Amazon Luna). Amazon ships it under this Latin-script name in every market, so every locale keeps it — the same treatment deckTabs.gamevault and deckTabs.microsoft already get."
+  },
+  "play.luna.signIn": {
+    "locales": "*",
+    "reason": "New Amazon Luna store string. The en-US source is authoritative and the non-English locales carry the English fallback until a translator passes over them; recorded here so the gate reads 'identical on purpose' rather than a silent miss. Translate when the Luna localisation pass lands."
+  },
+  "play.luna.signInHint": {
+    "locales": "*",
+    "reason": "New Amazon Luna store string. The en-US source is authoritative and the non-English locales carry the English fallback until a translator passes over them; recorded here so the gate reads 'identical on purpose' rather than a silent miss. Translate when the Luna localisation pass lands."
+  },
+  "play.luna.reauthenticate": {
+    "locales": "*",
+    "reason": "New Amazon Luna store string. The en-US source is authoritative and the non-English locales carry the English fallback until a translator passes over them; recorded here so the gate reads 'identical on purpose' rather than a silent miss. Translate when the Luna localisation pass lands."
+  },
+  "play.luna.sessionExpired": {
+    "locales": "*",
+    "reason": "New Amazon Luna store string. The en-US source is authoritative and the non-English locales carry the English fallback until a translator passes over them; recorded here so the gate reads 'identical on purpose' rather than a silent miss. Translate when the Luna localisation pass lands."
+  },
+  "play.luna.launchUnavailable": {
+    "locales": "*",
+    "reason": "New Amazon Luna store string. The en-US source is authoritative and the non-English locales carry the English fallback until a translator passes over them; recorded here so the gate reads 'identical on purpose' rather than a silent miss. Translate when the Luna localisation pass lands."
+  },
+  "play.luna.missingEntry": {
+    "locales": "*",
+    "reason": "New Amazon Luna store string. The en-US source is authoritative and the non-English locales carry the English fallback until a translator passes over them; recorded here so the gate reads 'identical on purpose' rather than a silent miss. Translate when the Luna localisation pass lands."
   }
 }
