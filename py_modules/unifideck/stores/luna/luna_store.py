@@ -157,15 +157,7 @@ class LunaStore(
         # The catalog source is the SAME strategy the subscription gate and the
         # catalog reconciliation share (one choice drives both). Default is the
         # DOM scrape (Strategy B) — the only path the feasibility test proved.
-        self._catalog_source: CatalogSource = (
-            catalog_source or DomScrapeCatalogSource()
-        )
-        self._subscription = LunaSubscription(
-            self._luna_config, self._catalog_source,
-        )
-        self._catalog = LunaCatalog(
-            self._luna_config, self._subscription, self._catalog_source,
-        )
+        self._build_catalog_layer(catalog_source)
         self._auth = auth or LunaAuth(
             bus, self._browser, self._session, self._luna_config,
         )
@@ -180,6 +172,25 @@ class LunaStore(
         # advanced by every operation that reaches a terminal, non-recovery
         # outcome.
         self._last_stable_status: str = LunaStatus.NOT_CONNECTED
+
+    def _build_catalog_layer(
+        self, catalog_source: CatalogSource | None,
+    ) -> None:
+        """Wire the shared catalog source, subscription gate, and catalog.
+
+        Extracted from :meth:`__init__` so the constructor stays under the
+        fan-out cap; sets the exact same ``_catalog_source`` /
+        ``_subscription`` / ``_catalog`` attributes with identical defaults.
+        """
+        self._catalog_source: CatalogSource = (
+            catalog_source or DomScrapeCatalogSource()
+        )
+        self._subscription = LunaSubscription(
+            self._luna_config, self._catalog_source,
+        )
+        self._catalog = LunaCatalog(
+            self._luna_config, self._subscription, self._catalog_source,
+        )
 
     # ── Availability ─────────────────────────────────────────────────
 

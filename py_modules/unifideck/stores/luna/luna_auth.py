@@ -182,39 +182,21 @@ class LunaAuth:
         self._profile_override.apply_flatpak_override()
 
         # 2. Spawn the kiosk at the sign-in page.
-        signin_url = self._signin_url()
-        launched = await self._launch(signin_url)
+        launched = await self._launch(self._signin_url())
         if not launched:
             logger.warning("[LunaAuth] no supported browser found")
             return self._not_connected(ERR_NO_BROWSER)
 
         try:
-            # The flatpak browser silently fails to create a
-            # ``--user-data-dir`` it cannot write; an absent dir here means
-            # the override never landed (Req 8.4).
-            try:
-                self._profile_override.verify_persisted()
-            except LunaProfileError as exc:
-                logger.warning("[LunaAuth] profile not persisted: %s", exc)
-                return self._not_connected(ERR_PROFILE_NOT_PERSISTED, url=exc.path)
-
-            # 3. Attach the spoofer so the sign-in page is already spoofed
-            #    (Req 1.1). A spoofing-config failure aborts the sign-in.
-            cdp = self._cdp_factory(self._browser.cdp_port())
-            if not await self._wait_for_cdp(cdp):
-                logger.warning("[LunaAuth] CDP never came up; aborting sign-in")
-                return self._not_connected(ERR_SPOOFING_FAILURE)
-            try:
-                await self._spoofer_factory(self._config).attach(cdp)
-            except LunaSpoofConfigError as exc:
-                logger.warning(
-                    "[LunaAuth] spoofer attach failed (reported=%r): %s",
-                    exc.reported, exc,
-                )
-                return self._not_connected(ERR_SPOOFING_FAILURE)
+            # 3. Bring up the spoofed sign-in session: verify the profile
+            #    persisted, wait for CDP, and attach the spoofer. Returns a
+            #    not-connected result instead of a CDP client on any failure.
+            prepared = await self._prepare_signin_session()
+            if isinstance(prepared, AuthResult):
+                return prepared
 
             # 4. Poll the sign-in to a terminal outcome.
-            outcome = await self.run_sign_in(cdp)
+            outcome = await self.run_sign_in(prepared)
         finally:
             # Always tear the kiosk down — on success it has served its
             # purpose, on failure it must not linger holding the profile.
@@ -227,6 +209,40 @@ class LunaAuth:
         # Not connected: discard any partial session state (Req 1.5/1.6/1.8).
         self._discard_partial_state()
         return self._not_connected(outcome.error or ERR_SIGN_IN_NO_COOKIES)
+
+    async def _prepare_signin_session(self) -> EdgeCDPClient | AuthResult:
+        """Verify the profile persisted, bring up CDP, and attach the spoofer.
+
+        Returns the ready :class:`EdgeCDPClient` on success, or a
+        not-connected :class:`AuthResult` on any failure (profile not
+        persisted, CDP never came up, or a spoofing-config error). Extracted
+        from :meth:`start_auth` so that orchestrator stays under the fan-out
+        cap; behaviour is identical to the inline block it replaced.
+        """
+        # The flatpak browser silently fails to create a ``--user-data-dir``
+        # it cannot write; an absent dir here means the override never
+        # landed (Req 8.4).
+        try:
+            self._profile_override.verify_persisted()
+        except LunaProfileError as exc:
+            logger.warning("[LunaAuth] profile not persisted: %s", exc)
+            return self._not_connected(ERR_PROFILE_NOT_PERSISTED, url=exc.path)
+
+        # Attach the spoofer so the sign-in page is already spoofed (Req 1.1).
+        # A spoofing-config failure aborts the sign-in.
+        cdp = self._cdp_factory(self._browser.cdp_port())
+        if not await self._wait_for_cdp(cdp):
+            logger.warning("[LunaAuth] CDP never came up; aborting sign-in")
+            return self._not_connected(ERR_SPOOFING_FAILURE)
+        try:
+            await self._spoofer_factory(self._config).attach(cdp)
+        except LunaSpoofConfigError as exc:
+            logger.warning(
+                "[LunaAuth] spoofer attach failed (reported=%r): %s",
+                exc.reported, exc,
+            )
+            return self._not_connected(ERR_SPOOFING_FAILURE)
+        return cdp
 
     # ── Poll loop (injectable clock/sleep; browser-free in tests) ─────
 
