@@ -42,23 +42,18 @@ _MAX_RUNTIME = 300
 # alongside Ghost of Tsushima in Gaming Mode:
 #
 #   "fake"  — tag with the companion's own dedicated fake appid. gamescope
-#             does not composite the window AT ALL: the trainer is simply
-#             not on screen. An appid Steam does not know never enters the
-#             focusable-app list gamescope receives FROM Steam
-#             (``ctxFocusControlAppIDs`` in ``pick_primary_focus_and_override``),
-#             so no fake VALUE can ever work — the earlier suspicion that
-#             this was a signed-vs-unsigned range problem was wrong, a
-#             value safely inside the positive int32 range behaved
-#             identically.
+#             does not composite the window AT ALL: an appid Steam does not
+#             know never enters the focusable-app list gamescope receives
+#             FROM Steam (``ctxFocusControlAppIDs`` in
+#             ``pick_primary_focus_and_override``), so no fake VALUE works.
 #   "game"  — tag with the main game's real appid. Both windows exist, but
 #             gamescope's focus picker paints only one window per appid, so
 #             the trainer covers the game (or vice versa) with no way to
 #             switch between them; closing the front one reveals the other.
-#   "skip"  — leave the companion window WITHOUT a STEAM_GAME property.
-#             This reproduces what the committed pre-companion tagger did
-#             implicitly: it only ever matched on WM_CLASS, so a companion
-#             window that did not carry the game's ``steam_app_<appid>``
-#             WM_CLASS was ignored entirely.
+#   "skip"  — leave the companion window WITHOUT a STEAM_GAME property,
+#             reproducing the pre-companion tagger: it only matched on
+#             WM_CLASS, so a companion window lacking the game's
+#             ``steam_app_<appid>`` WM_CLASS was ignored entirely.
 #
 # CRUCIAL CONTEXT for the table above: all three of those results were
 # measured while the launcher had ESCAPED Steam's pressure-vessel container
