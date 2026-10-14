@@ -58,6 +58,17 @@ async def run_browser_game(svc: LauncherService, ctx: LaunchContext) -> Result:
     """Open ``ctx.browser_url`` in an Edge kiosk and block until it closes."""
     from unifideck.core.types.events import Events
 
+    # Luna is a stream browser game too, but needs CDP platform-spoofing +
+    # play-activation + a dedicated profile/gamepad kiosk the generic Edge
+    # path does not provide, and may run on Chrome (not Edge) — so it does
+    # not go through the ``_edge_missing`` Edge check below. Dispatch it to
+    # its own orchestration; xCloud and itch.io keep this generic path
+    # byte-for-byte. Kept as the one luna-gated line here (the Luna logic
+    # lives entirely in the luna package).
+    if ctx.store == "luna":
+        from unifideck.stores.luna.luna_launch_flow import run_luna_browser_game
+        return await run_luna_browser_game(svc, ctx)
+
     abort = await _edge_missing(svc, ctx)
     if abort is not None:
         return abort

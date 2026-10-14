@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<!--
+  Luna browse view mixing valid tiles with malformed/partial ones that MUST be
+  skipped by the parser (Req 4.7 — the product id is the single required id):
+
+    * a game_tile with NO id attribute (cannot recover a product id)
+    * a game_tile whose id has the "game_tile_" prefix but is not an
+      amzn1.adg.product.<UUID> id (not a product tile)
+    * a tile with an empty id ("game_tile_")
+    * a DUPLICATE of a valid tile (same product id appears twice) -> dedup to
+      one title
+
+  Exactly ONE well-formed title (Celeste) survives.
+-->
+<html lang="de">
+  <head><title>Meine Spiele – Luna</title></head>
+  <body>
+    <div id="library-root">
+      <!-- malformed: no id at all -->
+      <div data-test-id="game_tile" role="button">
+        <img alt="Ghost Title (no id)" src="/art/ghost.jpg" />
+      </div>
+
+      <!-- malformed: prefixed id but not a product id -->
+      <div
+        data-test-id="game_tile"
+        role="button"
+        id="game_tile_not-a-product-id"
+      >
+        <img alt="Wrong Id Scheme" src="/art/wrong.jpg" />
+      </div>
+
+      <!-- malformed: empty product id after the prefix -->
+      <div
+        data-test-id="game_tile"
+        role="button"
+        id="game_tile_"
+      >
+        <img alt="Empty Id" src="/art/empty.jpg" />
+      </div>
+
+      <!-- valid title -->
+      <div
+        data-test-id="game_tile"
+        role="button"
+        id="game_tile_amzn1.adg.product.aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      >
+        <img alt="Celeste" src="/art/celeste.jpg" />
+      </div>
+
+      <!-- duplicate of the valid title: same product id, must dedup -->
+      <div
+        data-test-id="game_tile"
+        role="button"
+        id="game_tile_amzn1.adg.product.aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      >
+        <img alt="Celeste" src="/art/celeste.jpg" />
+      </div>
+    </div>
+  </body>
+</html>

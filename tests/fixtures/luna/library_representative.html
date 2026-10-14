@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<!--
+  Representative Amazon Luna "My Games" browse-view page (synthetic, modelled
+  on the spike-verified F6 DOM: luna.amazon.de/browse?quick_search=my_games).
+
+  Each playable title is a clickable tile:
+      div[data-test-id="game_tile"][role="button"]
+         id="game_tile_amzn1.adg.product.<UUID>"
+  carrying a nested <img alt="..."> for the name. One title additionally shows
+  the German Prime-inclusion marker "In Prime enthalten". A sibling
+  *_impression wrapper (role!=button, id ending _impression) accompanies each
+  tile and must NOT be parsed as a title.
+
+  This fixture is the designated point (task 8.1) to replace with real captured
+  browse HTML; only the extraction JS needs touching when it is, the parser and
+  this test's assertions stay valid.
+-->
+<html lang="de">
+  <head>
+    <title>Meine Spiele – Luna</title>
+  </head>
+  <body>
+    <div id="library-root">
+      <!-- Title 1: Prime-included -> entitled -->
+      <div
+        data-test-id="game_tile"
+        role="button"
+        id="game_tile_amzn1.adg.product.11111111-1111-4111-8111-111111111111"
+      >
+        <img alt="Fortnite" src="/art/fortnite.jpg" />
+        <span class="badge">In Prime enthalten</span>
+      </div>
+      <div
+        id="game_tile_amzn1.adg.product.11111111-1111-4111-8111-111111111111_impression"
+        role="presentation"
+      ></div>
+
+      <!-- Title 2: no Prime marker -> not flagged entitled -->
+      <div
+        data-test-id="game_tile"
+        role="button"
+        id="game_tile_amzn1.adg.product.22222222-2222-4222-8222-222222222222"
+      >
+        <img alt="Devil May Cry 5" src="/art/dmc5.jpg" />
+      </div>
+      <div
+        id="game_tile_amzn1.adg.product.22222222-2222-4222-8222-222222222222_impression"
+        role="presentation"
+      ></div>
+
+      <!-- Title 3: name only in aria-label, no nested img -->
+      <div
+        data-test-id="game_tile"
+        role="button"
+        id="game_tile_amzn1.adg.product.33333333-3333-4333-8333-333333333333"
+        aria-label="Immortals Fenyx Rising"
+      ></div>
+
+      <!-- Title 4: the OTHER id namespace (amzn1.luna.product, not adg) —
+           Luna-native/newer titles use this; it was silently dropped when
+           only adg.product was matched (STAR WARS Galactic Racer on the real
+           account). -->
+      <div
+        data-test-id="game_tile"
+        role="button"
+        id="game_tile_amzn1.luna.product.44444444-4444-4444-8444-444444444444"
+        aria-label="STAR WARS: Galactic Racer"
+      ></div>
+    </div>
+  </body>
+</html>

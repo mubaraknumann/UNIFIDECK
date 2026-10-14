@@ -118,7 +118,7 @@ def _context_without_exe(
     out of :func:`_build_context` to keep its fan-out under the gate.
     """
     exe = ""
-    # Browser games (xCloud streams, itch.io HTML5 games) install
+    # Browser games (xCloud / Luna streams, itch.io HTML5 games) install
     # nothing and have no games.map row; the library cache says where
     # they open. See ``launcher/browser_games``.
     target = None if is_wrapper_store(store) else browser_target(store, game_id)
@@ -371,6 +371,7 @@ def _detect_special_action() -> tuple[str | None, str | None, bool]:
         "ubisoft":   os.environ.get("UNIFIDECK_UBISOFT_ACTION"),
         "battlenet": os.environ.get("UNIFIDECK_BATTLENET_ACTION"),
         "itch":      os.environ.get("UNIFIDECK_ITCH_ACTION"),
+        "luna":      os.environ.get("UNIFIDECK_LUNA_ACTION"),
     }
     for candidate_store, action in action_env.items():
         if action == "auth":

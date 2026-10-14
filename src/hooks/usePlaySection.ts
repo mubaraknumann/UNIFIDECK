@@ -20,7 +20,9 @@
 import { useMemo } from "react";
 import { useGameInfo } from "./useGameInfo";
 import { useDownloads } from "../contexts/DownloadContext";
+import { authStore } from "../stores/auth-store";
 import type { DownloadItem } from "../types/downloads";
+import type { StoreStatus } from "../types/api";
 
 /**
  * Discriminated union of the Play-section states. Drives
@@ -39,6 +41,15 @@ export type PlaySectionState =
       /** "stream" = xCloud (Play on Cloud); "web" = an HTML5 game. */
       variant: "stream" | "web";
       url: string;
+      /** When set, the browser game is a connection-gated store (Amazon
+       *  Luna, Req 10): Play is enabled only while `authStatus === "connected"`,
+       *  disabled with a sign-in prompt while `"disconnected"`, and shown with
+       *  a re-authentication prompt while `"expired"` (session expired). xCloud
+       *  and itch.io leave this undefined and stay always-playable. */
+      gatedStore?: "luna";
+      /** The gated store's current connection status, read from the shared
+       *  auth-store. Undefined until the first `check_store_status` lands. */
+      authStatus?: StoreStatus;
     };
 
 /**
@@ -54,6 +65,15 @@ export type PlaySectionState =
 export function usePlaySection(appId: number | null): PlaySectionState {
   const info = useGameInfo(appId);
   const downloads = useDownloads();
+  // Luna's Play control is gated on its connection state (Req 10), so the
+  // section needs the live Luna status. Read it straight from the boot-time
+  // auth-store SINGLETON — NOT via useAuth()/AuthContext. This hook renders
+  // in Steam's injected React tree, which is not under <AuthProvider>, so
+  // useAuth() threw "called outside <AuthProvider>" there and crashed the
+  // whole Play section for EVERY store (observed on-device). A plain store
+  // read has no provider dependency and no extra React-hook requirement; the
+  // Play section re-mounts on store-status changes, so this stays current.
+  const lunaStatus = authStore.getSnapshot().statuses.luna;
 
   return useMemo<PlaySectionState>(() => {
     if (appId == null || !info.data) {
@@ -72,8 +92,13 @@ export function usePlaySection(appId: number | null): PlaySectionState {
     // the library cache (backend `launcher/browser_games`). `xcloud` alone
     // still counts, for a library cached before the `browser` tag existed.
     const tags = game.store_tags ?? [];
-    if (tags.includes("browser") || tags.includes("xcloud")) {
-      const stream = tags.includes("xcloud");
+    // A Luna title is a browser-session stream like xCloud, but its Play
+    // control is connection-gated (Req 10). Detect it by the `luna` store tag
+    // or the store id so a library cached before the tag existed still gates.
+    const isLuna = game.store === "luna" || tags.includes("luna");
+    if (tags.includes("browser") || tags.includes("xcloud") || isLuna) {
+      // Luna is always a stream; xCloud is a stream; itch.io is `web`.
+      const stream = isLuna || tags.includes("xcloud");
       return {
         kind: "browser",
         shouldOverride: true,
@@ -81,7 +106,10 @@ export function usePlaySection(appId: number | null): PlaySectionState {
         variant: stream ? "stream" : "web",
         url:
           game.browser_url ??
-          (stream ? `https://www.xbox.com/play/launch/${game.id}` : ""),
+          (stream && !isLuna
+            ? `https://www.xbox.com/play/launch/${game.id}`
+            : ""),
+        ...(isLuna ? { gatedStore: "luna", authStatus: lunaStatus } : {}),
       };
     }
 
@@ -101,7 +129,7 @@ export function usePlaySection(appId: number | null): PlaySectionState {
     }
 
     return { kind: "installed", shouldOverride: true, appId };
-  }, [appId, info.data, downloads.queue]);
+  }, [appId, info.data, downloads.queue, lunaStatus]);
 }
 
 /**

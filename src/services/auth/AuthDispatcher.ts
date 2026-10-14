@@ -38,6 +38,7 @@ import {
   launchEpicAuthViaShortcut,
   launchGogAuthViaShortcut,
   launchItchAuthViaShortcut,
+  launchLunaAuthViaShortcut,
   launchMicrosoftAuthViaShortcut,
 } from "../../utils/authShortcutLaunch";
 import { launchUbisoftAuthViaShortcut } from "../../utils/ubisoftShortcutLaunch";
@@ -406,6 +407,12 @@ class AuthDispatcherImpl {
       throwing: false,
     });
     console.log(`[AuthDispatcher:${store}] store_auth returned:`, startResult);
+    // The backend's structured ``store_status`` hint (Luna puts its rich
+    // connection state here) travels on both the success and the failure
+    // early paths so the caller can render the matching prompt (Req 10).
+    const backendMetadata = (
+      startResult as { metadata?: Record<string, unknown> } | null
+    )?.metadata;
     if (
       startResult?.success === true &&
       !(startResult as { metadata?: { pending?: boolean } } | null)?.metadata
@@ -415,7 +422,7 @@ class AuthDispatcherImpl {
         `[AuthDispatcher:${store}] backend reports already-authed, ` +
           `resolving without shortcut launch`,
       );
-      return { early: { success: true, store } };
+      return { early: { success: true, store, metadata: backendMetadata } };
     }
     // Backend reported a structured failure (e.g. ``edge_not_installed``)
     // before any shortcut was needed. Surface it as the resolved
@@ -432,6 +439,7 @@ class AuthDispatcherImpl {
           success: false,
           store,
           error: startResult.error,
+          metadata: backendMetadata,
         } as AuthResult,
       };
     }
@@ -481,6 +489,8 @@ class AuthDispatcherImpl {
         return launchBattlenetAuthViaShortcut();
       case "itch":
         return launchItchAuthViaShortcut();
+      case "luna":
+        return launchLunaAuthViaShortcut();
       default:
         return { success: false, error: `no launcher wired for ${store}` };
     }

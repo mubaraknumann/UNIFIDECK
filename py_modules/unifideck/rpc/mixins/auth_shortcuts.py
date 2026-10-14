@@ -75,6 +75,7 @@ _AUTH_SHORTCUT_META: dict[str, dict[str, str]] = {
     "amazon":    {"title": "Amazon Games Sign-In", "env": "UNIFIDECK_AMAZON_ACTION"},
     "microsoft": {"title": "Microsoft Sign-In",    "env": "UNIFIDECK_MICROSOFT_ACTION"},
     "itch":      {"title": "itch.io Sign-In",      "env": "UNIFIDECK_ITCH_ACTION"},
+    "luna":      {"title": "Amazon Luna Sign-In",  "env": "UNIFIDECK_LUNA_ACTION"},
 }
 
 class AuthShortcutsRPCMixin:
@@ -101,6 +102,10 @@ class AuthShortcutsRPCMixin:
     async def get_itch_auth_shortcut_context(self) -> Any:
         """Auth-shortcut context for the itch.io sign-in window."""
         return _build_and_log("itch")
+
+    async def get_luna_auth_shortcut_context(self) -> Any:
+        """Auth-shortcut context for the Amazon Luna sign-in kiosk."""
+        return _build_and_log("luna")
 
     async def _wrapper_auth_shortcut_context(self, store_id: str) -> Any:
         """Auth-shortcut context for any wrapper store.

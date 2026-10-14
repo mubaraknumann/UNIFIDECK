@@ -569,6 +569,13 @@ SHARED_HELPERS: dict[str, str] = {
     # had their own; the two ``_refresh_token`` copies had diverged, and each
     # carried a defect the other had fixed. Register item 47.
     "_refresh_token": "stores/epic/launcher_auth.py",
+    # Luna's CDP page-target-attach step. The catalog scrape, the play-trigger
+    # and the platform-probe verify each held a byte-identical copy of the
+    # ``_attach_to_page_target`` body (same ``Target.getTargets`` →
+    # first-``page`` → ``Target.attachToTarget`` sequence), differing only in
+    # the exception each raised. Promoted so there is one definition; callers
+    # pass their own ``raise_no_target`` / ``raise_no_session`` factory.
+    "attach_to_page_target": "stores/luna/luna_cdp.py",
 }
 
 DIVERGENCE_RE = re.compile(r"#\s*intentional-divergence:\s*\S")

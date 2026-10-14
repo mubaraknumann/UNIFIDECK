@@ -141,6 +141,21 @@ const ITCH_AUTH_CONFIG: AuthShortcutConfig = {
   storefrontStoreIdPrefix: "itch:itch-store",
 };
 
+/** Amazon Luna cloud streaming. Unlike the OAuth stores Luna has no Wine
+ *  prefix: the launcher opens the spoofed browser-game kiosk on the Amazon
+ *  sign-in page inside the gamescope session. Same shortcut -> RunGame
+ *  pipeline, keyed off UNIFIDECK_LUNA_ACTION=auth. */
+const LUNA_AUTH_CONFIG: AuthShortcutConfig = {
+  store: "luna",
+  storeId: "luna:luna-auth",
+  tempStoreIdPrefix: "luna:luna-auth-temp",
+  appName: "Amazon Luna Sign-In",
+  actionEnvVar: "UNIFIDECK_LUNA_ACTION",
+  contextRpcMethod: rpcRoutes.getLunaAuthShortcutContext,
+  storeAppName: "Amazon Luna",
+  storefrontStoreIdPrefix: "luna:luna-store",
+};
+
 /** Log tag. */
 function logTag(config: AuthShortcutConfig): string {
   return `[AuthShortcutLaunch:${config.store}]`;
@@ -307,6 +322,12 @@ export const launchMicrosoftAuthViaShortcut =
 export const launchItchAuthViaShortcut =
   (): Promise<AuthShortcutLaunchResult> =>
     launchAuthViaShortcut(ITCH_AUTH_CONFIG);
+
+/** Amazon Luna. Opens the spoofed kiosk on the Amazon sign-in page via the
+ *  shortcut -> RunGame pipeline so it renders in Gaming Mode. */
+export const launchLunaAuthViaShortcut =
+  (): Promise<AuthShortcutLaunchResult> =>
+    launchAuthViaShortcut(LUNA_AUTH_CONFIG);
 
 // ─── Storefront launchers ────────────────────────────────────
 /**

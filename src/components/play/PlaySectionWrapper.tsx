@@ -75,6 +75,8 @@ export const PlaySectionWrapper: FC<PlaySectionWrapperProps> = ({ appId }) => {
             appId={state.appId}
             variant={state.variant}
             url={state.url}
+            gatedStore={state.gatedStore}
+            authStatus={state.authStatus}
           />
         );
         break;

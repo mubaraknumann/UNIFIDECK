@@ -43,7 +43,8 @@ export type StoreSlug =
   | "battlenet"
   | "microsoft"
   | "gamevault"
-  | "itch";
+  | "itch"
+  | "luna";
 
 export type FilterType =
   | "installed"
@@ -920,6 +921,7 @@ export async function loadUnifideckCache(): Promise<void> {
       microsoft: 0,
       gamevault: 0,
       itch: 0,
+      luna: 0,
     };
     for (const g of games ?? []) {
       if (g.app_id == null) continue;
