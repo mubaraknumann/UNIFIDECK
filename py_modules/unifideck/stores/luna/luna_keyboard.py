@@ -50,6 +50,95 @@ _AZERTY_ROWS = [
 #: The CDP log tag so a keyboard inject is attributable in the launcher log.
 _KEYBOARD_LOG_PREFIX = "luna.keyboard"
 
+#: Sentinel tokens substituted at build time. Using ``str.replace`` on unique
+#: sentinels (rather than ``str.format``/f-string interpolation) keeps the
+#: embedded JS braces untouched, so the emitted script stays byte-for-byte
+#: identical to the historical f-string output.
+_ROWS_SENTINEL = "__ROWS_LITERAL__"
+_LAYOUT_SENTINEL = "__LAYOUT_JSON__"
+
+#: The one-shot keyboard-install JS, hoisted out of
+#: :func:`build_virtual_keyboard_script` so that function stays under the
+#: 80-line volumetry cap. ``{ROWS}`` / ``{LAYOUT}`` sentinels are replaced
+#: with ``json.dumps(rows)`` and ``json.dumps(layout)`` respectively. The
+#: body is byte-for-byte identical to the previous inline template.
+_KEYBOARD_SCRIPT_TEMPLATE = """
+(() => {
+  if (window.__unifideckLunaKeyboard) { return 'already-installed'; }
+  const ROWS = __ROWS_LITERAL__;
+  const LAYOUT = __LAYOUT_JSON__;
+  const SHOW_HIDE_MS = 500;
+  let activeField = null;
+  let hideTimer = null;
+
+  const kb = document.createElement('div');
+  kb.id = 'unifideck-luna-keyboard';
+  kb.style.cssText = [
+    'position:fixed', 'left:0', 'right:0', 'bottom:0', 'z-index:2147483647',
+    'display:none', 'flex-direction:column', 'gap:6px', 'padding:10px',
+    'background:rgba(20,20,24,0.96)', 'font-family:sans-serif',
+  ].join(';');
+
+  const typeInto = (text) => {
+    if (!activeField) { return; }
+    const start = activeField.selectionStart;
+    if (typeof start === 'number' && 'setRangeText' in activeField) {
+      activeField.setRangeText(text, start, activeField.selectionEnd, 'end');
+    } else {
+      activeField.value = (activeField.value || '') + text;
+    }
+    activeField.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
+  for (const row of ROWS) {
+    const rowEl = document.createElement('div');
+    rowEl.style.cssText = 'display:flex;gap:6px;justify-content:center';
+    for (const key of row) {
+      const btn = document.createElement('button');
+      btn.textContent = key;
+      btn.type = 'button';
+      btn.style.cssText =
+        'min-width:42px;min-height:42px;font-size:18px;border-radius:6px';
+      // Keep focus on the field so focusout does not hide the keyboard.
+      btn.addEventListener('mousedown', (e) => e.preventDefault());
+      btn.addEventListener('click', () => typeInto(key));
+      rowEl.appendChild(btn);
+    }
+    kb.appendChild(rowEl);
+  }
+
+  const show = () => {
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+    kb.style.display = 'flex';
+  };
+  const hideSoon = () => {
+    hideTimer = setTimeout(() => { kb.style.display = 'none'; }, SHOW_HIDE_MS);
+  };
+
+  const isTextField = (el) =>
+    !!el && (el.tagName === 'TEXTAREA' ||
+      (el.tagName === 'INPUT' && !['button','submit','checkbox','radio','range']
+        .includes((el.type || 'text').toLowerCase())) ||
+      el.isContentEditable);
+
+  document.addEventListener('focusin', (e) => {
+    if (isTextField(e.target)) { activeField = e.target; show(); }
+  }, true);
+  document.addEventListener('focusout', (e) => {
+    if (e.target === activeField) { activeField = null; hideSoon(); }
+  }, true);
+
+  const mount = () => {
+    if (document.body) { document.body.appendChild(kb); }
+  };
+  if (document.body) { mount(); }
+  else { document.addEventListener('DOMContentLoaded', mount); }
+
+  window.__unifideckLunaKeyboard = { layout: LAYOUT };
+  return 'installed:' + LAYOUT;
+})()
+"""
+
 
 def select_layout(locale: str | None) -> str:
     """Choose the keyboard layout name from the Unifideck locale (Req 7.3, 7.4).
@@ -91,82 +180,12 @@ def build_virtual_keyboard_script(locale: str | None) -> str:
     layout = select_layout(locale)
     rows = _rows_for_layout(layout)
     rows_literal = json.dumps(rows)
-    return f"""
-(() => {{
-  if (window.__unifideckLunaKeyboard) {{ return 'already-installed'; }}
-  const ROWS = {rows_literal};
-  const LAYOUT = {json.dumps(layout)};
-  const SHOW_HIDE_MS = 500;
-  let activeField = null;
-  let hideTimer = null;
-
-  const kb = document.createElement('div');
-  kb.id = 'unifideck-luna-keyboard';
-  kb.style.cssText = [
-    'position:fixed', 'left:0', 'right:0', 'bottom:0', 'z-index:2147483647',
-    'display:none', 'flex-direction:column', 'gap:6px', 'padding:10px',
-    'background:rgba(20,20,24,0.96)', 'font-family:sans-serif',
-  ].join(';');
-
-  const typeInto = (text) => {{
-    if (!activeField) {{ return; }}
-    const start = activeField.selectionStart;
-    if (typeof start === 'number' && 'setRangeText' in activeField) {{
-      activeField.setRangeText(text, start, activeField.selectionEnd, 'end');
-    }} else {{
-      activeField.value = (activeField.value || '') + text;
-    }}
-    activeField.dispatchEvent(new Event('input', {{ bubbles: true }}));
-  }};
-
-  for (const row of ROWS) {{
-    const rowEl = document.createElement('div');
-    rowEl.style.cssText = 'display:flex;gap:6px;justify-content:center';
-    for (const key of row) {{
-      const btn = document.createElement('button');
-      btn.textContent = key;
-      btn.type = 'button';
-      btn.style.cssText =
-        'min-width:42px;min-height:42px;font-size:18px;border-radius:6px';
-      // Keep focus on the field so focusout does not hide the keyboard.
-      btn.addEventListener('mousedown', (e) => e.preventDefault());
-      btn.addEventListener('click', () => typeInto(key));
-      rowEl.appendChild(btn);
-    }}
-    kb.appendChild(rowEl);
-  }}
-
-  const show = () => {{
-    if (hideTimer) {{ clearTimeout(hideTimer); hideTimer = null; }}
-    kb.style.display = 'flex';
-  }};
-  const hideSoon = () => {{
-    hideTimer = setTimeout(() => {{ kb.style.display = 'none'; }}, SHOW_HIDE_MS);
-  }};
-
-  const isTextField = (el) =>
-    !!el && (el.tagName === 'TEXTAREA' ||
-      (el.tagName === 'INPUT' && !['button','submit','checkbox','radio','range']
-        .includes((el.type || 'text').toLowerCase())) ||
-      el.isContentEditable);
-
-  document.addEventListener('focusin', (e) => {{
-    if (isTextField(e.target)) {{ activeField = e.target; show(); }}
-  }}, true);
-  document.addEventListener('focusout', (e) => {{
-    if (e.target === activeField) {{ activeField = null; hideSoon(); }}
-  }}, true);
-
-  const mount = () => {{
-    if (document.body) {{ document.body.appendChild(kb); }}
-  }};
-  if (document.body) {{ mount(); }}
-  else {{ document.addEventListener('DOMContentLoaded', mount); }}
-
-  window.__unifideckLunaKeyboard = {{ layout: LAYOUT }};
-  return 'installed:' + LAYOUT;
-}})()
-""".strip()
+    return (
+        _KEYBOARD_SCRIPT_TEMPLATE
+        .replace(_ROWS_SENTINEL, rows_literal)
+        .replace(_LAYOUT_SENTINEL, json.dumps(layout))
+        .strip()
+    )
 
 
 async def inject_virtual_keyboard(
