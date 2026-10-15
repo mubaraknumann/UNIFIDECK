@@ -744,7 +744,10 @@ def test_gog_native_linux_routes_to_enriched_linux(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_gog_native_linux_sync_uses_os_linux(tmp_path):
+async def test_gog_native_linux_sync_uses_os_windows(tmp_path):
+    # GOG's builds API answers os/linux with 404 "Unsupported OS", which
+    # crashed gogdl's get_auth_ids. The Galaxy clientId is per product, so
+    # native-Linux installs ask for the windows manifest too.
     strat = _gog_strategy(tmp_path)
     strat.gogdl_bin = "mock_gogdl"
     strat._convert_gog_token = MagicMock(return_value="/tmp/auth.json")
@@ -760,7 +763,7 @@ async def test_gog_native_linux_sync_uses_os_linux(tmp_path):
         mock_exec.return_value = proc
         assert await strat._do_sync_down("g", str(d), False) is True
     cmd = list(mock_exec.call_args.args)
-    assert cmd[cmd.index("--os") + 1] == "linux"
+    assert cmd[cmd.index("--os") + 1] == "windows"
 
 
 def test_gog_cached_targets_roundtrip(tmp_path):

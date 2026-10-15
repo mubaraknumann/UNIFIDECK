@@ -405,6 +405,8 @@
       "installingBattlenet": "Installazione tramite Battle.net",
       "installingBattlenetMessage": "Apertura di Battle.net. Premi Installa per avviare il download di {{gameTitle}}.",
       "wrapperOpening": "Apertura di {{client}}",
+      "nativeExitedEarlyTitle": "Il gioco si è chiuso subito dopo l'avvio",
+      "nativeExitedEarly": "La versione Linux è terminata con codice {{code}} in pochi secondi. Il suo output è stato salvato in {{log}}. Allega un pacchetto Capture Logs quando lo segnali.",
       "launchWarning": "Avviso di avvio",
       "companionStartFailed": "Impossibile avviare un programma companion per {{game_key}}. Il gioco stesso è stato avviato normalmente."
     },
@@ -443,7 +445,9 @@
     "cloudPullFailed": "Download del salvataggio cloud non riuscito",
     "cloudPushDone": "Salvataggio locale caricato",
     "cloudPushFailed": "Caricamento del salvataggio locale non riuscito",
-    "cloudSavePathReset": "Cartella di salvataggio ripristinata ad automatica"
+    "cloudSavePathReset": "Cartella di salvataggio ripristinata ad automatica",
+    "backendUnavailable": "Unifideck non risponde",
+    "backendUnavailableMessage": "Il backend di Unifideck non risponde, quindi viene mostrato il pulsante Gioca di Steam. Riavvia Decky o il dispositivo per risolvere."
   },
   "uninstallModal": {
     "title": "Conferma disinstallazione",
@@ -1098,7 +1102,8 @@
     "title": "VOCI DEI GIOCHI",
     "enabled": "Collezioni abilitate",
     "disabled": "Collezioni disabilitate",
-    "groupDuplicates": "Raggruppa duplicati"
+    "groupDuplicates": "Raggruppa duplicati",
+    "tabMasterHint": "TabMaster nasconde le schede della libreria di Unifideck. Attiva le raccolte per creare schede per negozio in TabMaster."
   },
   "storeOwnership": {
     "settingsTitle": "NEGOZIO DI STEAM",

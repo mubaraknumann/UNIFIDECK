@@ -405,6 +405,8 @@
       "installingBattlenet": "Installeren via Battle.net",
       "installingBattlenetMessage": "Battle.net wordt geopend. Klik daar op Installeren om de download van {{gameTitle}} te starten.",
       "wrapperOpening": "{{client}} wordt geopend",
+      "nativeExitedEarlyTitle": "Game sloot direct na het starten",
+      "nativeExitedEarly": "De Linux-versie stopte binnen enkele seconden met code {{code}}. De uitvoer is opgeslagen in {{log}}. Voeg een Capture Logs-bundel toe als je dit meldt.",
       "launchWarning": "Startwaarschuwing",
       "companionStartFailed": "Een begeleidend programma voor {{game_key}} kon niet worden gestart. De game zelf is normaal gestart."
     },
@@ -443,7 +445,9 @@
     "cloudPullFailed": "Downloaden van cloudopslag mislukt",
     "cloudPushDone": "Lokale opslag geüpload",
     "cloudPushFailed": "Uploaden van lokale opslag mislukt",
-    "cloudSavePathReset": "Opslaglocatie teruggezet op automatisch"
+    "cloudSavePathReset": "Opslaglocatie teruggezet op automatisch",
+    "backendUnavailable": "Unifideck reageert niet",
+    "backendUnavailableMessage": "De backend van Unifideck reageert niet, dus de Spelen-knop van Steam zelf wordt getoond. Herstart Decky of het apparaat om dit op te lossen."
   },
   "uninstallModal": {
     "title": "Deïnstallatie bevestigen",
@@ -1098,7 +1102,8 @@
     "title": "GAME-ITEMS",
     "enabled": "Collecties ingeschakeld",
     "disabled": "Collecties uitgeschakeld",
-    "groupDuplicates": "Duplicaten groeperen"
+    "groupDuplicates": "Duplicaten groeperen",
+    "tabMasterHint": "TabMaster verbergt de bibliotheektabbladen van Unifideck. Schakel collecties in om in TabMaster tabbladen per winkel te maken."
   },
   "storeOwnership": {
     "settingsTitle": "STEAM-WINKEL",

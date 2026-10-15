@@ -405,6 +405,8 @@
       "installingBattlenet": "جارٍ التثبيت عبر Battle.net",
       "installingBattlenetMessage": "جارٍ فتح Battle.net. اضغط على «تثبيت» هناك لبدء تنزيل {{gameTitle}}.",
       "wrapperOpening": "جارٍ فتح {{client}}",
+      "nativeExitedEarlyTitle": "أُغلقت اللعبة فور بدئها",
+      "nativeExitedEarly": "خرج إصدار Linux بالرمز {{code}} خلال ثوانٍ. حُفظ ناتجه في {{log}}. أرفق حزمة Capture Logs عند الإبلاغ عن ذلك.",
       "launchWarning": "تحذير التشغيل",
       "companionStartFailed": "تعذّر تشغيل برنامج مرافق لـ {{game_key}}. أما اللعبة نفسها فقد بدأت بشكل طبيعي."
     },
@@ -443,7 +445,9 @@
     "cloudPullFailed": "فشل تنزيل الحفظ السحابي",
     "cloudPushDone": "تم رفع الحفظ المحلي",
     "cloudPushFailed": "فشل رفع الحفظ المحلي",
-    "cloudSavePathReset": "تمت إعادة تعيين موقع الحفظ إلى تلقائي"
+    "cloudSavePathReset": "تمت إعادة تعيين موقع الحفظ إلى تلقائي",
+    "backendUnavailable": "Unifideck لا يستجيب",
+    "backendUnavailableMessage": "الواجهة الخلفية لـ Unifideck لا تستجيب، لذلك يظهر زر اللعب الخاص بـ Steam بدلاً منها. أعد تشغيل Decky أو الجهاز لحل المشكلة."
   },
   "uninstallModal": {
     "title": "تأكيد إلغاء التثبيت",
@@ -1098,7 +1102,8 @@
     "title": "عناصر الألعاب في المكتبة",
     "enabled": "تم تمكين المجموعات",
     "disabled": "تم تعطيل المجموعات",
-    "groupDuplicates": "تجميع التكرارات"
+    "groupDuplicates": "تجميع التكرارات",
+    "tabMasterHint": "يُخفي TabMaster علامات تبويب مكتبة Unifideck. فعّل المجموعات لإنشاء علامات تبويب للمتاجر في TabMaster."
   },
   "storeOwnership": {
     "settingsTitle": "متجر STEAM",

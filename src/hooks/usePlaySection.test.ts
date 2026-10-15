@@ -14,9 +14,12 @@
  * install — is exactly a Microsoft game *without* the tag, so the branch that
  * must keep working is the ordering between these two.
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 
-const gameInfo = vi.hoisted(() => ({ data: null as unknown }));
+const gameInfo = vi.hoisted(() => ({
+  data: null as unknown,
+  status: undefined as string | undefined,
+}));
 const downloads = vi.hoisted(() => ({ queue: null as unknown }));
 
 vi.mock("./useGameInfo", () => ({ useGameInfo: () => gameInfo }));
@@ -197,5 +200,29 @@ describe("usePlaySection — a finished download is not an active one", () => {
       queued: [row({ status: "complete" })],
     });
     expect(state.kind).toBe("installed");
+  });
+});
+
+describe("usePlaySection — backend not answering", () => {
+  // `useResolved` leaves `status` alone, so reset it for the suites above.
+  afterEach(() => {
+    gameInfo.status = undefined;
+  });
+
+  it("hands the page back to Steam when get_game_info is unavailable", () => {
+    gameInfo.status = "unavailable";
+    const state = useResolved(null);
+    expect(state.kind).toBe("unavailable");
+    expect(state.shouldOverride).toBe(false);
+  });
+
+  it("keeps the loading state while the answer is still coming", () => {
+    gameInfo.status = "loading";
+    expect(useResolved(null).kind).toBe("steam-native");
+  });
+
+  it("uses data that arrived late even if the page was marked unavailable", () => {
+    gameInfo.status = "unavailable";
+    expect(useResolved(game()).kind).toBe("browser");
   });
 });

@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from unifideck.core.native_entry import gog_linux_start_script
 from unifideck.core.types.results import Result
 
 from .argv_options import env_overrides_from, parse_argv, promote_env_tokens
@@ -58,8 +59,8 @@ def _resolve_exe_from_install(store: str, install_path: str) -> str | None:
         # Native Linux games (notably GOG) launch via a ``start.sh``
         # wrapper at the install root — ``exe_finder`` only finds
         # ``.exe`` files, so check for it explicitly first.
-        start_sh = Path(install_path) / "start.sh"
-        if start_sh.is_file():
+        start_sh = gog_linux_start_script(install_path)
+        if start_sh is not None:
             return str(start_sh)
         return exe_finder.find(install_path)
     except Exception:
@@ -203,7 +204,26 @@ async def _resolve_game_exe(
                 game_key, resolved,
             )
             exe = resolved
+    if store == "gog":
+        exe = _prefer_gog_start_script(exe, work_dir, game_key)
     return exe, work_dir, has_entry, app_id
+
+
+def _prefer_gog_start_script(exe: str, work_dir: str, game_key: str) -> str:
+    """Launch a GOG Linux-native install through its ``start.sh``.
+
+    Rows written before the resolver preferred ``start.sh`` name the play
+    task's binary (``game/SOR4``), which skips GOG's own entry script.
+    Swapping here fixes those installs without a reinstall or a resync.
+    """
+    start_sh = gog_linux_start_script(work_dir)
+    if not exe or start_sh is None or Path(exe) == start_sh:
+        return exe
+    logger.info(
+        "[launcher.dispatcher] %s is a GOG Linux build, launching %s "
+        "instead of %s", game_key, start_sh, exe,
+    )
+    return str(start_sh)
 
 
 def _special_action_context(

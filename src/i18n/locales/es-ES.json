@@ -405,6 +405,8 @@
       "installingBattlenet": "Instalando a través de Battle.net",
       "installingBattlenetMessage": "Abriendo Battle.net. Pulsa Instalar allí para empezar la descarga de {{gameTitle}}.",
       "wrapperOpening": "Abriendo {{client}}",
+      "nativeExitedEarlyTitle": "El juego se cerró nada más iniciarse",
+      "nativeExitedEarly": "La versión para Linux terminó con el código {{code}} en pocos segundos. Su salida se guardó en {{log}}. Incluye un paquete de Capture Logs al informar de esto.",
       "launchWarning": "Advertencia de inicio",
       "companionStartFailed": "No se pudo iniciar un programa complementario para {{game_key}}. El juego se inició con normalidad."
     },
@@ -443,7 +445,9 @@
     "cloudPullFailed": "Error al descargar el guardado en la nube",
     "cloudPushDone": "Guardado local subido",
     "cloudPushFailed": "Error al subir el guardado local",
-    "cloudSavePathReset": "Ubicación de guardado restablecida a automática"
+    "cloudSavePathReset": "Ubicación de guardado restablecida a automática",
+    "backendUnavailable": "Unifideck no responde",
+    "backendUnavailableMessage": "El backend de Unifideck no responde, así que se muestra el botón Jugar de Steam. Reinicia Decky o el dispositivo para solucionarlo."
   },
   "uninstallModal": {
     "title": "Confirmar desinstalación",
@@ -1098,7 +1102,8 @@
     "title": "ENTRADAS DE JUEGOS",
     "enabled": "Colecciones activadas",
     "disabled": "Colecciones desactivadas",
-    "groupDuplicates": "Agrupar duplicados"
+    "groupDuplicates": "Agrupar duplicados",
+    "tabMasterHint": "TabMaster oculta las pestañas de biblioteca de Unifideck. Activa las colecciones para crear pestañas por tienda en TabMaster."
   },
   "storeOwnership": {
     "settingsTitle": "TIENDA DE STEAM",

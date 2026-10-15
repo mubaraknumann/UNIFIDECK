@@ -80,6 +80,7 @@ Infrastructure primitives. No store or service knowledge.
 | `manifest.py`                   | Plugin installation manifest reader       |
 | `metrics_collector.py`          | Latency/counter telemetry                 |
 | `exe_finder.py`                 | Heuristic executable discovery            |
+| `native_entry.py`               | GOG Linux builds launch via their root `start.sh`. One rule shared by the resolver, launcher, prefix warmup and cloud saves |
 | `paths.py`                      | Canonical path resolution                 |
 | `store_urls.py`                 | Per-store storefront/search URL builders  |
 | `cross_source_dedupe.py`        | Drops a title owned on two stores at once |

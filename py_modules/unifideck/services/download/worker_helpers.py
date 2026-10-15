@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
 from typing import Any
 
+from unifideck.core.native_entry import gog_linux_start_script
 from unifideck.launcher.types.context import is_windows_executable
 from unifideck.launcher.wrapper_stores import uses_manual_download_phase
 
@@ -44,7 +44,7 @@ def prefix_warmup_supported(item: DownloadItem, result: Any = None) -> bool:
     """
     if uses_manual_download_phase(item.store):
         return False
-    if item.store == "gog" and (Path(item.install_path) / "start.sh").is_file():
+    if item.store == "gog" and gog_linux_start_script(item.install_path):
         logger.info(
             "[DownloadWorker] skipping prefix warmup for %s:%s — "
             "Linux-native GOG depot (start.sh), no Proton prefix needed",

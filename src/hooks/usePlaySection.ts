@@ -6,6 +6,8 @@
  *
  *  - Steam-native game → no override (returns
  *    `{ shouldOverride: false }`)
+ *  - backend not answering → `unavailable`, also no override, so
+ *    the page falls back to Steam's own Play section
  *  - Unifideck game, NOT installed → expose `installAction`
  *  - Unifideck game, IN download queue → expose
  *    `cancelDownloadAction` + the live download item
@@ -29,6 +31,7 @@ import type { DownloadItem } from "../types/downloads";
  */
 export type PlaySectionState =
   | { kind: "steam-native"; shouldOverride: false }
+  | { kind: "unavailable"; shouldOverride: false }
   | { kind: "not-installed"; shouldOverride: true; installable: true }
   | { kind: "downloading"; shouldOverride: true; download: DownloadItem }
   | { kind: "installed"; shouldOverride: true; appId: number }
@@ -56,6 +59,11 @@ export function usePlaySection(appId: number | null): PlaySectionState {
   const downloads = useDownloads();
 
   return useMemo<PlaySectionState>(() => {
+    if (appId != null && !info.data && info.status === "unavailable") {
+      // No answer from the backend. Waiting longer only keeps a blank
+      // page up; Steam's own section at least lets the user play.
+      return { kind: "unavailable", shouldOverride: false };
+    }
     if (appId == null || !info.data) {
       return { kind: "steam-native", shouldOverride: false };
     }
@@ -101,7 +109,7 @@ export function usePlaySection(appId: number | null): PlaySectionState {
     }
 
     return { kind: "installed", shouldOverride: true, appId };
-  }, [appId, info.data, downloads.queue]);
+  }, [appId, info.data, info.status, downloads.queue]);
 }
 
 /**

@@ -80,8 +80,8 @@ class GOGCloudSaveStrategy(GOGStateMixin, CloudSaveStrategy):
         dispatcher uses). Native games have NO Wine prefix and save to real
         ``$HOME``/XDG dirs, so they need Linux-mode resolution.
         """
-        install = self._install_dir(game_id)
-        return bool(install) and os.path.isfile(os.path.join(install, "start.sh"))
+        from unifideck.core.native_entry import gog_linux_start_script
+        return gog_linux_start_script(self._install_dir(game_id)) is not None
 
     def _resolve_store_save_dir(self, game_id: str) -> str | None:
         """GOG-specific save-dir resolution (config override + memo in base).
@@ -308,21 +308,23 @@ class GOGCloudSaveStrategy(GOGStateMixin, CloudSaveStrategy):
     async def _run_gogdl_save_sync(
         self, auth_file: str, local_dir: str, game_id: str,
         ts: str, namespace: str, direction_flag: str,
-        os_platform: str = "windows",
     ) -> bool:
         """Run one ``gogdl save-sync`` for a single location. Updates that
         location's per-namespace timestamp on success. Returns success.
 
-        ``os_platform`` is ``linux`` for native-Linux GOG builds (GOG cloud is
-        a Galaxy/Windows feature, so this may simply no-op for them — local
-        backup via the service's mirror still protects the saves)."""
+        ``--os`` is always ``windows``, native-Linux installs included. gogdl
+        uses it only to pick the build manifest it reads the game's Galaxy
+        clientId from, and that id is the same for every platform. GOG's
+        builds API answers ``os/linux`` with 404 "Unsupported OS" for every
+        product, so ``--os linux`` crashed gogdl and failed every save sync
+        of a native GOG game."""
         cmd = [
             self.gogdl_bin,
             "--auth-config-path", auth_file,
             "save-sync",
             local_dir,
             game_id,
-            "--os", os_platform,
+            "--os", "windows",
             "--ts", ts,
             "--name", namespace,
             direction_flag,
@@ -373,7 +375,6 @@ class GOGCloudSaveStrategy(GOGStateMixin, CloudSaveStrategy):
             logger.error("[GOGSync] Cannot sync down: GOG credentials conversion failed")
             return False
 
-        os_platform = "linux" if self._is_native_linux(game_id) else "windows"
         overall_ok = True
         for tdir, namespace in self._resolve_sync_targets(game_id, local_dir):
             os.makedirs(tdir, exist_ok=True)
@@ -400,7 +401,6 @@ class GOGCloudSaveStrategy(GOGStateMixin, CloudSaveStrategy):
                 self._clear_save_dir(tdir)
             ok = await self._run_gogdl_save_sync(
                 auth_file, tdir, game_id, ts, namespace, "--skip-upload",
-                os_platform,
             )
             overall_ok = overall_ok and ok
         if overall_ok:
@@ -423,7 +423,6 @@ class GOGCloudSaveStrategy(GOGStateMixin, CloudSaveStrategy):
             logger.error("[GOGSync] Cannot sync up: GOG credentials conversion failed")
             return False
 
-        os_platform = "linux" if self._is_native_linux(game_id) else "windows"
         overall_ok = True
         for tdir, namespace in self._resolve_sync_targets(game_id, local_dir):
             if not safety.has_save_data(tdir):
@@ -435,7 +434,6 @@ class GOGCloudSaveStrategy(GOGStateMixin, CloudSaveStrategy):
             ts = self._get_saved_timestamp(game_id, namespace)
             ok = await self._run_gogdl_save_sync(
                 auth_file, tdir, game_id, ts, namespace, "--skip-download",
-                os_platform,
             )
             overall_ok = overall_ok and ok
         if overall_ok:

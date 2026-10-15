@@ -414,6 +414,8 @@
       "installingBattlenet": "Installing via Battle.net",
       "installingBattlenetMessage": "Opening Battle.net. Press Install there to start the download for {{gameTitle}}.",
       "wrapperOpening": "Opening {{client}}",
+      "nativeExitedEarlyTitle": "Game closed right after starting",
+      "nativeExitedEarly": "The Linux version exited with code {{code}} within seconds. Its output was saved to {{log}}. Include a Capture Logs bundle when you report this.",
       "launchWarning": "Launch Warning",
       "companionStartFailed": "A companion executable for {{game_key}} could not be started. The game itself launched normally."
     },
@@ -443,7 +445,9 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "Couldn't refresh {{store}} library ({{error}}). Your existing library stays visible."
-    }
+    },
+    "backendUnavailable": "Unifideck isn't responding",
+    "backendUnavailableMessage": "Unifideck's backend didn't answer, so Steam's own Play button is shown. Restart Decky or reboot to fix it."
   },
   "uninstallModal": {
     "title": "Confirm Uninstallation",
@@ -655,7 +659,8 @@
     "title": "GAME SHORTCUTS",
     "enabled": "Collections enabled",
     "disabled": "Collections disabled",
-    "groupDuplicates": "Group duplicates"
+    "groupDuplicates": "Group duplicates",
+    "tabMasterHint": "TabMaster hides Unifideck's library tabs. Turn on collections to build store tabs in TabMaster."
   },
   "storeOwnership": {
     "settingsTitle": "STEAM STORE",

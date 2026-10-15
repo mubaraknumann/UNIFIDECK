@@ -405,6 +405,8 @@
       "installingBattlenet": "Установка через Battle.net",
       "installingBattlenetMessage": "Открытие Battle.net. Нажмите там «Установить», чтобы начать загрузку {{gameTitle}}.",
       "wrapperOpening": "Открытие {{client}}",
+      "nativeExitedEarlyTitle": "Игра закрылась сразу после запуска",
+      "nativeExitedEarly": "Версия для Linux завершилась с кодом {{code}} через несколько секунд. Её вывод сохранён в {{log}}. Приложите архив Capture Logs к сообщению об ошибке.",
       "launchWarning": "Предупреждение о запуске",
       "companionStartFailed": "Не удалось запустить сопутствующую программу для {{game_key}}. Сама игра запустилась нормально."
     },
@@ -443,7 +445,9 @@
     "cloudPullFailed": "Не удалось скачать облачное сохранение",
     "cloudPushDone": "Локальное сохранение загружено",
     "cloudPushFailed": "Не удалось загрузить локальное сохранение",
-    "cloudSavePathReset": "Папка сохранений сброшена на автоматическую"
+    "cloudSavePathReset": "Папка сохранений сброшена на автоматическую",
+    "backendUnavailable": "Unifideck не отвечает",
+    "backendUnavailableMessage": "Бэкенд Unifideck не отвечает, поэтому показана стандартная кнопка «Играть» Steam. Перезапустите Decky или устройство, чтобы это исправить."
   },
   "uninstallModal": {
     "title": "Подтверждение удаления",
@@ -1098,7 +1102,8 @@
     "title": "ЭЛЕМЕНТЫ ИГР",
     "enabled": "Коллекции включены",
     "disabled": "Коллекции выключены",
-    "groupDuplicates": "Группировать дубликаты"
+    "groupDuplicates": "Группировать дубликаты",
+    "tabMasterHint": "TabMaster скрывает вкладки библиотеки Unifideck. Включите коллекции, чтобы создать в TabMaster вкладки для каждого магазина."
   },
   "storeOwnership": {
     "settingsTitle": "МАГАЗИН STEAM",

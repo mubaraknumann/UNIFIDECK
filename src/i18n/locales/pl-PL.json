@@ -405,6 +405,8 @@
       "installingBattlenet": "Instalowanie przez Battle.net",
       "installingBattlenetMessage": "Otwieranie Battle.net. Naciśnij tam Zainstaluj, aby rozpocząć pobieranie {{gameTitle}}.",
       "wrapperOpening": "Otwieranie {{client}}",
+      "nativeExitedEarlyTitle": "Gra zamknęła się zaraz po uruchomieniu",
+      "nativeExitedEarly": "Wersja na Linuksa zakończyła działanie z kodem {{code}} w ciągu kilku sekund. Jej wyjście zapisano w {{log}}. Dołącz pakiet Capture Logs do zgłoszenia.",
       "launchWarning": "Ostrzeżenie o uruchamianiu",
       "companionStartFailed": "Nie można uruchomić programu towarzyszącego dla {{game_key}}. Sama gra uruchomiła się normalnie."
     },
@@ -443,7 +445,9 @@
     "cloudPullFailed": "Pobieranie zapisu z chmury nie powiodło się",
     "cloudPushDone": "Lokalny zapis przesłany",
     "cloudPushFailed": "Przesyłanie lokalnego zapisu nie powiodło się",
-    "cloudSavePathReset": "Przywrócono automatyczną lokalizację zapisu"
+    "cloudSavePathReset": "Przywrócono automatyczną lokalizację zapisu",
+    "backendUnavailable": "Unifideck nie odpowiada",
+    "backendUnavailableMessage": "Backend Unifideck nie odpowiada, więc wyświetlany jest przycisk Graj ze Steam. Uruchom ponownie Decky lub urządzenie, aby to naprawić."
   },
   "uninstallModal": {
     "title": "Potwierdź odinstalowanie",
@@ -1098,7 +1102,8 @@
     "title": "POZYCJE GIER",
     "enabled": "Kolekcje włączone",
     "disabled": "Kolekcje wyłączone",
-    "groupDuplicates": "Grupuj duplikaty"
+    "groupDuplicates": "Grupuj duplikaty",
+    "tabMasterHint": "TabMaster ukrywa karty biblioteki Unifideck. Włącz kolekcje, aby tworzyć w TabMaster karty dla poszczególnych sklepów."
   },
   "storeOwnership": {
     "settingsTitle": "SKLEP STEAM",

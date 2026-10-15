@@ -405,6 +405,8 @@
       "installingBattlenet": "Battle.net을 통해 설치 중",
       "installingBattlenetMessage": "Battle.net을 여는 중입니다. {{gameTitle}} 다운로드를 시작하려면 거기서 설치를 누르세요.",
       "wrapperOpening": "{{client}}을(를) 여는 중",
+      "nativeExitedEarlyTitle": "게임이 시작 직후 종료됨",
+      "nativeExitedEarly": "Linux 버전이 몇 초 만에 코드 {{code}}(으)로 종료되었습니다. 출력은 {{log}}에 저장되었습니다. 신고할 때 Capture Logs 번들을 첨부하세요.",
       "launchWarning": "실행 경고",
       "companionStartFailed": "{{game_key}}의 동반 프로그램을 시작할 수 없습니다. 게임 자체는 정상적으로 실행되었습니다."
     },
@@ -443,7 +445,9 @@
     "cloudPullFailed": "클라우드 저장 데이터 다운로드 실패",
     "cloudPushDone": "로컬 저장 데이터 업로드 완료",
     "cloudPushFailed": "로컬 저장 데이터 업로드 실패",
-    "cloudSavePathReset": "저장 위치를 자동으로 재설정했습니다"
+    "cloudSavePathReset": "저장 위치를 자동으로 재설정했습니다",
+    "backendUnavailable": "Unifideck이 응답하지 않습니다",
+    "backendUnavailableMessage": "Unifideck 백엔드가 응답하지 않아 Steam 기본 플레이 버튼을 표시합니다. Decky 또는 기기를 다시 시작하세요."
   },
   "uninstallModal": {
     "title": "설치 제거 확인",
@@ -1098,7 +1102,8 @@
     "title": "라이브러리 게임 항목",
     "enabled": "컬렉션 활성화됨",
     "disabled": "컬렉션 비활성화됨",
-    "groupDuplicates": "중복 항목 그룹화"
+    "groupDuplicates": "중복 항목 그룹화",
+    "tabMasterHint": "TabMaster는 Unifideck의 라이브러리 탭을 숨깁니다. TabMaster에서 스토어별 탭을 만들려면 컬렉션을 켜세요."
   },
   "storeOwnership": {
     "settingsTitle": "STEAM 상점",

@@ -405,6 +405,8 @@
       "installingBattlenet": "Instalando pelo Battle.net",
       "installingBattlenetMessage": "Abrindo o Battle.net. Pressione Instalar lá para começar o download de {{gameTitle}}.",
       "wrapperOpening": "Abrindo o {{client}}",
+      "nativeExitedEarlyTitle": "O jogo fechou logo após iniciar",
+      "nativeExitedEarly": "A versão para Linux encerrou com o código {{code}} em poucos segundos. A saída foi salva em {{log}}. Inclua um pacote do Capture Logs ao relatar isso.",
       "launchWarning": "Aviso de inicialização",
       "companionStartFailed": "Não foi possível iniciar um programa complementar para {{game_key}}. O jogo em si foi iniciado normalmente."
     },
@@ -443,7 +445,9 @@
     "cloudPullFailed": "Falha ao baixar salvamento na nuvem",
     "cloudPushDone": "Salvamento local enviado",
     "cloudPushFailed": "Falha ao enviar salvamento local",
-    "cloudSavePathReset": "Local de salvamento redefinido para automático"
+    "cloudSavePathReset": "Local de salvamento redefinido para automático",
+    "backendUnavailable": "O Unifideck não está respondendo",
+    "backendUnavailableMessage": "O backend do Unifideck não respondeu, então o botão Jogar do próprio Steam está sendo exibido. Reinicie o Decky ou o aparelho para corrigir."
   },
   "uninstallModal": {
     "title": "Confirmar Desinstalação",
@@ -1098,7 +1102,8 @@
     "title": "ENTRADAS DE JOGOS",
     "enabled": "Coleções ativadas",
     "disabled": "Coleções desativadas",
-    "groupDuplicates": "Agrupar duplicatas"
+    "groupDuplicates": "Agrupar duplicatas",
+    "tabMasterHint": "O TabMaster oculta as abas de biblioteca do Unifideck. Ative as coleções para criar abas por loja no TabMaster."
   },
   "storeOwnership": {
     "settingsTitle": "LOJA DO STEAM",

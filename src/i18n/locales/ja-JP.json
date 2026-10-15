@@ -405,6 +405,8 @@
       "installingBattlenet": "Battle.net 経由でインストール中",
       "installingBattlenetMessage": "Battle.net を開いています。{{gameTitle}} のダウンロードを開始するには、そこで「インストール」を押してください。",
       "wrapperOpening": "{{client}} を開いています",
+      "nativeExitedEarlyTitle": "ゲームが起動直後に終了しました",
+      "nativeExitedEarly": "Linux 版が数秒以内にコード {{code}} で終了しました。出力は {{log}} に保存されています。報告の際は Capture Logs のバンドルを添付してください。",
       "launchWarning": "起動の警告",
       "companionStartFailed": "{{game_key}} のコンパニオンプログラムを起動できませんでした。ゲーム自体は正常に起動しました。"
     },
@@ -443,7 +445,9 @@
     "cloudPullFailed": "クラウドセーブのダウンロードに失敗しました",
     "cloudPushDone": "ローカルセーブがアップロードされました",
     "cloudPushFailed": "ローカルセーブのアップロードに失敗しました",
-    "cloudSavePathReset": "セーブデータの場所を自動に戻しました"
+    "cloudSavePathReset": "セーブデータの場所を自動に戻しました",
+    "backendUnavailable": "Unifideckが応答しません",
+    "backendUnavailableMessage": "Unifideckのバックエンドが応答しないため、Steam標準のプレイボタンを表示しています。Deckyまたは本体を再起動してください。"
   },
   "uninstallModal": {
     "title": "アンインストールの確認",
@@ -1098,7 +1102,8 @@
     "title": "ライブラリのゲーム項目",
     "enabled": "コレクションが有効",
     "disabled": "コレクションが無効",
-    "groupDuplicates": "重複をグループ化"
+    "groupDuplicates": "重複をグループ化",
+    "tabMasterHint": "TabMaster は Unifideck のライブラリタブを非表示にします。TabMaster でストア別のタブを作るには、コレクションをオンにしてください。"
   },
   "storeOwnership": {
     "settingsTitle": "STEAM ストア",

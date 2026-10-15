@@ -405,6 +405,8 @@
       "installingBattlenet": "正在通过 Battle.net 安装",
       "installingBattlenetMessage": "正在打开 Battle.net。请在其中点击“安装”以开始下载 {{gameTitle}}。",
       "wrapperOpening": "正在打开 {{client}}",
+      "nativeExitedEarlyTitle": "游戏启动后立即关闭",
+      "nativeExitedEarly": "Linux 版本在几秒内以代码 {{code}} 退出。其输出已保存到 {{log}}。报告此问题时请附上 Capture Logs 日志包。",
       "launchWarning": "启动警告",
       "companionStartFailed": "无法为 {{game_key}} 启动配套程序。游戏本身已正常启动。"
     },
@@ -443,7 +445,9 @@
     "cloudPullFailed": "下载云端存档失败",
     "cloudPushDone": "已上传本地存档",
     "cloudPushFailed": "上传本地存档失败",
-    "cloudSavePathReset": "存档位置已重置为自动"
+    "cloudSavePathReset": "存档位置已重置为自动",
+    "backendUnavailable": "Unifideck 无响应",
+    "backendUnavailableMessage": "Unifideck 后端没有响应，因此显示 Steam 自带的开始游戏按钮。请重启 Decky 或设备以解决此问题。"
   },
   "uninstallModal": {
     "title": "确认卸载",
@@ -1098,7 +1102,8 @@
     "title": "游戏库条目",
     "enabled": "收藏夹已启用",
     "disabled": "收藏夹已禁用",
-    "groupDuplicates": "合并重复项"
+    "groupDuplicates": "合并重复项",
+    "tabMasterHint": "TabMaster 会隐藏 Unifideck 的库标签页。开启收藏夹即可在 TabMaster 中创建各商店的标签页。"
   },
   "storeOwnership": {
     "settingsTitle": "STEAM 商店",

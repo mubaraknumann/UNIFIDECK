@@ -414,6 +414,8 @@
       "installingBattlenet": "正在透過 Battle.net 安裝",
       "installingBattlenetMessage": "正在開啟 Battle.net。請在其中點選「安裝」以開始下載 {{gameTitle}}。",
       "wrapperOpening": "正在開啟 {{client}}",
+      "nativeExitedEarlyTitle": "遊戲啟動後隨即關閉",
+      "nativeExitedEarly": "Linux 版本在數秒內以代碼 {{code}} 結束。其輸出已儲存至 {{log}}。回報此問題時請附上 Capture Logs 記錄包。",
       "launchWarning": "啟動警告",
       "companionStartFailed": "無法為 {{game_key}} 啟動配套程式。遊戲本身已正常啟動。"
     },
@@ -443,7 +445,9 @@
     "library": {
       "_comment": "Toasts emitted by SyncService when a per-store library sync fails. The retry button triggers a fire-and-forget refresh via the unifideck://refresh-library/<store> verb; the user doesn't wait for the result inline, the Library view picks it up through its SYNC_PROGRESS subscription.",
       "syncStoreFailed": "無法重新整理 {{store}} 遊戲庫（{{error}}）。您現有的遊戲庫清單保持可見。"
-    }
+    },
+    "backendUnavailable": "Unifideck 沒有回應",
+    "backendUnavailableMessage": "Unifideck 後端沒有回應，因此顯示 Steam 內建的開始遊戲按鈕。請重新啟動 Decky 或裝置以解決此問題。"
   },
   "uninstallModal": {
     "title": "確認解除安裝",
@@ -655,7 +659,8 @@
     "title": "遊戲庫項目",
     "enabled": "已啟用收藏",
     "disabled": "已禁用收藏",
-    "groupDuplicates": "合併重複項目"
+    "groupDuplicates": "合併重複項目",
+    "tabMasterHint": "TabMaster 會隱藏 Unifideck 的收藏庫分頁。開啟收藏集即可在 TabMaster 中建立各商店的分頁。"
   },
   "storeOwnership": {
     "settingsTitle": "STEAM 商店",

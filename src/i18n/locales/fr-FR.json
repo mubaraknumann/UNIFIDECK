@@ -405,6 +405,8 @@
       "installingBattlenet": "Installation via Battle.net",
       "installingBattlenetMessage": "Ouverture de Battle.net. Appuyez sur Installer pour lancer le téléchargement de {{gameTitle}}.",
       "wrapperOpening": "Ouverture de {{client}}",
+      "nativeExitedEarlyTitle": "Le jeu s'est fermé juste après son lancement",
+      "nativeExitedEarly": "La version Linux s'est arrêtée avec le code {{code}} en quelques secondes. Sa sortie a été enregistrée dans {{log}}. Joignez un paquet Capture Logs à votre signalement.",
       "launchWarning": "Avertissement de lancement",
       "companionStartFailed": "Un programme compagnon pour {{game_key}} n'a pas pu démarrer. Le jeu lui-même s'est lancé normalement."
     },
@@ -443,7 +445,9 @@
     "cloudPullFailed": "Échec du téléchargement de la sauvegarde cloud",
     "cloudPushDone": "Sauvegarde locale téléversée",
     "cloudPushFailed": "Échec du téléversement de la sauvegarde locale",
-    "cloudSavePathReset": "Emplacement de sauvegarde rétabli en automatique"
+    "cloudSavePathReset": "Emplacement de sauvegarde rétabli en automatique",
+    "backendUnavailable": "Unifideck ne répond pas",
+    "backendUnavailableMessage": "Le backend d'Unifideck ne répond pas : le bouton Jouer de Steam est affiché à la place. Redémarrez Decky ou l'appareil pour corriger le problème."
   },
   "uninstallModal": {
     "title": "Confirmer la désinstallation",
@@ -1098,7 +1102,8 @@
     "title": "ENTRÉES DE JEUX",
     "enabled": "Collections activées",
     "disabled": "Collections désactivées",
-    "groupDuplicates": "Regrouper les doublons"
+    "groupDuplicates": "Regrouper les doublons",
+    "tabMasterHint": "TabMaster masque les onglets de bibliothèque d'Unifideck. Activez les collections pour créer des onglets par boutique dans TabMaster."
   },
   "storeOwnership": {
     "settingsTitle": "BOUTIQUE STEAM",

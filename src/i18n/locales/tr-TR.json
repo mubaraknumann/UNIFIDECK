@@ -405,6 +405,8 @@
       "installingBattlenet": "Battle.net üzerinden yükleniyor",
       "installingBattlenetMessage": "Battle.net açılıyor. {{gameTitle}} indirmesini başlatmak için oradan Yükle'ye basın.",
       "wrapperOpening": "{{client}} açılıyor",
+      "nativeExitedEarlyTitle": "Oyun başladıktan hemen sonra kapandı",
+      "nativeExitedEarly": "Linux sürümü birkaç saniye içinde {{code}} koduyla kapandı. Çıktısı {{log}} dosyasına kaydedildi. Bunu bildirirken bir Capture Logs paketi ekleyin.",
       "launchWarning": "Başlatma Uyarısı",
       "companionStartFailed": "{{game_key}} için bir yardımcı program başlatılamadı. Oyunun kendisi normal şekilde başlatıldı."
     },
@@ -443,7 +445,9 @@
     "cloudPullFailed": "Bulut kaydı indirilemedi",
     "cloudPushDone": "Yerel kayıt yüklendi",
     "cloudPushFailed": "Yerel kayıt yüklenemedi",
-    "cloudSavePathReset": "Kayıt konumu otomatiğe sıfırlandı"
+    "cloudSavePathReset": "Kayıt konumu otomatiğe sıfırlandı",
+    "backendUnavailable": "Unifideck yanıt vermiyor",
+    "backendUnavailableMessage": "Unifideck arka ucu yanıt vermiyor, bu yüzden Steam'in kendi Oyna düğmesi gösteriliyor. Düzeltmek için Decky'yi veya cihazı yeniden başlatın."
   },
   "uninstallModal": {
     "title": "Kaldırmayı Onayla",
@@ -1098,7 +1102,8 @@
     "title": "KÜTÜPHANE ÖĞELERİ",
     "enabled": "Koleksiyonlar etkin",
     "disabled": "Koleksiyonlar devre dışı",
-    "groupDuplicates": "Yinelenenleri grupla"
+    "groupDuplicates": "Yinelenenleri grupla",
+    "tabMasterHint": "TabMaster, Unifideck'in kütüphane sekmelerini gizler. TabMaster'da mağaza sekmeleri oluşturmak için koleksiyonları açın."
   },
   "storeOwnership": {
     "settingsTitle": "STEAM MAĞAZASI",

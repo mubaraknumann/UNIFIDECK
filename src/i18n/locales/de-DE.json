@@ -405,6 +405,8 @@
       "installingBattlenet": "Installation über Battle.net",
       "installingBattlenetMessage": "Battle.net wird geöffnet. Klicken Sie dort auf Installieren, um den Download von {{gameTitle}} zu starten.",
       "wrapperOpening": "{{client}} wird geöffnet",
+      "nativeExitedEarlyTitle": "Spiel direkt nach dem Start beendet",
+      "nativeExitedEarly": "Die Linux-Version wurde nach wenigen Sekunden mit Code {{code}} beendet. Ihre Ausgabe wurde in {{log}} gespeichert. Füge beim Melden ein Capture-Logs-Paket bei.",
       "launchWarning": "Startwarnung",
       "companionStartFailed": "Ein Begleitprogramm für {{game_key}} konnte nicht gestartet werden. Das Spiel selbst wurde normal gestartet."
     },
@@ -443,7 +445,9 @@
     "cloudPullFailed": "Cloud-Spielstand-Download fehlgeschlagen",
     "cloudPushDone": "Lokaler Spielstand hochgeladen",
     "cloudPushFailed": "Lokaler Spielstand-Upload fehlgeschlagen",
-    "cloudSavePathReset": "Speicherort auf automatisch zurückgesetzt"
+    "cloudSavePathReset": "Speicherort auf automatisch zurückgesetzt",
+    "backendUnavailable": "Unifideck reagiert nicht",
+    "backendUnavailableMessage": "Das Unifideck-Backend antwortet nicht, daher wird die Spielen-Schaltfläche von Steam angezeigt. Starte Decky oder das Gerät neu, um das zu beheben."
   },
   "uninstallModal": {
     "title": "Deinstallation bestätigen",
@@ -1098,7 +1102,8 @@
     "title": "SPIELEINTRÄGE",
     "enabled": "Sammlungen aktiviert",
     "disabled": "Sammlungen deaktiviert",
-    "groupDuplicates": "Duplikate gruppieren"
+    "groupDuplicates": "Duplikate gruppieren",
+    "tabMasterHint": "TabMaster blendet die Bibliotheks-Tabs von Unifideck aus. Aktiviere Sammlungen, um in TabMaster Tabs pro Store anzulegen."
   },
   "storeOwnership": {
     "settingsTitle": "STEAM-SHOP",
