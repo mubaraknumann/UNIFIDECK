@@ -175,37 +175,60 @@ export const CompanionExecutablesModal: FC<Props> = ({
       <Focusable style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         {companions.map((c) => (
           <div key={c.path} style={rowStyle}>
-            <span
+            <div
               style={{
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
+                display: "flex",
+                flexDirection: "column",
                 flex: 1,
                 minWidth: 0,
-                // Explicit color: a plain <span> inside ConfirmModal's body
-                // has no guaranteed text color (unlike DialogButton content,
-                // which brings its own), so without this the filename was
-                // invisible while the trash-icon button next to it rendered
-                // fine.
+                // Explicit color: a plain text node inside ConfirmModal's
+                // body has no guaranteed text color (unlike DialogButton
+                // content, which brings its own), so without this the
+                // filename was invisible while the trash-icon button next to
+                // it rendered fine.
                 color: "#c7d5e0",
               }}
               title={c.path}
             >
-              {basename(c.path)}
-              {c.delay_seconds > 0 && (
-                <span
-                  style={{
-                    opacity: 0.6,
-                    marginInlineStart: 8,
-                    fontSize: "0.8em",
-                  }}
-                >
-                  {t("play.companions.delaySeconds", {
-                    seconds: c.delay_seconds,
-                  })}
-                </span>
-              )}
-            </span>
+              <span
+                style={{
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {basename(c.path)}
+                {c.delay_seconds > 0 && (
+                  <span
+                    style={{
+                      opacity: 0.6,
+                      marginInlineStart: 8,
+                      fontSize: "0.8em",
+                    }}
+                  >
+                    {t("play.companions.delaySeconds", {
+                      seconds: c.delay_seconds,
+                    })}
+                  </span>
+                )}
+              </span>
+              {/* Full path as a dimmed second line — mirrors
+                  ChangeExecutableModal showing the exe's rel path under its
+                  name, so the user can tell which file an entry runs (and
+                  thus what they are deleting) when two trainers share a
+                  filename or live in different folders. */}
+              <span
+                style={{
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  opacity: 0.5,
+                  fontSize: "0.8em",
+                }}
+              >
+                {c.path}
+              </span>
+            </div>
             <DialogButton
               disabled={working}
               onClick={() => void removeOne(c.path)}

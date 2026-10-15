@@ -110,6 +110,35 @@ def _companion_fake_appid(game_key: str, companion_path: str) -> int:
     return (binascii.crc32(key.encode("utf-8")) & 0x3FFFFFFF) | 0x40000000
 
 
+#: Steam client-install candidates, most-canonical first. All three are the
+#: same dir on a Deck; on atomic/ostree hosts they are symlink chains, which
+#: is why the value handed to proton is always ``realpath``-resolved.
+_STEAM_CLIENT_CANDIDATES = (
+    "~/.steam/steam",
+    "~/.local/share/Steam",
+    "~/.steam/root",
+    "~/.steam/debian-installation",
+)
+
+
+def _resolve_steam_client_path() -> str | None:
+    """The resolved Steam client-install path for a companion's proton call.
+
+    Proton's own script (invoked directly for companions, bypassing umu-run)
+    requires ``STEAM_COMPAT_CLIENT_INSTALL_PATH``; ``infrastructure.core``
+    pops it from the plan env, so it must be re-derived here. Returns the
+    first existing candidate, ``realpath``-resolved so the symlink chain that
+    the core pop guards against (ELOOP under pressure-vessel on atomic hosts)
+    is already collapsed to a real directory. Returns ``None`` when none
+    exists, so the caller leaves the var unset rather than pinning a bad path.
+    """
+    for candidate in _STEAM_CLIENT_CANDIDATES:
+        path = Path(candidate).expanduser()
+        if path.is_dir():
+            return str(path.resolve())
+    return None
+
+
 def _open_companion_log(companion_path: str) -> Any:
     """Open a per-companion stdout+stderr log file for this launch.
 
@@ -368,6 +397,21 @@ def _schedule_companion(
     fake_appid = _companion_fake_appid(plan.context.game_key, companion.path)
     companion_env = dict(plan.env)
     companion_env["PROTON_VERB"] = "runinprefix"
+    # Re-supply STEAM_COMPAT_CLIENT_INSTALL_PATH for the DIRECT proton call.
+    # ``infrastructure.core`` deliberately pops this var from the plan env
+    # (umu-run derives it itself, and pinning it loops pressure-vessel on
+    # atomic hosts). But a companion bypasses umu-run and invokes the proton
+    # script directly, and proton's own ``init_session``/``sync_appcache``
+    # requires it — without it proton dies with
+    # ``KeyError: 'STEAM_COMPAT_CLIENT_INSTALL_PATH'`` before the trainer
+    # ever spawns (observed on-device, exit 1). We set the RESOLVED client
+    # path (realpath) so the ELOOP symlink-chain the core pop guards against
+    # cannot occur, and only on the companion env — the main game's umu-run
+    # invocation keeps the var unset.
+    if not companion_env.get("STEAM_COMPAT_CLIENT_INSTALL_PATH"):
+        client_path = _resolve_steam_client_path()
+        if client_path:
+            companion_env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = client_path
     return asyncio.ensure_future(
         _run_one_companion(
             companion.path,
