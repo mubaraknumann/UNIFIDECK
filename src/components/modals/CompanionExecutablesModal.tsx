@@ -235,15 +235,14 @@ export const CompanionExecutablesModal: FC<Props> = ({
               style={{
                 padding: "4px 8px",
                 minWidth: 0,
-                // DialogButton defaults to flex-grow: 1 in this CEF build's
-                // gamepad-dialog CSS. With BOTH the filename <span> (flex: 1)
-                // and this button competing for space in a space-between
-                // row, the button's flex-grow (plus its flex-shrink: 0
-                // intrinsic-content behavior) won out and squeezed the
-                // <span> down to a zero/near-zero rendered width — it was
-                // never a color problem, the text was there but had no
-                // room. Pinning the button to its own content size lets
-                // the <span> actually claim the row's remaining space.
+                // DialogButton ships `width: 100%` in Steam's gamepad-dialog
+                // CSS. That, not flex-grow, is what starved the filename: the
+                // button took the whole row (608px measured on-device via CDP)
+                // and the text column got 0px. `width: auto` shrinks it to
+                // its icon (32px) and the text gets the rest (568px).
+                width: "auto",
+                // Keep the button at its content size; it must never grow
+                // into the text column's space.
                 flex: "0 0 auto",
               }}
             >
